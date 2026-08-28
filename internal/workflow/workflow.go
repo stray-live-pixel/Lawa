@@ -3,8 +3,7 @@
 package workflow
 
 import (
-	"bytes"
-	"encoding/json"
+	"encoding/json/v2"
 	"fmt"
 	"io"
 	"strings"
@@ -29,75 +28,18 @@ type Step struct {
 // Decode читает ровно один JSON-объект и возвращает только целиком корректный граф.
 // При ошибке результат пустой: вызывающий код не должен запускать часть схемы.
 // Идентификаторы и промпты сохраняются без обрезки пробелов и других исправлений.
+// json/v2 отклоняет повторные ключи и повреждённый Unicode, учитывает регистр
+// имён. UnmarshalRead также требует EOF после объекта; неизвестные поля запрещаем
+// явно. Проверка обязательных полей и связей остаётся в общем Validate.
 func Decode(r io.Reader) (Workflow, error) {
 	var w Workflow
-	var steps []json.RawMessage
-	if err := decodeObject(r, map[string]any{"id": &w.ID, "steps": &steps}); err != nil {
+	if err := json.UnmarshalRead(r, &w, json.RejectUnknownMembers(true)); err != nil {
 		return Workflow{}, fmt.Errorf("workflow: %w", err)
-	}
-	for i, raw := range steps {
-		var step Step
-		fields := map[string]any{
-			"id": &step.ID, "type": &step.Type,
-			"prompt": &step.Prompt, "dependsOn": &step.DependsOn,
-		}
-		if err := decodeObject(bytes.NewReader(raw), fields); err != nil {
-			return Workflow{}, fmt.Errorf("steps[%d]: %w", i, err)
-		}
-		w.Steps = append(w.Steps, step)
 	}
 	if err := w.Validate(); err != nil {
 		return Workflow{}, err
 	}
 	return w, nil
-}
-
-// decodeObject принимает только перечисленные поля с точным регистром имён.
-// Обычный Unmarshal допускает повторные ключи и нечувствителен к регистру полей
-// структуры. Здесь неоднозначный вход отклоняется, чтобы проверка и исполнение
-// не могли по-разному трактовать один workflow. Поток после объекта должен закончиться.
-func decodeObject(r io.Reader, fields map[string]any) error {
-	d := json.NewDecoder(r)
-	opening, err := d.Token()
-	if err != nil {
-		return err
-	}
-	if opening != json.Delim('{') {
-		return fmt.Errorf("ожидался JSON-объект")
-	}
-	seen := make(map[string]bool)
-	for d.More() {
-		key, err := d.Token()
-		if err != nil {
-			return err
-		}
-		name, ok := key.(string)
-		if !ok {
-			return fmt.Errorf("ожидалось имя поля")
-		}
-		target, known := fields[name]
-		if !known {
-			return fmt.Errorf("неизвестное поле %q", name)
-		}
-		if seen[name] {
-			return fmt.Errorf("повторное поле %q", name)
-		}
-		seen[name] = true
-		if err := d.Decode(target); err != nil {
-			return fmt.Errorf("поле %q: %w", name, err)
-		}
-	}
-	if _, err := d.Token(); err != nil {
-		return err
-	}
-	var extra json.RawMessage
-	if err := d.Decode(&extra); err != io.EOF {
-		if err != nil {
-			return fmt.Errorf("прочитать конец JSON: %w", err)
-		}
-		return fmt.Errorf("после объекта ожидался конец JSON")
-	}
-	return nil
 }
 
 // Validate проверяет поля, ссылки и ацикличность, не изменяя исходный граф.

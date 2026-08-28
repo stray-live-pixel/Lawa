@@ -59,6 +59,8 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 		"регистр поля":         strings.Replace(valid, `"dependsOn"`, `"DependsOn"`, 1),
 		"повтор поля workflow": strings.Replace(valid, `"id":"flow"`, `"id":"flow","id":"other"`, 1),
 		"повтор поля шага":     strings.Replace(valid, `"id":"a"`, `"id":"a","\u0069d":"b"`, 1),
+		// Разные непарные суррогаты не должны превращаться в один ID через замену на U+FFFD.
+		"искажённая ссылка": `{"id":"flow","steps":[{"id":"\ud800","type":"agent","prompt":"x","dependsOn":[]},{"id":"b","type":"agent","prompt":"x","dependsOn":["\ud801"]}]}`,
 	}
 	for name, input := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -67,6 +69,35 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 				t.Fatalf("ожидались ошибка и пустой результат: %+v, %v", w, err)
 			}
 		})
+	}
+}
+
+// TestDecodeRejectsInvalidUnicode защищает ID и промпты от незаметной замены
+// повреждённых байтов и непарных суррогатов на U+FFFD при чтении JSON.
+func TestDecodeRejectsInvalidUnicode(t *testing.T) {
+	for name, raw := range map[string]string{"UTF-8": "\xff", "старший суррогат": `\ud800`, "младший суррогат": `\udc00`} {
+		for field, old := range map[string]string{"workflow.id": `"flow"`, "step.id": `"a"`, "prompt": `"  задача\n"`} {
+			t.Run(name+"/"+field, func(t *testing.T) {
+				input := strings.Replace(valid, old, `"`+raw+`"`, 1)
+				w, err := Decode(strings.NewReader(input))
+				if err == nil || !reflect.DeepEqual(w, Workflow{}) {
+					t.Fatalf("повреждённый Unicode принят: %+v, %v", w, err)
+				}
+			})
+		}
+	}
+}
+
+// TestDecodePreservesUnicode отличает повреждённый ввод от допустимых символов:
+// буквальный U+FFFD и корректная суррогатная пара не должны отклоняться.
+func TestDecodePreservesUnicode(t *testing.T) {
+	for _, raw := range []string{"� 😀", `\ufffd \ud83d\ude00`} {
+		input := strings.Replace(valid, `"flow"`, `"`+raw+`"`, 1)
+		input = strings.Replace(input, `"  задача\n"`, `"`+raw+`"`, 1)
+		w, err := Decode(strings.NewReader(input))
+		if err != nil || w.ID != "� 😀" || len(w.Steps) != 1 || w.Steps[0].Prompt != "� 😀" {
+			t.Fatalf("допустимый Unicode изменён или отклонён: %+v, %v", w, err)
+		}
 	}
 }
 
