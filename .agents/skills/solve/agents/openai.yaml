@@ -1,0 +1,3 @@
+interface:
+  display_name: "solve"
+  short_description: "Задача → отдельная ветка → проверенная реализация"

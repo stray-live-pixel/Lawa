@@ -1,0 +1,3 @@
+interface:
+  display_name: "merge"
+  short_description: "Проверить и слить PR, затем обновить main"
