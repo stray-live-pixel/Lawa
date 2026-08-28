@@ -9,8 +9,10 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/stray-live-pixel/flows-2/internal/scheduler"
 )
@@ -103,6 +105,48 @@ func TestLockedUpdates(t *testing.T) {
 	}
 	if data, err := os.ReadFile(memory); err != nil || string(data) != "итог агента" {
 		t.Fatalf("обновление изменило память: %q, %v", data, err)
+	}
+}
+
+// TestLockedConcurrentUpdates защищает от потери одного из параллельных
+// обновлений: второй вызов должен прочитать meta только после публикации первого.
+// Пауза в существующем Sync-hook фиксирует первый вызов перед Rename. Окно
+// ожидания проверяет, что второй ещё не завершился; затем сверяем оба состояния.
+func TestLockedConcurrentUpdates(t *testing.T) {
+	root, want, r := testLockedRun(t)
+	paused, release := make(chan struct{}), make(chan struct{})
+	resume := sync.OnceFunc(func() { close(release) })
+	defer resume() // При ошибке теста не оставляем Update и cleanup заблокированными.
+	pause := sync.OnceFunc(func() { close(paused); <-release })
+	done := make(chan error, 2)
+	go func() {
+		done <- r.update(want.Meta.Steps[0].ID, scheduler.Starting, "", func(f *os.File) error {
+			pause() // Только первый Sync: второй сохраняет уже переименованный каталог.
+			return f.Sync()
+		})
+	}()
+	select {
+	case <-paused:
+	case err := <-done:
+		t.Fatalf("первое обновление не дошло до сохранения: %v", err)
+	}
+	go func() { done <- r.Update(want.Meta.Steps[1].ID, scheduler.Starting, "") }()
+	remaining := 2
+	select {
+	case err := <-done:
+		remaining--
+		t.Errorf("второе обновление завершилось до публикации первого: %v", err)
+	case <-time.After(250 * time.Millisecond):
+	}
+	resume()
+	for range remaining {
+		if err := <-done; err != nil {
+			t.Fatalf("параллельное обновление: %v", err)
+		}
+	}
+	want.Meta.Steps[0].State, want.Meta.Steps[1].State = scheduler.Starting, scheduler.Starting
+	if got, err := Load(root, want.Meta.RunID); err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("одно из параллельных обновлений потеряно: %+v, %v", got, err)
 	}
 }
 
