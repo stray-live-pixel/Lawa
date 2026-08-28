@@ -1,0 +1,3 @@
+interface:
+  display_name: "fix-review"
+  short_description: "Замечания ревью → согласование → одно исправление"
