@@ -1,0 +1,9 @@
+{
+  "id": "review",
+  "steps": [
+    {"id": "summary", "type": "agent", "prompt": "Собери общий отчёт из результатов ревью.", "dependsOn": ["architecture", "security"]},
+    {"id": "architecture", "type": "agent", "prompt": "Проверь архитектуру по собранным данным.", "dependsOn": ["metrics"]},
+    {"id": "security", "type": "agent", "prompt": "Проверь безопасность по собранным данным.", "dependsOn": ["metrics"]},
+    {"id": "metrics", "type": "agent", "prompt": "Собери метрики проекта.", "dependsOn": []}
+  ]
+}
