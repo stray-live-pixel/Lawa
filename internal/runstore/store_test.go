@@ -10,6 +10,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stray-live-pixel/flows-2/internal/scheduler"
@@ -24,6 +25,39 @@ func testInput(t *testing.T) Input {
 		t.Fatal(err)
 	}
 	return Input{WorkflowJSON: bytes.ReplaceAll(data, []byte(`"metrics"`), []byte(`"../metrics"`)), Task: "  Проверить проект\n", Comment: "Не менять код", CWD: t.TempDir(), InitiatorThreadID: "initiator"}
+}
+
+// TestCreateErrorDiagnostics проверяет, что обёрнутая ошибка ОС остаётся
+// распознаваемой для кода, а человек/агент получает соответствующую подсказку.
+// Это проверка сообщений для заданных кодов, не воспроизведение поломок диска.
+func TestCreateErrorDiagnostics(t *testing.T) {
+	runDir := filepath.Join(t.TempDir(), "new-run")
+	for _, tc := range []struct {
+		name           string
+		cause          error
+		reason, action string
+	}{
+		{"место", syscall.ENOSPC, "нет места", "Проверьте свободное место"},
+		{"квота", syscall.EDQUOT, "Исчерпана дисковая квота", "запросите её увеличение"},
+		{"размер", syscall.EFBIG, "Превышен допустимый размер файла", "Проверьте размер входных данных"},
+		{"права", syscall.EACCES, "Нет прав на операцию", "запросите доступ"},
+		{"только чтение", syscall.EROFS, "только для чтения", "Проверьте подключение диска"},
+		{"ввод-вывод", syscall.EIO, "Ошибка ввода-вывода", "не повторяйте запись"},
+		{"неизвестная", errors.New("необычный отказ устройства"), "Причина требует диагностики", "Проверьте указанную операцию"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cause := &os.PathError{Op: "write", Path: filepath.Join(runDir, "task.md"), Err: tc.cause}
+			err := &CreateError{RunDir: runDir, Cause: cause}
+			if !errors.Is(err, tc.cause) {
+				t.Fatalf("обёртка скрыла системную причину: %v", err)
+			}
+			for _, detail := range []string{tc.reason, tc.action, cause.Error()} {
+				if !strings.Contains(err.Error(), detail) {
+					t.Errorf("нет причины, подсказки или исходной операции %q: %v", detail, err)
+				}
+			}
+		})
+	}
 }
 
 // mustWrite имитирует изменение файла агентом или повреждение сохранённого run.
@@ -96,6 +130,104 @@ func TestCreateLoad(t *testing.T) {
 	}
 }
 
+// TestStorageParentSync проверяет порядок сохранения имён каталогов: прежде чем
+// создавать дочернюю папку, имя родителя должно быть сохранено в его родителе.
+// Это проверка протокола Sync на реальных каталогах, а не имитация потери питания.
+func TestStorageParentSync(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		depth    int
+		relative bool
+	}{
+		{"существующий", 0, false},
+		{"новый относительный", 1, true},
+		{"вложенный", 3, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			root := base
+			want := []string{filepath.Dir(base)}
+			for range tc.depth {
+				want = append(want, root)
+				root = filepath.Join(root, "nested")
+			}
+			inputRoot := root
+			if tc.relative {
+				cwd, err := os.Getwd()
+				if err != nil {
+					t.Fatal(err)
+				}
+				inputRoot, err = filepath.Rel(cwd, root)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			var synced []string
+			s, err := create(inputRoot, testInput(t), func(path string) error {
+				synced = append(synced, path)
+				return syncDir(path)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			dir := filepath.Join(root, s.Meta.RunID)
+			want = append(want, filepath.Join(dir, "memory"), dir, root)
+			if !slices.Equal(synced, want) {
+				t.Fatalf("порядок Sync: %v; нужен: %v", synced, want)
+			}
+			if got, err := Load(root, s.Meta.RunID); err != nil || !reflect.DeepEqual(got, s) {
+				t.Fatalf("сохранённый запуск не читается: %+v, %v", got, err)
+			}
+		})
+	}
+}
+
+// TestStorageParentSyncFailure не позволяет начать run после отказа сохранения
+// имени папки. Повтор обязан сохранить оставшуюся папку, даже если она уже есть:
+// само существование после ошибки не доказывает, что её имя попало на диск.
+func TestStorageParentSyncFailure(t *testing.T) {
+	for _, failAt := range []string{"base", "nested"} {
+		t.Run(failAt, func(t *testing.T) {
+			base, in := t.TempDir(), testInput(t)
+			parent := filepath.Join(base, "nested")
+			root := filepath.Join(parent, "runs")
+			failedDir := base
+			if failAt == "nested" {
+				failedDir = parent
+			}
+			failure := errors.New("отказ Sync родителя")
+			attempts := 0
+			syncParent := func(path string) error {
+				if path == failedDir {
+					attempts++
+					return failure
+				}
+				return syncDir(path)
+			}
+			// Дважды отказываем в одном месте: наличие оставшейся папки не должно
+			// позволить следующему Create обойти несостоявшуюся синхронизацию.
+			for range 2 {
+				got, err := create(root, in, syncParent)
+				if !errors.Is(err, failure) || !reflect.DeepEqual(got, Snapshot{}) {
+					t.Fatalf("ожидались ошибка Sync и пустой снимок: %+v, %v", got, err)
+				}
+				entries, err := os.ReadDir(root)
+				if err != nil && !errors.Is(err, fs.ErrNotExist) || len(entries) != 0 {
+					t.Fatalf("после отказа уже создан run: %v, %v", entries, err)
+				}
+			}
+			if attempts != 2 {
+				t.Fatalf("родитель синхронизировался %d раз вместо двух", attempts)
+			}
+			// После устранения ошибки обычный публичный API должен создать run
+			// в той же папке без ручной очистки промежуточных каталогов.
+			if _, err := Create(root, in); err != nil {
+				t.Fatalf("повтор после устранения ошибки: %v", err)
+			}
+		})
+	}
+}
+
 // TestInvalidInputHasNoSideEffects проверяет отказ до создания папки хранения.
 func TestInvalidInputHasNoSideEffects(t *testing.T) {
 	for name, mutate := range map[string]func(*Input){
@@ -128,7 +260,7 @@ func TestMetadataStates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	check := func(t *testing.T, m Metadata, wantError bool) {
+	check := func(t *testing.T, m Metadata, wantError bool) error {
 		t.Helper()
 		data, err := json.Marshal(m)
 		if err != nil {
@@ -139,6 +271,7 @@ func TestMetadataStates(t *testing.T) {
 		if (err != nil) != wantError || wantError && !reflect.DeepEqual(got, Snapshot{}) || !wantError && !reflect.DeepEqual(got.Meta, m) {
 			t.Fatalf("чтение метаданных: %+v, %v; ожидалась ошибка: %v", got.Meta, err, wantError)
 		}
+		return err
 	}
 	for _, state := range []scheduler.State{scheduler.Pending, scheduler.Starting, scheduler.Unknown, scheduler.Running, scheduler.WaitingForApproval, scheduler.Failed, scheduler.Cancelled, scheduler.Succeeded} {
 		m := s.Meta
@@ -148,6 +281,24 @@ func TestMetadataStates(t *testing.T) {
 			m.Steps[0].CodexThreadID = "existing-chat"
 		}
 		check(t, m, false)
+		if state == scheduler.Starting {
+			m.Steps[0].CodexThreadID = "existing-chat"
+			check(t, m, false)
+		}
+		// Намеренно создаём теоретический крайний случай: корректный код записи
+		// не подставляет чат управления вместо исполнителя. Это не воспроизведение
+		// реального инцидента. Отдельная ошибка нужна при любом состоянии: даже
+		// для Pending совпадение с инициатором точнее общей ошибки непустого ID.
+		m.Steps[0].CodexThreadID = m.InitiatorThreadID
+		t.Run("чат инициатора вместо исполнителя/"+string(state), func(t *testing.T) {
+			err := check(t, m, true)
+			if !errors.Is(err, ErrInitiatorAsExecutor) {
+				t.Fatalf("обработчик не сможет распознать конфликт чатов: %v", err)
+			}
+			if !strings.Contains(err.Error(), m.RunID) || !strings.Contains(err.Error(), m.Steps[0].ID) {
+				t.Fatalf("в ошибке не хватает запуска или шага для диагностики: %v", err)
+			}
+		})
 	}
 	for name, mutate := range map[string]func(*Metadata){
 		"версия":                func(m *Metadata) { m.Version++ },

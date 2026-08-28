@@ -18,6 +18,28 @@ import (
 	"github.com/stray-live-pixel/flows-2/internal/workflow"
 )
 
+// ErrInitiatorAsExecutor означает нарушение внутреннего инварианта: чат постановки
+// задачи не может быть чатом исполнителя. Ошибка распознаётся через errors.Is;
+// конкретные runId и ID шага добавляются в месте проверки для диагностики.
+//
+// На момент добавления защиты (2026-08-28) это теоретический крайний случай,
+// воспроизводимый только искусственной подстановкой ID в TestMetadataStates.
+// Реальный сбой не наблюдался: Create оставляет CodexThreadID пустым, а создание
+// чатов и запись их ID ещё не реализованы. При штатной работе корректного кода
+// записи эта ситуация невозможна. Возможные причины вне этого условия — баг
+// будущего адаптера/сохранения (перепутаны InitiatorThreadID и CodexThreadID) либо
+// ручное изменение meta.json. Это не обычная ошибка пользовательского ввода.
+//
+// Обработчик должен остановить продолжение этого run и сохранить данные для
+// диагностики записи связи. Load возвращает пустой Snapshot и ничего не исправляет.
+// Нельзя сбрасывать шаг в Pending, угадывать ID или автоматически создавать нового
+// агента: исходный исполнитель может уже работать, а ошибочна только запись о нём.
+// Без независимой достоверной связи узнать правильный чат невозможно; пользователь
+// также не обязан знать его ID. При разборе нужно проверить код сохранения связи
+// и исходный ответ создания чата, если он доступен, а не маскировать ошибку повтором.
+var ErrInitiatorAsExecutor = errors.New("в meta.json чат постановки задачи указан вместо чата исполнителя; " +
+	"запуск нельзя продолжать или автоматически перезапускать")
+
 // Input — общий вход нового запуска. WorkflowJSON сохраняется побайтно; Task
 // и Comment записываются отдельными разделами task.md без обрезки пробелов.
 // CWD должен указывать на существующую папку. Проверка подключения — вне пакета.
@@ -61,13 +83,23 @@ type Snapshot struct {
 // Каталоги создаются с 0700, файлы с 0600; права существующего root не меняются.
 // Root должен быть доверенным хранилищем: chmod не изолирует агентов того же UID.
 // Вызывающий код не должен параллельно изменять Input.WorkflowJSON.
+// До создания run сохраняем имена каталогов root в их родителях. Отказ Sync
+// оставляет только общие папки без нового run; повтор снова сохраняет их имена.
 //
 // Mkdir резервирует новый ID без перезаписи. Meta публикуется переименованием
 // только после записи и Sync остальных файлов. До этого Load возвращает ошибку.
-// Обычная ошибка удаляет только созданную здесь папку; аварийная остановка может
-// оставить неполную папку, которую Load не восстанавливает автоматически.
+// При обычной ошибке пробуем удалить только созданную здесь папку и возвращаем
+// *CreateError с причиной и результатом очистки. Сбой процесса или питания может
+// оставить неполную папку: defer не гарантирован, а удаление не синхронизируется.
+// Load такую папку не восстанавливает автоматически.
 // Запускать агентов разрешено только после успешного возврата Create.
-func Create(root string, in Input) (_ Snapshot, err error) {
+func Create(root string, in Input) (Snapshot, error) {
+	return create(root, in, syncDir)
+}
+
+// create принимает синхронизацию каталогов явно, чтобы тесты могли воспроизвести
+// отказ диска без глобальных подмен, влияющих на параллельные вызовы Create.
+func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot, err error) {
 	w, err := workflow.Decode(bytes.NewReader(in.WorkflowJSON))
 	if err != nil {
 		return Snapshot{}, err
@@ -98,7 +130,15 @@ func Create(root string, in Input) (_ Snapshot, err error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if err = os.MkdirAll(root, 0o700); err != nil {
+	// Абсолютный путь позволяет находить родителя и для root=".". Пустой путь
+	// по-прежнему недопустим: Abs иначе незаметно превратил бы его в текущую папку.
+	if root == "" {
+		return Snapshot{}, fmt.Errorf("нужна папка хранения root")
+	}
+	if root, err = filepath.Abs(root); err != nil {
+		return Snapshot{}, err
+	}
+	if err = mkdirAllSynced(root, syncDirectory); err != nil {
 		return Snapshot{}, err
 	}
 	dir := filepath.Join(root, s.Meta.RunID)
@@ -107,7 +147,10 @@ func Create(root string, in Input) (_ Snapshot, err error) {
 	}
 	defer func() {
 		if err != nil {
-			err = errors.Join(err, os.RemoveAll(dir))
+			// Только успешный Mkdir выше даёт право удалять именно этот новый run.
+			// Даже опубликованный meta.json не означает успех Create: последующий
+			// Sync мог отказать. При двойном сбое сохраняем обе причины отдельно.
+			err = &CreateError{RunDir: dir, Cause: err, CleanupErr: os.RemoveAll(dir)}
 		}
 	}()
 	if err = os.Mkdir(filepath.Join(dir, "memory"), 0o700); err != nil {
@@ -122,14 +165,14 @@ func Create(root string, in Input) (_ Snapshot, err error) {
 			return Snapshot{}, err
 		}
 	}
-	if err = syncDir(filepath.Join(dir, "memory")); err != nil {
+	if err = syncDirectory(filepath.Join(dir, "memory")); err != nil {
 		return Snapshot{}, err
 	}
 	if err = os.Rename(filepath.Join(dir, "meta.json.tmp"), filepath.Join(dir, "meta.json")); err != nil {
 		return Snapshot{}, err
 	}
 	// Сохраняем записи обоих каталогов: имя meta внутри run и имя самого run.
-	if err = errors.Join(syncDir(dir), syncDir(root)); err != nil {
+	if err = errors.Join(syncDirectory(dir), syncDirectory(root)); err != nil {
 		return Snapshot{}, err
 	}
 	return s, nil
@@ -204,6 +247,12 @@ func (s Snapshot) validate(runID string) error {
 			return fmt.Errorf("шаг %q: неверный или повторный threadId", step.ID)
 		}
 		threads[step.ThreadID] = true
+		// Чат постановки задачи управляет запуском, но не исполняет кубики.
+		// Проверяем до состояния: конфликт заслуживает отдельной ошибки и в Pending.
+		// Контекст и запрет повтора — в ErrInitiatorAsExecutor.
+		if step.CodexThreadID == m.InitiatorThreadID {
+			return fmt.Errorf("запуск %q, шаг %q: %w", m.RunID, step.ID, ErrInitiatorAsExecutor)
+		}
 		requiresChat := step.State != scheduler.Pending && step.State != scheduler.Starting
 		if step.State == scheduler.Pending && step.CodexThreadID != "" || requiresChat && !validText(step.CodexThreadID) {
 			return fmt.Errorf("шаг %q: состояние не соответствует codexThreadId", step.ID)
@@ -249,6 +298,34 @@ func writeNewFile(path string, data []byte) error {
 		err = f.Sync()
 	}
 	return errors.Join(err, f.Close())
+}
+
+// mkdirAllSynced создаёт абсолютный path с 0700 и сохраняет его имя в родителе.
+// Спускаемся от существующего предка: перед созданием дочерней папки имя её
+// родителя уже сохранено. Иначе после сбоя мог бы исчезнуть весь вложенный root.
+// Существующую папку тоже синхронизируем через родителя: предыдущий или параллельный
+// Create мог создать её, но ещё не завершить Sync. Поэтому повтор после ошибки
+// не пропускает сохранение оставшейся папки. Общие каталоги при отказе не удаляем.
+// Предки выше найденной существующей папки считаются ранее сохранёнными; вызывающий
+// код не должен удалять или перемещать предков доверенного root во время Create.
+func mkdirAllSynced(path string, syncDirectory func(string) error) error {
+	parent := filepath.Dir(path)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) && parent != path {
+		if err := mkdirAllSynced(parent, syncDirectory); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	// MkdirAll также проверяет, что существующий путь — каталог, и допускает
+	// создание той же папки другим Create между Stat и этой операцией.
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	if parent == path {
+		return nil // У корня файловой системы нет отдельного имени в родителе.
+	}
+	return syncDirectory(parent)
 }
 
 // syncDir сохраняет записи каталога после создания файлов или переименования.
