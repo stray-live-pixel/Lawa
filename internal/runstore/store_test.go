@@ -228,6 +228,64 @@ func TestStorageParentSyncFailure(t *testing.T) {
 	}
 }
 
+// TestCreateFinalSyncFailure проверяет отказ уже после публикации meta.json:
+// наличие метаданных ещё не разрешает считать Create успешным и запускать агентов.
+// Отдельно отказываем в Sync папки run и общего root. Новый run должен удалиться,
+// а старый запуск с памятью — остаться без изменений. Подмена ошибки использует
+// реальные временные файлы, но не имитирует отключение питания или поломку диска.
+func TestCreateFinalSyncFailure(t *testing.T) {
+	for _, failAt := range []string{"run", "root"} {
+		t.Run(failAt, func(t *testing.T) {
+			root, in := t.TempDir(), testInput(t)
+			old, err := Create(root, in)
+			if err != nil {
+				t.Fatal(err)
+			}
+			memory := filepath.Join(root, old.Meta.RunID, "memory", old.Meta.Steps[0].ThreadID+".md")
+			mustWrite(t, memory, []byte("сохранить память агента"))
+			syncErr := errors.New("отказ финального Sync")
+			var runDir string
+			got, err := create(root, in, func(path string) error {
+				// ID нового run создаётся внутри Create. Узнаём его папку при Sync
+				// памяти, но сам отказ откладываем до последующего Sync run/root.
+				if filepath.Base(path) == "memory" {
+					runDir = filepath.Dir(path)
+				}
+				failedDir := runDir
+				if failAt == "root" {
+					failedDir = root
+				}
+				if runDir == "" || path != failedDir {
+					return syncDir(path)
+				}
+				// Отказ до Rename уже проверяется другими тестами. Здесь наличие
+				// meta.json обязательно, чтобы не потерять именно позднюю очистку.
+				if _, err := os.Stat(filepath.Join(runDir, "meta.json")); err != nil {
+					t.Fatalf("финальный Sync вызван до публикации meta.json: %v", err)
+				}
+				return &os.PathError{Op: "sync", Path: path, Err: syncErr}
+			})
+			var failure *CreateError
+			if !errors.As(err, &failure) || !errors.Is(failure.Cause, syncErr) || !reflect.DeepEqual(got, Snapshot{}) {
+				t.Fatalf("ожидались пустой снимок и CreateError с причиной Sync: %v", err)
+			}
+			if failure.RunDir != runDir || failure.CleanupErr != nil {
+				t.Fatalf("неверный путь нового запуска или ошибка очистки: %v", err)
+			}
+			entries, readErr := os.ReadDir(root)
+			if readErr != nil || len(entries) != 1 || entries[0].Name() != old.Meta.RunID {
+				t.Fatalf("не удалён новый запуск либо потерян старый: %v, %v", entries, readErr)
+			}
+			if restored, err := Load(root, old.Meta.RunID); err != nil || !reflect.DeepEqual(restored, old) {
+				t.Fatalf("старый запуск изменён: %+v, %v", restored, err)
+			}
+			if data, err := os.ReadFile(memory); err != nil || string(data) != "сохранить память агента" {
+				t.Fatalf("старая память изменена: %q, %v", data, err)
+			}
+		})
+	}
+}
+
 // TestInvalidInputHasNoSideEffects проверяет отказ до создания папки хранения.
 func TestInvalidInputHasNoSideEffects(t *testing.T) {
 	for name, mutate := range map[string]func(*Input){
@@ -346,16 +404,32 @@ func TestBrokenFilesNotRecreated(t *testing.T) {
 				t.Fatal(err)
 			}
 			// Сначала отсутствие, затем повреждённый файл, затем абсолютная ссылка.
-			for i, damage := range []func() error{
+			damages := []func() error{
 				func() error { return nil },
 				func() error { return os.WriteFile(path, []byte{0xff}, 0o600) },
 				func() error { return os.Symlink(backup, path) },
-			} {
+			}
+			// Пустая или пробельная постановка тоже непригодна для продолжения.
+			// Во всех случаях ошибка должна указывать на task.md, а не meta.json.
+			if name == "task.md" {
+				damages = append(damages,
+					func() error { return os.WriteFile(path, nil, 0o600) },
+					func() error { return os.WriteFile(path, []byte(" \n\t"), 0o600) },
+				)
+			}
+			for i, damage := range damages {
 				if err := damage(); err != nil {
 					t.Fatal(err)
 				}
-				if got, err := Load(root, s.Meta.RunID); err == nil || !reflect.DeepEqual(got, Snapshot{}) {
+				got, err := Load(root, s.Meta.RunID)
+				if err == nil || !reflect.DeepEqual(got, Snapshot{}) {
 					t.Fatalf("повреждение принято: %+v, %v", got, err)
+				}
+				if name == "task.md" {
+					message := err.Error()
+					if !strings.Contains(message, name) || strings.Contains(message, "meta.json") {
+						t.Errorf("диагностика должна указывать только на повреждённый %s: %v", name, err)
+					}
 				}
 				if _, err := os.Lstat(path); i == 0 && !errors.Is(err, fs.ErrNotExist) {
 					t.Fatalf("отсутствующий файл был восстановлен: %v", err)

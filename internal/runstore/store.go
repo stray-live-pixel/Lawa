@@ -231,14 +231,20 @@ func Load(root, runID string) (Snapshot, error) {
 	return s, nil
 }
 
-// validate отклоняет несовместимую версию, потерянные/дублированные связи и
-// состояния, способные создать повторный чат. Starting без ID оставляем как
-// неопределённый результат создания, а не превращаем в новый Pending.
+// validate отклоняет повреждённую постановку, несовместимую версию, потерянные
+// или дублированные связи и состояния, способные создать повторный чат.
+// Starting без ID оставляем как неопределённый результат создания,
+// а не превращаем в новый Pending.
 func (s Snapshot) validate(runID string) error {
 	m := s.Meta
 	if m.Version != 1 || m.RunID != runID || !filepath.IsAbs(m.CWD) || !validText(m.CWD) || strings.ContainsRune(m.CWD, 0) ||
-		!validText(m.InitiatorThreadID) || !validText(s.Task) || len(m.Steps) != len(s.Workflow.Steps) {
+		!validText(m.InitiatorThreadID) || len(m.Steps) != len(s.Workflow.Steps) {
 		return fmt.Errorf("повреждены входы, версия или состав meta.json")
+	}
+	// Постановка хранится отдельно: её повреждение не должно направлять
+	// диагностику к исправному meta.json. Само правило проверки не меняется.
+	if !validText(s.Task) {
+		return fmt.Errorf("task.md: постановка должна быть непустым текстом UTF-8")
 	}
 	states := make(map[string]scheduler.State)
 	threads, chats := make(map[string]bool), make(map[string]bool)
