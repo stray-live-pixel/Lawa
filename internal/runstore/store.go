@@ -1,5 +1,5 @@
-// Package runstore создаёт и читает папки запусков без обращения к Codex.
-// Обновление статусов и блокировка координатора здесь пока не реализованы.
+// Package runstore хранит папки запусков без обращения к Codex. На macOS/Linux
+// OpenLocked даёт координатору исключительное право обновлять состояния шагов.
 package runstore
 
 import (
@@ -25,7 +25,7 @@ import (
 // На момент добавления защиты (2026-08-28) это теоретический крайний случай,
 // воспроизводимый только искусственной подстановкой ID в TestMetadataStates.
 // Реальный сбой не наблюдался: Create оставляет CodexThreadID пустым, а создание
-// чатов и запись их ID ещё не реализованы. При штатной работе корректного кода
+// чатов ещё не реализовано; Update проверяет ID до записи. При штатной работе кода
 // записи эта ситуация невозможна. Возможные причины вне этого условия — баг
 // будущего адаптера/сохранения (перепутаны InitiatorThreadID и CodexThreadID) либо
 // ручное изменение meta.json. Это не обычная ошибка пользовательского ввода.
@@ -183,19 +183,31 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 // запрещает выход через симлинки; данные должны быть обычными файлами.
 // Отсутствующий cwd проверяет будущий исполнитель, а не чтение истории запуска.
 func Load(root, runID string) (Snapshot, error) {
-	if !validID(runID) {
-		return Snapshot{}, fmt.Errorf("некорректный runId %q", runID)
-	}
-	base, err := os.OpenRoot(root)
-	if err != nil {
-		return Snapshot{}, err
-	}
-	defer base.Close()
-	dir, err := base.OpenRoot(runID)
+	dir, err := openRun(root, runID)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	defer dir.Close()
+	return load(dir, runID)
+}
+
+// openRun ограничивает все операции каталогом выбранного run, в том числе после
+// его открытия координатором. Доверенный root нельзя подменять во время работы.
+func openRun(root, runID string) (*os.Root, error) {
+	if !validID(runID) {
+		return nil, fmt.Errorf("некорректный runId %q", runID)
+	}
+	base, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer base.Close()
+	return base.OpenRoot(runID)
+}
+
+// load читает самостоятельный снимок из уже открытого каталога. Координатор
+// вызывает её под блокировкой; обычный Load может увидеть старую или новую meta.
+func load(dir *os.Root, runID string) (Snapshot, error) {
 	var s Snapshot
 	meta, err := readFile(dir, "meta.json")
 	if err != nil {
