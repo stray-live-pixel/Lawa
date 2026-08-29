@@ -113,6 +113,9 @@ func TestSkillInstruction(t *testing.T) {
 		"изменять только собственный",
 		"https://github.com/stray-live-pixel/flows-2",
 		"https://raw.githubusercontent.com/stray-live-pixel/flows-2/main/product/1.md",
+		"Если версия\nизвестна из источника установки",
+		"Если нет — не угадывай",
+		"его SHA-256 и полный вывод lawa help",
 		"получи явное разрешение перед публичной",
 		"https://github.com/stray-live-pixel/flows-2/issues/new",
 	} {
