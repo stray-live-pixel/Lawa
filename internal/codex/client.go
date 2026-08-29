@@ -57,10 +57,24 @@ type Command struct {
 // до записи RPC: при потере ответа нельзя считать, что действия не произошло.
 // Пустые ID не разрешают повтор. Status=completed означает завершение turn без
 // ошибки исполнения, но не проверяет смысл ответа. failed/interrupted — также
-// нормальные результаты протокола, а не ошибка клиента.
+// нормальные результаты протокола, а не ошибка клиента. При failed поле
+// TurnError сохраняет диагностический объект из терминального уведомления.
 type Result struct {
 	ThreadID, TurnID, Status         string
 	CreationAttempted, TurnAttempted bool
+	TurnError                        *TurnError
+}
+
+// TurnError описывает причину терминального статуса failed. CodexErrorInfo
+// намеренно остаётся JSON: официальный протокол использует расширяемое объединение
+// строковых кодов и объектов с параметрами, например HTTP-статусом. Сохранение
+// исходного значения не заставляет клиента устаревать при добавлении новых видов
+// ошибок. AdditionalDetails — указатель, чтобы отличать отсутствие поля от пустой
+// строки; сам сервер может не прислать ни его, ни машинный код ошибки.
+type TurnError struct {
+	Message           string          `json:"message"`
+	CodexErrorInfo    json.RawMessage `json:"codexErrorInfo,omitempty"`
+	AdditionalDetails *string         `json:"additionalDetails,omitempty"`
 }
 
 // RPCError содержит отказ Codex без распознавания текста; транспортные ошибки
@@ -93,7 +107,14 @@ type client struct {
 	output    *json.Decoder
 	nextID    int
 	result    *Result
-	completed map[string]string // Завершение может прийти раньше ответа turn/start.
+	completed map[string]turnCompletion // Завершение может прийти раньше ответа turn/start.
+}
+
+// turnCompletion хранит вместе статус и его диагностику: раздельные map могли бы
+// дать вызывающему код статус failed без соответствующей ошибки при раннем событии.
+type turnCompletion struct {
+	Status string
+	Error  *TurnError
 }
 
 // Run проверяет вход до запуска процесса, создаёт чат и сразу отправляет команду.
@@ -155,7 +176,7 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 		return result, fmt.Errorf("запустить Codex: %w", err)
 	}
 	defer func() { err = errors.Join(err, stop(process, stdin), ctx.Err()) }()
-	c := client{ctx: ctx, command: command, input: json.NewEncoder(stdin), output: json.NewDecoder(stdout), result: &result, completed: map[string]string{}}
+	c := client{ctx: ctx, command: command, input: json.NewEncoder(stdin), output: json.NewDecoder(stdout), result: &result, completed: map[string]turnCompletion{}}
 	if err = c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "lawa", "version": "0.1.0"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
 		return result, err
 	}
@@ -163,7 +184,10 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 		return result, err
 	}
 	// Автономность относится только к этому чату; конфиг Desktop не изменяется.
-	params := map[string]any{"cwd": command.CWD, "historyMode": "paginated", "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
+	// Экспериментальный historyMode не передаём: серверный legacy по умолчанию
+	// поддерживает создание и будущий resume, тогда как paginated доступен не во
+	// всех версиях app-server и пока не гарантирует полный жизненный цикл чата.
+	params := map[string]any{"cwd": command.CWD, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
 	if command.Sandbox != "" {
 		params["sandbox"] = command.Sandbox
 	}
@@ -197,7 +221,7 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 	if result.TurnID == "" {
 		return result, errors.New("Codex не вернул ID turn; повтор запрещён")
 	}
-	for c.completed[result.TurnID] == "" {
+	for c.completed[result.TurnID].Status == "" {
 		var message envelope
 		if message, err = c.read(); err != nil {
 			return result, fmt.Errorf("ожидание завершения Codex: %w", err)
@@ -206,7 +230,8 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 			return result, errors.New("ответ Codex без ожидающего RPC")
 		}
 	}
-	result.Status = c.completed[result.TurnID]
+	completion := c.completed[result.TurnID]
+	result.Status, result.TurnError = completion.Status, completion.Error
 	return result, nil
 }
 
@@ -278,7 +303,10 @@ func (c *client) read() (message envelope, err error) {
 	if message.Method == "turn/completed" {
 		var p struct {
 			ThreadID string
-			Turn     struct{ ID, Status string }
+			Turn     struct {
+				ID, Status string
+				Error      *TurnError
+			}
 		}
 		if err = json.Unmarshal(message.Params, &p); err != nil {
 			return message, err
@@ -286,7 +314,7 @@ func (c *client) read() (message envelope, err error) {
 		if p.ThreadID == c.result.ThreadID && p.Turn.ID != "" && (c.result.TurnID == "" || p.Turn.ID == c.result.TurnID) {
 			switch p.Turn.Status {
 			case "completed", "failed", "interrupted":
-				c.completed[p.Turn.ID] = p.Turn.Status
+				c.completed[p.Turn.ID] = turnCompletion{Status: p.Turn.Status, Error: p.Turn.Error}
 			default:
 				return message, fmt.Errorf("неизвестный терминальный статус Codex %q", p.Turn.Status)
 			}

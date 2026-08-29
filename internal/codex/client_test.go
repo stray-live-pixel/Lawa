@@ -58,7 +58,8 @@ func fakeServer(scenario string) {
 			}
 		case "thread/start":
 			cwd, _ := os.Getwd()
-			if p["cwd"] != cwd || p["historyMode"] != "paginated" || p["sandbox"] != "read-only" || p["model"] != nil || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
+			_, hasHistoryMode := p["historyMode"]
+			if p["cwd"] != cwd || hasHistoryMode || p["sandbox"] != "read-only" || p["model"] != nil || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
 				panic("искажены параметры чата, автономность или модель")
 			}
 			id := "thread-1"
@@ -94,7 +95,17 @@ func fakeServer(scenario string) {
 				panic("нет корректного ответа currentTime/read")
 			}
 			finish := func(thread, turn, status string) {
-				send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": thread, "turn": map[string]any{"id": turn, "status": status}}})
+				turnData := map[string]any{"id": turn, "status": status}
+				if status == "failed" {
+					// Разные сообщения доказывают, что клиент не связывает с результатом
+					// ошибку чужого чата или другого turn из общего потока событий.
+					turnData["error"] = map[string]any{
+						"message":           thread + "/" + turn + " failed",
+						"codexErrorInfo":    "usageLimitExceeded",
+						"additionalDetails": "retry after usage reset",
+					}
+				}
+				send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": thread, "turn": turnData}})
 			}
 			finish("other-thread", "turn-1", "failed")
 			finish("thread-1", "other-turn", "failed")
@@ -185,6 +196,15 @@ func TestRun(t *testing.T) {
 			result, err := Run(ctx, command)
 			if (err != nil) != (tc.status == "") || result.Status != tc.status {
 				t.Fatalf("результат %+v, ошибка %v; сервер: %s", result, err, &trace)
+			}
+			if tc.status == "failed" {
+				if result.TurnError == nil || result.TurnError.Message != "thread-1/turn-1 failed" ||
+					string(result.TurnError.CodexErrorInfo) != `"usageLimitExceeded"` || result.TurnError.AdditionalDetails == nil ||
+					*result.TurnError.AdditionalDetails != "retry after usage reset" {
+					t.Fatalf("потеряна причина failed: %+v", result.TurnError)
+				}
+			} else if result.TurnError != nil {
+				t.Fatalf("ошибка чужого или успешного turn попала в результат: %+v", result.TurnError)
 			}
 			if strings.Count(trace.String(), "thread/start\n") != tc.creates || strings.Count(trace.String(), "turn/start\n") != tc.turns ||
 				result.CreationAttempted != (tc.creates > 0) || result.TurnAttempted != (tc.turns > 0) || result.ThreadID != saved {
