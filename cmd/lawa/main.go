@@ -130,9 +130,9 @@ func productionDependencies() dependencies {
 		client: func(executable string, stderr io.Writer) coordinator.Client {
 			return coordinator.ProductionClient{Executable: executable, Stderr: stderr}
 		},
-		// Каждая сверка запускает короткий thread/read app-server на известный
-		// чат. Пять секунд сохраняют отзывчивость ручного resume без постоянного
-		// перезапуска десятков процессов в больших workflow.
+		// Одна read-only app-server-сессия обслуживает все сверки текущего запуска.
+		// Пять секунд сохраняют отзывчивость ручного продолжения и не создают
+		// лишний поток thread/read-запросов в ожидании действий пользователя.
 		pollInterval: 5 * time.Second,
 		userHomeDir:  os.UserHomeDir,
 	}

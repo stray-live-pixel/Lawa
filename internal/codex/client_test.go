@@ -189,11 +189,19 @@ func fakeServer(scenario string) {
 				"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "interrupted"},
 			}})
 		case "thread/read":
-			if p["threadId"] != "thread-1" || p["includeTurns"] != true {
+			requestedThreadID, _ := p["threadId"].(string)
+			multiple := scenario == "inspect:multiple"
+			if (!multiple && requestedThreadID != "thread-1") || p["includeTurns"] != true {
 				panic("искажён запрос чтения чата")
+			}
+			if multiple && requestedThreadID != "thread-1" && requestedThreadID != "thread-2" && requestedThreadID != "thread-3" {
+				panic("общая сессия прочитала неожиданный чат")
 			}
 			cwd, _ := os.Getwd()
 			threadID, threadCWD, threadStatus := "thread-1", cwd, "idle"
+			if multiple {
+				threadID = requestedThreadID
+			}
 			turnStatus, activeFlags := "completed", []string{}
 			switch scenario {
 			case "inspect:active":
@@ -511,6 +519,37 @@ func TestInspect(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestObserverReusesSession доказывает R4 на настоящем stdio-транспорте теста:
+// несколько thread/read идут через один initialize, то есть между проверками
+// app-server не перезапускается. Активные turn этот Observer не создаёт.
+func TestObserverReusesSession(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAWA_TEST_CODEX_SERVER", "inspect:multiple")
+	trace := bytes.Buffer{}
+	observer, err := OpenObserver(t.Context(), Connection{Executable: binary, CWD: t.TempDir(), Stderr: &trace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, threadID := range []string{"thread-1", "thread-2", "thread-3"} {
+		observation, inspectErr := observer.Inspect(threadID)
+		if inspectErr != nil || observation.LatestTurnStatus != "completed" {
+			t.Fatalf("повторное чтение: %+v, %v", observation, inspectErr)
+		}
+	}
+	if err := observer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(trace.String(), "initialize\n"); got != 1 {
+		t.Fatalf("наблюдение запустило %d сессий вместо одной; trace=%q", got, trace.String())
+	}
+	if got := strings.Count(trace.String(), "thread/read\n"); got != 3 {
+		t.Fatalf("ожидались три чтения через общую сессию, получено %d; trace=%q", got, trace.String())
 	}
 }
 

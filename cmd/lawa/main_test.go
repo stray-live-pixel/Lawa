@@ -171,6 +171,8 @@ type cliFakeClient struct {
 	inspect   map[string]codex.WorkStatus
 }
 
+type cliFakeObserver struct{ client *cliFakeClient }
+
 func newCLIFakeClient() *cliFakeClient {
 	return &cliFakeClient{runs: map[string]int{}, continues: map[string]int{}, inspect: map[string]codex.WorkStatus{}}
 }
@@ -211,7 +213,12 @@ func (c *cliFakeClient) Continue(_ context.Context, threadID string, command cod
 	return codex.Result{ThreadID: threadID, TurnID: "continued-turn", Status: "completed", TurnAttempted: true}, nil
 }
 
-func (c *cliFakeClient) Inspect(_ context.Context, _ string, threadID string) (codex.Observation, error) {
+func (c *cliFakeClient) OpenObserver(_ context.Context, _ string) (coordinator.Observer, error) {
+	return &cliFakeObserver{client: c}, nil
+}
+
+func (o *cliFakeObserver) Inspect(threadID string) (codex.Observation, error) {
+	c := o.client
 	c.mu.Lock()
 	status := c.inspect[threadID]
 	c.mu.Unlock()
@@ -229,6 +236,8 @@ func (c *cliFakeClient) Inspect(_ context.Context, _ string, threadID string) (c
 	}
 	return observation, nil
 }
+
+func (o *cliFakeObserver) Close() error { return nil }
 
 func cliTestDependencies(client coordinator.Client, check func(context.Context, codex.Connection) error) dependencies {
 	return dependencies{

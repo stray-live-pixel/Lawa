@@ -29,6 +29,8 @@ type fakeClient struct {
 	interrupts                 map[string]int
 	interruptFailures          map[string]error
 	inspects                   map[string]int
+	observerOpens              int
+	observerCloses             int
 }
 
 func newFakeClient() *fakeClient {
@@ -162,7 +164,22 @@ func (c *fakeClient) interrupt(stepID string) error {
 	return failure
 }
 
-func (c *fakeClient) Inspect(_ context.Context, _ string, threadID string) (codex.Observation, error) {
+// fakeObserver отделяет жизненный цикл одной polling-сессии от клиента активных
+// turn. Счётчики доказывают переиспользование между чатами и циклами Execute.
+type fakeObserver struct {
+	client *fakeClient
+	once   sync.Once
+}
+
+func (c *fakeClient) OpenObserver(_ context.Context, _ string) (Observer, error) {
+	c.mu.Lock()
+	c.observerOpens++
+	c.mu.Unlock()
+	return &fakeObserver{client: c}, nil
+}
+
+func (o *fakeObserver) Inspect(threadID string) (codex.Observation, error) {
+	c := o.client
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.inspects[threadID]++
@@ -175,6 +192,15 @@ func (c *fakeClient) Inspect(_ context.Context, _ string, threadID string) (code
 		}
 	}
 	return observationFor(threadID, status), nil
+}
+
+func (o *fakeObserver) Close() error {
+	o.once.Do(func() {
+		o.client.mu.Lock()
+		o.client.observerCloses++
+		o.client.mu.Unlock()
+	})
+	return nil
 }
 
 func stepFromTitle(title string) string {
@@ -279,6 +305,40 @@ func TestExecuteManualContinuation(t *testing.T) {
 	defer client.mu.Unlock()
 	if client.runs["parent"] != 1 || client.continues["parent"] != 0 || client.runs["child"] != 1 || client.inspects["chat-parent"] < 2 {
 		t.Fatalf("ручное продолжение создало дубликат или не открыло зависимость: runs=%v inspect=%v", client.runs, client.inspects)
+	}
+}
+
+// TestExecuteReusesObserverAcrossPolling проверяет R4 на нескольких чатах:
+// сколько бы thread/read ни понадобилось, Execute открывает и закрывает ровно одну
+// read-only сессию. Failed оставляет flow незавершённым на несколько polling-циклов.
+func TestExecuteReusesObserverAcrossPolling(t *testing.T) {
+	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"one","type":"agent","prompt":"Один","dependsOn":[]},{"id":"two","type":"agent","prompt":"Два","dependsOn":[]},{"id":"three","type":"agent","prompt":"Три","dependsOn":[]}]}`)
+	stepIDs := []string{"one", "two", "three"}
+	if err := run.Reserve(stepIDs); err != nil {
+		t.Fatal(err)
+	}
+	client := newFakeClient()
+	for _, stepID := range stepIDs {
+		threadID := "chat-" + stepID
+		if err := run.Update(stepID, scheduler.Failed, threadID); err != nil {
+			t.Fatal(err)
+		}
+		client.inspectStatuses[threadID] = []codex.WorkStatus{codex.WorkFailed}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 100*time.Millisecond)
+	defer cancel()
+	if err := Execute(ctx, run, Options{Root: root, PollInterval: time.Millisecond, Client: client}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ожидалась остановка тестового polling: %v", err)
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.observerOpens != 1 || client.observerCloses != 1 {
+		t.Fatalf("polling создал неверное число наблюдающих сессий: opens=%d closes=%d", client.observerOpens, client.observerCloses)
+	}
+	for _, stepID := range stepIDs {
+		if count := client.inspects["chat-"+stepID]; count < 2 {
+			t.Errorf("чат %q прочитан только %d раз: тест не прошёл несколько polling-циклов", stepID, count)
+		}
 	}
 }
 

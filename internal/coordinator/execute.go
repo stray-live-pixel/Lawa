@@ -23,12 +23,47 @@ var ErrAmbiguousStart = errors.New("создание чата имеет нео�
 type Client interface {
 	Run(context.Context, codex.Command) (codex.Result, error)
 	Continue(context.Context, string, codex.Command) (codex.Result, error)
-	Inspect(context.Context, string, string) (codex.Observation, error)
+	OpenObserver(context.Context, string) (Observer, error)
 }
 
-// ProductionClient создаёт отдельные процессы app-server для новых turn и
-// коротких thread/read. Параллельность задаёт координатор, собственных лимитов
-// здесь нет. Диагностика Codex пишется в Stderr без накопления в памяти Lawa.
+// Observer — read-only сессия для последовательной сверки сохранённых чатов.
+// Close относится только к её процессу и не должен останавливать активные turn.
+type Observer interface {
+	Inspect(string) (codex.Observation, error)
+	Close() error
+}
+
+// sharedObserver лениво открывает транспорт при первом известном неактивном чате.
+// Новый run поэтому не получает лишнюю точку отказа до запуска первого turn, а
+// последующие polling-циклы всё равно переиспользуют одну и ту же сессию.
+type sharedObserver struct {
+	ctx      context.Context
+	client   Client
+	cwd      string
+	observer Observer
+}
+
+func (o *sharedObserver) Inspect(threadID string) (codex.Observation, error) {
+	if o.observer == nil {
+		observer, err := o.client.OpenObserver(o.ctx, o.cwd)
+		if err != nil {
+			return codex.Observation{}, fmt.Errorf("открыть наблюдение Codex: %w", err)
+		}
+		o.observer = observer
+	}
+	return o.observer.Inspect(threadID)
+}
+
+func (o *sharedObserver) Close() error {
+	if o == nil || o.observer == nil {
+		return nil
+	}
+	return o.observer.Close()
+}
+
+// ProductionClient создаёт отдельный app-server для каждого нового turn и одну
+// наблюдающую сессию на Execute. Диагностика Codex пишется в Stderr без накопления
+// в памяти Lawa.
 type ProductionClient struct {
 	Executable string
 	Stderr     io.Writer
@@ -46,9 +81,9 @@ func (c ProductionClient) Continue(ctx context.Context, threadID string, command
 	return codex.Continue(ctx, threadID, command)
 }
 
-// Inspect читает сохранённый чат в его исходной рабочей папке.
-func (c ProductionClient) Inspect(ctx context.Context, cwd, threadID string) (codex.Observation, error) {
-	return codex.Inspect(ctx, codex.Connection{Executable: c.Executable, CWD: cwd, Stderr: c.Stderr}, threadID)
+// OpenObserver открывает одну read-only сессию для всех polling-циклов Execute.
+func (c ProductionClient) OpenObserver(ctx context.Context, cwd string) (Observer, error) {
+	return codex.OpenObserver(ctx, codex.Connection{Executable: c.Executable, CWD: cwd, Stderr: c.Stderr})
 }
 
 // StepStatus — компактная строка отчёта без prompt, task.md и содержимого памяти.
@@ -156,6 +191,12 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 	if err != nil {
 		return fmt.Errorf("координатор: прочитать запуск: %w", err)
 	}
+	observer := &sharedObserver{ctx: ctx, client: options.Client, cwd: initial.Meta.CWD}
+	// Закрытие наблюдения регистрируется до defer активных turn ниже. На Ctrl+C
+	// координатор поэтому сначала отправит адресные interrupt через владеющие
+	// сессии и только затем закроет независимый read-only процесс. Если известных
+	// чатов ещё нет, процесс не запускается вовсе.
+	defer func() { err = errors.Join(err, observer.Close()) }()
 	// Буфер равен числу шагов: после остановки наблюдения каждый уже запущенный
 	// turn сможет завершить свою горутину, даже если получатель больше не читает.
 	results := make(chan launchResult, len(initial.Meta.Steps))
@@ -181,7 +222,7 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if err := reconcile(ctx, run, options.Client, active); err != nil {
+		if err := reconcile(run, observer, active); err != nil {
 			return err
 		}
 		snapshot, err := run.Load()
@@ -434,47 +475,34 @@ func stateFromResult(result codex.Result) (scheduler.State, error) {
 	}
 }
 
-// reconcile параллельно читает все известные неактивные чаты. Активные вызовы
-// Run уже получают события из собственного app-server; второй thread/read для
-// них только создавал бы гонку между двумя источниками одного статуса.
-func reconcile(ctx context.Context, run *runstore.LockedRun, client Client, active map[string]*activeExecution) error {
+// reconcile последовательно читает все известные неактивные чаты через одну
+// наблюдающую сессию. Один Decoder нельзя читать конкурентно; последовательность
+// сохраняет простую маршрутизацию RPC и убирает процесс на каждый чат. Активные
+// Run получают события из собственного app-server и здесь не опрашиваются.
+func reconcile(run *runstore.LockedRun, observer Observer, active map[string]*activeExecution) error {
 	snapshot, err := run.Load()
 	if err != nil {
 		return fmt.Errorf("координатор: прочитать запуск перед сверкой: %w", err)
 	}
-	type inspected struct {
-		step        runstore.Step
-		observation codex.Observation
-		err         error
-	}
-	count := 0
-	results := make(chan inspected, len(snapshot.Meta.Steps))
 	for _, step := range snapshot.Meta.Steps {
 		if step.CodexThreadID == "" || active[step.ID] != nil {
 			continue
 		}
-		count++
-		go func(step runstore.Step) {
-			observation, inspectErr := client.Inspect(ctx, snapshot.Meta.CWD, step.CodexThreadID)
-			results <- inspected{step: step, observation: observation, err: inspectErr}
-		}(step)
-	}
-	for range count {
-		item := <-results
-		if item.err != nil {
-			return fmt.Errorf("координатор: прочитать чат шага %q: %w", item.step.ID, item.err)
+		observation, inspectErr := observer.Inspect(step.CodexThreadID)
+		if inspectErr != nil {
+			return fmt.Errorf("координатор: прочитать чат шага %q: %w", step.ID, inspectErr)
 		}
-		workStatus, statusErr := item.observation.Status()
+		workStatus, statusErr := observation.Status()
 		if statusErr != nil {
-			return fmt.Errorf("координатор: прочитать статус шага %q: %w", item.step.ID, statusErr)
+			return fmt.Errorf("координатор: прочитать статус шага %q: %w", step.ID, statusErr)
 		}
 		state, statusErr := stateFromObservation(workStatus)
 		if statusErr != nil {
-			return fmt.Errorf("координатор: шаг %q: %w", item.step.ID, statusErr)
+			return fmt.Errorf("координатор: шаг %q: %w", step.ID, statusErr)
 		}
-		if state != item.step.State {
-			if err := run.Update(item.step.ID, state, item.step.CodexThreadID); err != nil {
-				return fmt.Errorf("координатор: сохранить статус шага %q: %w", item.step.ID, err)
+		if state != step.State {
+			if err := run.Update(step.ID, state, step.CodexThreadID); err != nil {
+				return fmt.Errorf("координатор: сохранить статус шага %q: %w", step.ID, err)
 			}
 		}
 	}

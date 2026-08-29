@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf8"
 )
 
@@ -42,6 +43,16 @@ type Observation struct {
 	LatestTurnError                                             *TurnError
 }
 
+// Observer владеет одной read-only app-server-сессией для последовательного
+// чтения нескольких сохранённых чатов. Сессия не вызывает thread/resume и не
+// начинает turn, поэтому не становится вторым writer активного чата. Один Decoder
+// обслуживает ответы по порядку; mu безопасно сериализует конкурентные вызовы.
+type Observer struct {
+	mu         sync.Mutex
+	connection Connection
+	session    *session
+}
+
 // Check подтверждает, что app-server запускается и принимает обязательное
 // initialize/initialized. Он не создаёт, не продолжает и не изменяет чаты.
 func Check(ctx context.Context, connection Connection) (err error) {
@@ -60,15 +71,12 @@ func Check(ctx context.Context, connection Connection) (err error) {
 	return errors.Join(s.Close(), ctx.Err())
 }
 
-// Inspect читает актуальное состояние сохранённого чата без запуска нового
-// turn. includeTurns нужен, чтобы отличить успешный последний ручной повтор от
-// прежней ошибки. Полный текст items игнорируется и нигде не сохраняется.
-func Inspect(ctx context.Context, connection Connection, threadID string) (observation Observation, err error) {
-	if err = validateConnection(ctx, connection); err != nil {
-		return observation, err
-	}
-	if !validProtocolText(threadID) {
-		return observation, errors.New("нужен непустой ID чата Codex в UTF-8")
+// OpenObserver один раз запускает app-server и завершает обязательное рукопожатие.
+// Координатор переиспользует результат между polling-циклами и закрывает при любом
+// выходе из Execute. Новая команда resume открывает новую независимую сессию.
+func OpenObserver(ctx context.Context, connection Connection) (*Observer, error) {
+	if err := validateConnection(ctx, connection); err != nil {
+		return nil, err
 	}
 	result := Result{}
 	s, err := openSession(ctx, Command{
@@ -77,9 +85,53 @@ func Inspect(ctx context.Context, connection Connection, threadID string) (obser
 		Stderr:     connection.Stderr,
 	}, &result)
 	if err != nil {
+		return nil, err
+	}
+	return &Observer{connection: connection, session: s}, nil
+}
+
+// Close завершает только наблюдающий app-server. Чаты Codex и выполняющиеся через
+// другие сессии turn не затрагиваются; повторный Close безопасен.
+func (o *Observer) Close() error {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.session == nil {
+		return nil
+	}
+	err := o.session.Close()
+	o.session = nil
+	return err
+}
+
+// Inspect сохраняет прежний одноразовый API для независимых вызовов. Длительный
+// polling должен использовать OpenObserver, иначе каждый вызов создаст процесс.
+func Inspect(ctx context.Context, connection Connection, threadID string) (observation Observation, err error) {
+	observer, err := OpenObserver(ctx, connection)
+	if err != nil {
 		return observation, err
 	}
-	defer func() { err = errors.Join(err, s.Close(), ctx.Err()) }()
+	defer func() { err = errors.Join(err, observer.Close(), ctx.Err()) }()
+	return observer.Inspect(threadID)
+}
+
+// Inspect читает актуальное состояние сохранённого чата без запуска нового turn.
+// includeTurns отличает успешный последний ручной повтор от прежней ошибки. Полный
+// текст items игнорируется и нигде не сохраняется.
+func (o *Observer) Inspect(threadID string) (observation Observation, err error) {
+	if o == nil {
+		return observation, errors.New("наблюдающая сессия Codex не открыта")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.session == nil {
+		return observation, errors.New("наблюдающая сессия Codex не открыта")
+	}
+	if !validProtocolText(threadID) {
+		return observation, errors.New("нужен непустой ID чата Codex в UTF-8")
+	}
 	var response struct {
 		Thread struct {
 			ID, CWD string
@@ -93,16 +145,16 @@ func Inspect(ctx context.Context, connection Connection, threadID string) (obser
 			}
 		}
 	}
-	if err = s.client.call("thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &response); err != nil {
+	if err = o.session.client.call("thread/read", map[string]any{"threadId": threadID, "includeTurns": true}, &response); err != nil {
 		return observation, err
 	}
 	if response.Thread.ID != threadID {
 		return observation, fmt.Errorf("Codex вернул чат %q вместо %q", response.Thread.ID, threadID)
 	}
-	if same, pathErr := sameDirectory(response.Thread.CWD, connection.CWD); pathErr != nil {
+	if same, pathErr := sameDirectory(response.Thread.CWD, o.connection.CWD); pathErr != nil {
 		return observation, fmt.Errorf("проверить cwd чата %q: %w", threadID, pathErr)
 	} else if !same {
-		return observation, fmt.Errorf("чат %q относится к cwd %q, ожидался %q", threadID, response.Thread.CWD, connection.CWD)
+		return observation, fmt.Errorf("чат %q относится к cwd %q, ожидался %q", threadID, response.Thread.CWD, o.connection.CWD)
 	}
 	observation = Observation{
 		ThreadID:     response.Thread.ID,
@@ -145,7 +197,7 @@ func (o Observation) Status() (WorkStatus, error) {
 		return WorkFailed, nil
 	case "idle", "notLoaded":
 		// Терминальный turn из сохранённой истории достовернее того, загружен
-		// ли чат именно в этом короткоживущем процессе app-server.
+		// ли чат именно в наблюдающем процессе app-server.
 		switch o.LatestTurnStatus {
 		case "completed":
 			return WorkCompleted, nil
