@@ -74,6 +74,11 @@ func fakeServer(scenario string) {
 			}
 			reply(map[string]any{"thread": map[string]any{"id": id}})
 		case "thread/name/set":
+			// Имя задаётся уже созданному чату. Проверка обоих полей защищает
+			// контракт запроса: сервер не должен молча принимать неверный ID или заголовок.
+			if p["threadId"] != "thread-1" || p["name"] != "Test" {
+				panic("искажены ID чата или его имя")
+			}
 			reply(map[string]any{})
 		case "turn/start":
 			if scenario == "malformed" {
@@ -120,9 +125,13 @@ func fakeServer(scenario string) {
 			}
 			reply(map[string]any{"turn": map[string]any{"id": "turn-1"}})
 			send(map[string]any{"method": "turn/started", "params": map[string]any{}})
-			if scenario == "approval" || scenario == "handled" {
+			if scenario == "approval" || scenario == "handled" || scenario == "unsupported-request" {
 				// Даже неожиданный ручной запрос при auto_review нельзя подтвердить молча.
-				send(map[string]any{"id": 900, "method": "item/commandExecution/requestApproval", "params": map[string]any{}})
+				method := "item/commandExecution/requestApproval"
+				if scenario == "unsupported-request" {
+					method = "account/chatgptAuthTokens/refresh"
+				}
+				send(map[string]any{"id": 900, "method": method, "params": map[string]any{}})
 				var decision struct {
 					ID     int
 					Result struct{ Decision string }
@@ -160,9 +169,11 @@ func TestRun(t *testing.T) {
 		{"failed", "failed", 1, 1}, {"interrupted", "interrupted", 1, 1},
 		{"error:initialize", "", 0, 0}, {"eof:thread/start", "", 1, 0},
 		{"missing-id", "", 1, 0}, {"save", "", 1, 0},
+		{"error:thread/name/set", "", 1, 0},
 		{"error:turn/start", "", 1, 1}, {"eof:turn/start", "", 1, 1},
 		{"malformed", "", 1, 1}, {"unknown-status", "", 1, 1},
-		{"approval", "", 1, 1}, {"notify", "", 1, 1}, {"cancel", "", 1, 1},
+		{"approval", "", 1, 1}, {"unsupported-request", "", 1, 1},
+		{"notify", "", 1, 1}, {"cancel", "", 1, 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("LAWA_TEST_CODEX_SERVER", tc.name)
@@ -196,8 +207,15 @@ func TestRun(t *testing.T) {
 			if tc.name == "skill" {
 				command.Skill = &Skill{"demo", "/test/SKILL.md"}
 			}
-			if tc.name == "handled" {
-				command.Respond = func(context.Context, Event) (any, error) { return map[string]string{"decision": "decline"}, nil }
+			if tc.name == "handled" || tc.name == "unsupported-request" {
+				command.Respond = func(_ context.Context, event Event) (any, error) {
+					switch event.Method {
+					case "item/commandExecution/requestApproval":
+						return map[string]string{"decision": "decline"}, nil
+					default:
+						return nil, &InteractionRequired{Event: event}
+					}
+				}
 			}
 			result, err := Run(ctx, command)
 			if (err != nil) != (tc.status == "") || result.Status != tc.status {
@@ -218,9 +236,13 @@ func TestRun(t *testing.T) {
 			}
 			var rpc *RPCError
 			var interaction *InteractionRequired
-			if strings.HasPrefix(tc.name, "error:") && !errors.As(err, &rpc) || tc.name == "approval" && !errors.As(err, &interaction) ||
+			if strings.HasPrefix(tc.name, "error:") && !errors.As(err, &rpc) ||
+				(tc.name == "approval" || tc.name == "unsupported-request") && !errors.As(err, &interaction) ||
 				tc.name == "cancel" && !errors.Is(err, context.Canceled) || (tc.name == "save" || tc.name == "notify") && !errors.Is(err, failure) {
 				t.Fatalf("потерян тип ошибки: %v", err)
+			}
+			if tc.name == "unsupported-request" && interaction.Event.Method != "account/chatgptAuthTokens/refresh" {
+				t.Fatalf("потерян неподдерживаемый метод: %+v", interaction.Event)
 			}
 			if strings.HasPrefix(tc.name, "error:") {
 				var data struct{ Retryable bool }

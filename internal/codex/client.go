@@ -43,7 +43,10 @@ type Event struct {
 // OnThread вызывается после получения ID, строго до отправки команды: координатор
 // может сохранить связь и запретить turn своей ошибкой. Notify и Respond синхронны,
 // должны учитывать отмену и не вызывать Run рекурсивно для повтора той же задачи.
-// Respond обрабатывает запросы разрешений/ввода; nil запрещает молчаливое согласие.
+// Respond получает каждый запрос сервера, кроме служебного currentTime/read.
+// Обработчик обязан выбрать форму ответа по Event.Method и проверить Event.Params.
+// Для неподдерживаемого метода он может вернуть InteractionRequired. Nil Respond
+// делает это для любого такого запроса, не отправляя молчаливое согласие.
 type Command struct {
 	Executable, CWD, Text, Title, Sandbox string
 	Skill                                 *Skill
@@ -91,8 +94,9 @@ type RPCError struct {
 // Error сохраняет код и текст отказа без интерпретации его как результата агента.
 func (e *RPCError) Error() string { return fmt.Sprintf("Codex RPC %d: %s", e.Code, e.Message) }
 
-// InteractionRequired означает, что сервер ждёт решения, а Respond не задан.
-// Клиент останавливается с сохранёнными ID, не одобряет и не имитирует ответ UI.
+// InteractionRequired означает, что сервер ждёт решения, а Respond не задан
+// или явно отказался обслуживать этот Event.Method. Клиент останавливается
+// с сохранёнными ID, не одобряет и не имитирует ответ UI.
 type InteractionRequired struct{ Event Event }
 
 // Error указывает, для какого запроса вызывающему коду нужен обработчик.
