@@ -1,8 +1,10 @@
-// Команда lawa предоставляет офлайн-проверку workflow. Исполнение через Codex
-// добавляется отдельно: успешная проверка схемы не означает успешный запуск задач.
+// Команда lawa предоставляет офлайн-проверку workflow и встроенную инструкцию
+// для будущего скилла Codex. Исполнение через Codex добавляется отдельно:
+// успешная проверка схемы или вывод инструкции не означают запуск задач.
 package main
 
 import (
+	_ "embed"
 	"fmt"
 	"io"
 	"os"
@@ -14,12 +16,20 @@ const help = `Lawa — проверка JSON-workflow для задач AI-аг�
 
 Команды:
   lawa validate <workflow.json>  Проверить поля, ссылки и отсутствие циклов.
+  lawa skill                     Вывести инструкцию для скилла Codex.
   lawa help                     Показать справку (также -h и --help).
 
-Проверка не запускает агентов, не создаёт файлы и не требует подключения к Codex.
+Validate и skill не запускают агентов, не создают файлы и не требуют подключения к Codex.
 Коды выхода: 0 — проверка/справка успешна; 2 — ошибка ввода или вывода.
-Команды run, resume и skill пока не реализованы.
+Команды run и resume пока не реализованы.
 `
+
+// skillInstruction хранится отдельным SKILL.md, чтобы инструкцию можно было читать,
+// редактировать и проверять как обычный скилл. Встраивание сохраняет автономность
+// бинарника: команда не ищет файл во время работы и печатает снимок времени сборки.
+//
+//go:embed SKILL.md
+var skillInstruction string
 
 // main отделяет код завершения процесса от проверяемой без subprocess логики CLI.
 func main() {
@@ -34,6 +44,13 @@ func main() {
 func execute(args []string, out io.Writer) error {
 	if len(args) == 0 || (len(args) == 1 && (args[0] == "help" || args[0] == "-h" || args[0] == "--help")) {
 		_, err := io.WriteString(out, help)
+		return err
+	}
+	if args[0] == "skill" {
+		if len(args) != 1 {
+			return fmt.Errorf("использование: lawa skill")
+		}
+		_, err := io.WriteString(out, skillInstruction)
 		return err
 	}
 	if args[0] != "validate" {
