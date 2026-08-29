@@ -23,7 +23,6 @@ var ErrAmbiguousStart = errors.New("создание чата имеет нео�
 type Client interface {
 	Run(context.Context, codex.Command) (codex.Result, error)
 	Continue(context.Context, string, codex.Command) (codex.Result, error)
-	Interrupt(context.Context, string, string, string, *codex.PermissionProfile) error
 	Inspect(context.Context, string, string) (codex.Observation, error)
 }
 
@@ -45,14 +44,6 @@ func (c ProductionClient) Run(ctx context.Context, command codex.Command) (codex
 func (c ProductionClient) Continue(ctx context.Context, threadID string, command codex.Command) (codex.Result, error) {
 	command.Executable, command.Stderr = c.Executable, c.Stderr
 	return codex.Continue(ctx, threadID, command)
-}
-
-// Interrupt адресно отменяет активный turn через отдельное подключение. Профиль
-// нужен новому app-server, чтобы он смог загрузить чат с теми же ограничениями.
-func (c ProductionClient) Interrupt(ctx context.Context, cwd, threadID, turnID string, permissions *codex.PermissionProfile) error {
-	return codex.Interrupt(ctx, codex.Connection{
-		Executable: c.Executable, CWD: cwd, Stderr: c.Stderr, Permissions: permissions,
-	}, threadID, turnID)
 }
 
 // Inspect читает сохранённый чат в его исходной рабочей папке.
@@ -100,15 +91,15 @@ type launchResult struct {
 type activeExecution struct {
 	mu               sync.Mutex
 	cancel           context.CancelFunc
-	command          codex.Command
+	interrupt        func(context.Context) error
 	threadID, turnID string
 	ready            chan struct{}
 	readyOnce        sync.Once
 	done             bool
 }
 
-func newActiveExecution(cancel context.CancelFunc, command codex.Command, threadID string) *activeExecution {
-	return &activeExecution{cancel: cancel, command: command, threadID: threadID, ready: make(chan struct{})}
+func newActiveExecution(cancel context.CancelFunc, threadID string) *activeExecution {
+	return &activeExecution{cancel: cancel, threadID: threadID, ready: make(chan struct{})}
 }
 
 func (a *activeExecution) setThread(id string) {
@@ -117,9 +108,13 @@ func (a *activeExecution) setThread(id string) {
 	a.mu.Unlock()
 }
 
-func (a *activeExecution) setTurn(id string) {
+// setTurn атомарно сохраняет ID и функцию interrupt исходной stdio-сессии.
+// ready закрывается только после обоих значений: обработчик сигнала не увидит
+// turnId без способа адресно остановить именно этот turn.
+func (a *activeExecution) setTurn(id string, interrupt func(context.Context) error) {
 	a.mu.Lock()
 	a.turnID = id
+	a.interrupt = interrupt
 	a.mu.Unlock()
 	a.readyOnce.Do(func() { close(a.ready) })
 }
@@ -131,10 +126,10 @@ func (a *activeExecution) finish() {
 	a.readyOnce.Do(func() { close(a.ready) })
 }
 
-func (a *activeExecution) snapshot() (threadID, turnID string, done bool) {
+func (a *activeExecution) snapshot() (threadID, turnID string, interrupt func(context.Context) error, done bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return a.threadID, a.turnID, a.done
+	return a.threadID, a.turnID, a.interrupt, a.done
 }
 
 // Execute наблюдает сохранённый run до успеха всех шагов. Перед каждым новым
@@ -172,7 +167,7 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 	defer func() {
 		if len(active) != 0 {
 			if cause := ctx.Err(); cause != nil {
-				err = interruptActive(errors.Join(err, cause), run, initial.Meta.CWD, options.Client, active, results)
+				err = interruptActive(errors.Join(err, cause), run, active, results)
 			} else {
 				err = drainActive(err, run, active, results)
 			}
@@ -207,13 +202,13 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 		for _, continuation := range continuations {
 			continued[continuation.StepID] = true
 			turnCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-			execution := newActiveExecution(cancel, continuation.Command, continuation.ThreadID)
+			execution := newActiveExecution(cancel, continuation.ThreadID)
 			active[continuation.StepID] = execution
 			startContinuation(run, options.Client, turnCtx, continuation, execution, results)
 		}
 		for _, launch := range prepared.Launches {
 			turnCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-			execution := newActiveExecution(cancel, launch.Command, "")
+			execution := newActiveExecution(cancel, "")
 			active[launch.StepID] = execution
 			startLaunch(run, options.Client, turnCtx, launch, execution, results)
 		}
@@ -270,7 +265,7 @@ type interruptResult struct {
 // терминальное событие. Если app-server не подтверждает остановку, локальная
 // stdio-сессия отменяется как аварийный fallback: Ctrl+C всё равно обязан вернуть
 // управление, а следующий resume сверит фактический статус через thread/read.
-func interruptActive(cause error, run *runstore.LockedRun, cwd string, client Client, active map[string]*activeExecution, results <-chan launchResult) error {
+func interruptActive(cause error, run *runstore.LockedRun, active map[string]*activeExecution, results <-chan launchResult) error {
 	shutdown, cancel := context.WithTimeout(context.Background(), interruptGracePeriod)
 	defer cancel()
 	interrupts := make(chan interruptResult, len(active))
@@ -278,14 +273,16 @@ func interruptActive(cause error, run *runstore.LockedRun, cwd string, client Cl
 		go func(stepID string, execution *activeExecution) {
 			select {
 			case <-execution.ready:
-				threadID, turnID, done := execution.snapshot()
-				if done || threadID == "" || turnID == "" {
+				threadID, turnID, interrupt, done := execution.snapshot()
+				if done {
 					interrupts <- interruptResult{stepID: stepID}
 					return
 				}
-				interrupts <- interruptResult{stepID: stepID, err: client.Interrupt(
-					shutdown, cwd, threadID, turnID, execution.command.Permissions,
-				)}
+				if threadID == "" || turnID == "" || interrupt == nil {
+					interrupts <- interruptResult{stepID: stepID, err: errors.New("активный turn не передал interrupt исходной сессии")}
+					return
+				}
+				interrupts <- interruptResult{stepID: stepID, err: interrupt(shutdown)}
 			case <-shutdown.Done():
 				interrupts <- interruptResult{stepID: stepID, err: shutdown.Err()}
 			}

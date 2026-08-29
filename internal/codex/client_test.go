@@ -85,9 +85,6 @@ func fakeServer(scenario string) {
 		case "thread/resume":
 			cwd, _ := os.Getwd()
 			validIsolation := p["sandbox"] == "read-only" && p["permissions"] == nil
-			if scenario == "interrupt" {
-				validIsolation = p["sandbox"] == nil && p["permissions"] == "lawa-test"
-			}
 			if p["threadId"] != "thread-1" || p["cwd"] != cwd || !validIsolation ||
 				p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
 				panic("искажены параметры продолжения чата")
@@ -148,6 +145,12 @@ func fakeServer(scenario string) {
 			}
 			reply(map[string]any{"turn": map[string]any{"id": "turn-1"}})
 			send(map[string]any{"method": "turn/started", "params": map[string]any{}})
+			if scenario == "interrupt" {
+				// Turn остаётся активным, пока тот же stdio-клиент не отправит
+				// turn/interrupt. Возврат в общий цикл важен: второй процесс или
+				// thread/resume в этом сценарии не участвуют.
+				continue
+			}
 			if scenario == "approval" || scenario == "handled" || scenario == "unsupported-request" {
 				// Даже неожиданный ручной запрос при auto_review нельзя подтвердить молча.
 				method := "item/commandExecution/requestApproval"
@@ -182,6 +185,9 @@ func fakeServer(scenario string) {
 				panic("искажён адрес отменяемого turn")
 			}
 			reply(map[string]any{})
+			send(map[string]any{"method": "turn/completed", "params": map[string]any{
+				"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "interrupted"},
+			}})
 		case "thread/read":
 			if p["threadId"] != "thread-1" || p["includeTurns"] != true {
 				panic("искажён запрос чтения чата")
@@ -351,7 +357,7 @@ func TestContinue(t *testing.T) {
 			turnID := ""
 			result, err := Continue(t.Context(), "thread-1", Command{
 				Executable: binary, CWD: t.TempDir(), Text: "continue", Sandbox: "read-only", Stderr: &trace,
-				OnTurn: func(id string) { turnID = id },
+				OnTurn: func(id string, _ func(context.Context) error) { turnID = id },
 			})
 			if err != nil || result.ThreadID != "thread-1" || result.TurnID != "turn-1" || result.Status != status || turnID != "turn-1" {
 				t.Fatalf("неверный результат continue: %+v, callback=%q, ошибка=%v; сервер: %s", result, turnID, err, &trace)
@@ -363,26 +369,58 @@ func TestContinue(t *testing.T) {
 	}
 }
 
-// TestInterrupt проверяет отдельное подключение к выполняющемуся чату и точный
-// адрес turn/interrupt. Модель не запускается, а профиль прав восстанавливается
-// в новом app-server до присоединения к thread.
-func TestInterrupt(t *testing.T) {
+// TestRunInterruptUsesOwningSession воспроизводит живой конфликт active writer:
+// пока исходный app-server выполняет turn, interrupt обязан пройти через его же
+// stdio. Один initialize и отсутствие thread/resume доказывают, что второй
+// процесс не запускался; терминальный interrupted приходит в исходный Run.
+func TestRunInterruptUsesOwningSession(t *testing.T) {
 	t.Setenv("LAWA_TEST_CODEX_SERVER", "interrupt")
 	binary, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
 	var trace bytes.Buffer
-	cwd := t.TempDir()
-	err = Interrupt(t.Context(), Connection{
-		Executable: binary, CWD: cwd, Stderr: &trace,
-		Permissions: &PermissionProfile{Name: "lawa-test", ReadPaths: []string{"/run dir"}, WritePaths: []string{"/run dir/own.md"}},
-	}, "thread-1", "turn-1")
-	if err != nil {
-		t.Fatal(err)
+	type outcome struct {
+		result Result
+		err    error
 	}
-	if strings.Count(trace.String(), "thread/resume\n") != 1 || strings.Count(trace.String(), "turn/interrupt\n") != 1 {
-		t.Fatalf("не выполнена адресная отмена: %s", &trace)
+	ready := make(chan func(context.Context) error, 1)
+	done := make(chan outcome, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cwd := t.TempDir()
+	go func() {
+		result, runErr := Run(ctx, Command{
+			Executable: binary, CWD: cwd, Text: "literal '$()`\\n", Sandbox: "read-only", Stderr: &trace,
+			OnTurn: func(id string, interrupt func(context.Context) error) {
+				if id != "turn-1" {
+					t.Errorf("неверный ID активного turn: %q", id)
+				}
+				ready <- interrupt
+			},
+		})
+		done <- outcome{result: result, err: runErr}
+	}()
+	var interrupt func(context.Context) error
+	select {
+	case interrupt = <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("клиент не передал interrupt исходной сессии")
+	}
+	if err := interrupt(t.Context()); err != nil {
+		t.Fatalf("interrupt исходной сессии: %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil || got.result.Status != "interrupted" || got.result.ThreadID != "thread-1" || got.result.TurnID != "turn-1" {
+			t.Fatalf("исходный Run не получил interrupted: %+v, %v", got.result, got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("исходный Run не завершился после interrupt")
+	}
+	if strings.Count(trace.String(), "initialize\n") != 1 || strings.Count(trace.String(), "thread/start\n") != 1 ||
+		strings.Count(trace.String(), "thread/resume\n") != 0 || strings.Count(trace.String(), "turn/interrupt\n") != 1 {
+		t.Fatalf("interrupt открыл второй процесс или исказил RPC: %s", &trace)
 	}
 }
 

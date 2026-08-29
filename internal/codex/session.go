@@ -68,6 +68,7 @@ func openSession(ctx context.Context, command Command, result *Result) (*session
 		command:   command,
 		input:     json.NewEncoder(stdin),
 		output:    json.NewDecoder(stdout),
+		pending:   map[int]chan envelope{},
 		result:    result,
 		completed: map[string]turnCompletion{},
 	}

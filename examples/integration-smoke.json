@@ -1,0 +1,10 @@
+{
+  "id": "integration-smoke",
+  "steps": [
+    {"id": "cube-1", "type": "agent", "prompt": "Напечатай ровно строку: cube-1", "dependsOn": []},
+    {"id": "cube-2", "type": "agent", "prompt": "Напечатай ровно строку: cube-2", "dependsOn": ["cube-1"]},
+    {"id": "cube-3", "type": "agent", "prompt": "Напечатай ровно строку: cube-3", "dependsOn": ["cube-1"]},
+    {"id": "cube-4", "type": "agent", "prompt": "Напечатай ровно строку: cube-4", "dependsOn": ["cube-2", "cube-3"]},
+    {"id": "cube-5", "type": "agent", "prompt": "Напечатай ровно строку: cube-5", "dependsOn": ["cube-4"]}
+  ]
+}

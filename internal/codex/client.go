@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -52,7 +53,9 @@ type Event struct {
 // Stderr получает диагностику сервера; nil отбрасывает её, не накапливая в памяти.
 // OnThread вызывается после получения ID, строго до отправки команды: координатор
 // может сохранить связь и запретить turn своей ошибкой. OnTurn получает ID сразу
-// после ответа turn/start и позволяет адресно прервать уже начатую работу.
+// после ответа turn/start вместе с одноразовой функцией interrupt. Эта функция
+// отправляет turn/interrupt через ту же stdio-сессию, которая владеет активным
+// чатом: второй app-server не нужен и не конкурирует за writer хранилища Codex.
 // Notify и Respond синхронны, должны учитывать отмену и не вызывать Run или
 // Continue рекурсивно для повтора той же задачи.
 // Respond получает каждый запрос сервера, кроме служебного currentTime/read.
@@ -65,7 +68,7 @@ type Command struct {
 	Permissions                           *PermissionProfile
 	Stderr                                io.Writer
 	OnThread                              func(string) error
-	OnTurn                                func(string)
+	OnTurn                                func(string, func(context.Context) error)
 	Notify                                func(Event) error
 	Respond                               func(context.Context, Event) (any, error)
 }
@@ -118,16 +121,19 @@ func (e *InteractionRequired) Error() string {
 	return "Codex требует обработчика запроса " + e.Event.Method
 }
 
-// client обслуживается только горутиной Run. Запросы идут последовательно, но
-// между ответами читаются уведомления и встречные запросы, иначе Codex зависнет
-// на согласовании. encoding/json используется как потоковый codec, не net/rpc:
-// здесь есть уведомления без ID и запросы сервера со строковыми или числовыми ID.
+// client читает поток только в горутине Run, но interrupt может записываться
+// конкурентно из координатора. mu сериализует JSON-записи и выдачу RPC-ID, а
+// pending принимает ответы на такие фоновые запросы обратно в единственном
+// read-loop. encoding/json используется как потоковый codec, не net/rpc: здесь
+// есть уведомления без ID и запросы сервера со строковыми или числовыми ID.
 type client struct {
 	ctx       context.Context
 	command   Command
 	input     *json.Encoder
 	output    *json.Decoder
+	mu        sync.Mutex
 	nextID    int
+	pending   map[int]chan envelope
 	result    *Result
 	completed map[string]turnCompletion // Завершение может прийти раньше ответа turn/start.
 }
@@ -295,8 +301,9 @@ func resumeThread(c *client, command Command, threadID string) error {
 }
 
 // startAndWait отправляет один turn в уже загруженный thread и ждёт только его
-// терминального события. OnTurn вызывается до ожидания, чтобы координатор мог
-// адресовать turn/interrupt при сигнале, не угадывая ID по истории.
+// терминального события. OnTurn вызывается до ожидания и получает interrupt,
+// связанный с этим client: координатор не угадывает ID и не открывает второй
+// app-server, пока первый остаётся writer активного чата.
 func startAndWait(c *client, command Command, inputs []map[string]any, result *Result) error {
 	var started struct{ Turn struct{ ID string } }
 	result.TurnAttempted = true
@@ -310,7 +317,16 @@ func startAndWait(c *client, command Command, inputs []map[string]any, result *R
 		return errors.New("Codex не вернул ID turn; повтор запрещён")
 	}
 	if command.OnTurn != nil {
-		command.OnTurn(result.TurnID)
+		var once sync.Once
+		var interruptErr error
+		command.OnTurn(result.TurnID, func(ctx context.Context) error {
+			once.Do(func() {
+				interruptErr = c.callAsync(ctx, "turn/interrupt", map[string]any{
+					"threadId": result.ThreadID, "turnId": result.TurnID,
+				})
+			})
+			return interruptErr
+		})
 	}
 	for c.completed[result.TurnID].Status == "" {
 		message, err := c.read()
@@ -318,6 +334,9 @@ func startAndWait(c *client, command Command, inputs []map[string]any, result *R
 			return fmt.Errorf("ожидание завершения Codex: %w", err)
 		}
 		if message.Method == "" {
+			if c.deliverPending(message) {
+				continue
+			}
 			return errors.New("ответ Codex без ожидающего RPC")
 		}
 	}
@@ -326,8 +345,24 @@ func startAndWait(c *client, command Command, inputs []map[string]any, result *R
 	return nil
 }
 
-// send проверяет отмену перед каждой записью, включая запись после OnThread.
+// send проверяет отмену перед каждой записью, включая ответы на встречные запросы.
+// Все записи сериализованы: encoding/json.Encoder не обещает concurrent safety.
 func (c *client) send(value any) error {
+	return c.sendContext(c.ctx, value)
+}
+
+func (c *client) sendContext(ctx context.Context, value any) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := c.ctx.Err(); err != nil {
+		return err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := c.ctx.Err(); err != nil {
 		return err
 	}
@@ -336,8 +371,8 @@ func (c *client) send(value any) error {
 
 // call не повторяет запрос при EOF, отмене, отказе сервера или неверном ответе.
 func (c *client) call(method string, params, result any) error {
-	c.nextID++
-	if err := c.send(map[string]any{"id": c.nextID, "method": method, "params": params}); err != nil {
+	requestID, _, err := c.startCall(c.ctx, method, params, false)
+	if err != nil {
 		return fmt.Errorf("Codex %s: %w", method, err)
 	}
 	for {
@@ -348,7 +383,10 @@ func (c *client) call(method string, params, result any) error {
 		if message.Method != "" {
 			continue
 		}
-		if string(message.ID) != strconv.Itoa(c.nextID) || len(message.Result) == 0 && message.Error == nil {
+		if c.deliverPending(message) {
+			continue
+		}
+		if string(message.ID) != strconv.Itoa(requestID) || len(message.Result) == 0 && message.Error == nil {
 			return fmt.Errorf("Codex %s: неожиданный ответ RPC", method)
 		}
 		if message.Error != nil {
@@ -362,6 +400,81 @@ func (c *client) call(method string, params, result any) error {
 		}
 		return nil
 	}
+}
+
+// callAsync записывает запрос в текущую сессию и ждёт его ответ, пока основной
+// read-loop продолжает принимать события turn. Канал буферизован: если turn успел
+// завершиться и внешний ctx отменился раньше ответа interrupt, доставка ответа не
+// блокирует чтение и закрытие сессии.
+func (c *client) callAsync(ctx context.Context, method string, params any) error {
+	_, response, err := c.startCall(ctx, method, params, true)
+	if err != nil {
+		return fmt.Errorf("Codex %s: %w", method, err)
+	}
+	select {
+	case message := <-response:
+		if len(message.Result) == 0 && message.Error == nil {
+			return fmt.Errorf("Codex %s: неожиданный ответ RPC", method)
+		}
+		if message.Error != nil {
+			return fmt.Errorf("Codex %s: %w", method, message.Error)
+		}
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-c.ctx.Done():
+		return c.ctx.Err()
+	}
+}
+
+// startCall атомарно выдаёт ID и пишет запрос. Для фонового RPC ответ заранее
+// регистрируется до Encode: быстрый app-server не сможет прислать ответ раньше,
+// чем read-loop узнает, куда его доставить.
+func (c *client) startCall(ctx context.Context, method string, params any, asynchronous bool) (int, <-chan envelope, error) {
+	if err := ctx.Err(); err != nil {
+		return 0, nil, err
+	}
+	if err := c.ctx.Err(); err != nil {
+		return 0, nil, err
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return 0, nil, err
+	}
+	if err := c.ctx.Err(); err != nil {
+		return 0, nil, err
+	}
+	c.nextID++
+	requestID := c.nextID
+	var response chan envelope
+	if asynchronous {
+		response = make(chan envelope, 1)
+		c.pending[requestID] = response
+	}
+	if err := c.input.Encode(map[string]any{"id": requestID, "method": method, "params": params}); err != nil {
+		delete(c.pending, requestID)
+		return 0, nil, err
+	}
+	return requestID, response, nil
+}
+
+// deliverPending отделяет ответ фонового interrupt от неожиданного ответа.
+// Чтение остаётся в одной горутине, поэтому Decoder не нуждается в блокировке.
+func (c *client) deliverPending(message envelope) bool {
+	requestID, err := strconv.Atoi(string(message.ID))
+	if err != nil {
+		return false
+	}
+	c.mu.Lock()
+	response := c.pending[requestID]
+	delete(c.pending, requestID)
+	c.mu.Unlock()
+	if response == nil {
+		return false
+	}
+	response <- message
+	return true
 }
 
 // envelope отличает уведомление, встречный запрос и ответ на наш запрос.

@@ -65,13 +65,18 @@ func (c *fakeClient) Run(ctx context.Context, command codex.Command) (codex.Resu
 			return codex.Result{ThreadID: threadID, CreationAttempted: true}, err
 		}
 	}
+	if command.OnTurn != nil {
+		command.OnTurn("turn-"+stepID, func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return c.interrupt(stepID)
+		})
+	}
 	if command.Notify != nil {
 		if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 			return codex.Result{ThreadID: threadID, CreationAttempted: true, TurnAttempted: true}, err
 		}
-	}
-	if command.OnTurn != nil {
-		command.OnTurn("turn-" + stepID)
 	}
 	c.started <- stepID
 	if release != nil {
@@ -112,7 +117,12 @@ func (c *fakeClient) Continue(ctx context.Context, threadID string, command code
 		return codex.Result{ThreadID: threadID}, err
 	}
 	if command.OnTurn != nil {
-		command.OnTurn("continued-" + stepID)
+		command.OnTurn("continued-"+stepID, func(ctx context.Context) error {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			return c.interrupt(stepID)
+		})
 	}
 	if command.Notify != nil {
 		if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
@@ -122,8 +132,7 @@ func (c *fakeClient) Continue(ctx context.Context, threadID string, command code
 	return codex.Result{ThreadID: threadID, TurnID: "continued-" + stepID, Status: status, TurnAttempted: true}, nil
 }
 
-func (c *fakeClient) Interrupt(_ context.Context, _ string, threadID, _ string, _ *codex.PermissionProfile) error {
-	stepID := strings.TrimPrefix(threadID, "chat-")
+func (c *fakeClient) interrupt(stepID string) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.interrupts[stepID]++

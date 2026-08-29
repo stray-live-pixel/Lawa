@@ -185,11 +185,11 @@ func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Res
 	if err := command.OnThread(threadID); err != nil {
 		return codex.Result{ThreadID: threadID, CreationAttempted: true}, err
 	}
+	if command.OnTurn != nil {
+		command.OnTurn("turn-"+stepID, func(context.Context) error { return nil })
+	}
 	if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 		return codex.Result{ThreadID: threadID, CreationAttempted: true, TurnAttempted: true}, err
-	}
-	if command.OnTurn != nil {
-		command.OnTurn("turn-" + stepID)
 	}
 	return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, Status: "completed", CreationAttempted: true, TurnAttempted: true}, nil
 }
@@ -203,16 +203,12 @@ func (c *cliFakeClient) Continue(_ context.Context, threadID string, command cod
 	c.inspect[threadID] = codex.WorkCompleted
 	c.mu.Unlock()
 	if command.OnTurn != nil {
-		command.OnTurn("continued-turn")
+		command.OnTurn("continued-turn", func(context.Context) error { return nil })
 	}
 	if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 		return codex.Result{ThreadID: threadID, TurnID: "continued-turn", TurnAttempted: true}, err
 	}
 	return codex.Result{ThreadID: threadID, TurnID: "continued-turn", Status: "completed", TurnAttempted: true}, nil
-}
-
-func (c *cliFakeClient) Interrupt(context.Context, string, string, string, *codex.PermissionProfile) error {
-	return nil
 }
 
 func (c *cliFakeClient) Inspect(_ context.Context, _ string, threadID string) (codex.Observation, error) {
