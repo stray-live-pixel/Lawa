@@ -77,11 +77,15 @@ type TurnError struct {
 	AdditionalDetails *string         `json:"additionalDetails,omitempty"`
 }
 
-// RPCError содержит отказ Codex без распознавания текста; транспортные ошибки
-// возвращаются отдельно. Ни один вид ошибки не запускает автоматический повтор.
+// RPCError сохраняет весь отказ Codex без распознавания его текста и Data:
+// JSON-RPC разрешает серверу расширять Data любым JSON. Вызывающий код может
+// разобрать его после errors.As, но Error намеренно не пишет Data в логи,
+// потому что там могут оказаться лишние для диагностики данные. Транспортные
+// ошибки возвращаются отдельно. Ни один вид ошибки не запускает автоматический повтор.
 type RPCError struct {
-	Code    int    `json:"code"`
-	Message string `json:"message"`
+	Code    int             `json:"code"`
+	Message string          `json:"message"`
+	Data    json.RawMessage `json:"data,omitempty"`
 }
 
 // Error сохраняет код и текст отказа без интерпретации его как результата агента.

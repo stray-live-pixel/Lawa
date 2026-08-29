@@ -42,7 +42,13 @@ func fakeServer(scenario string) {
 			return
 		}
 		if scenario == "error:"+m.Method {
-			send(map[string]any{"id": m.ID, "error": RPCError{-32000, "test rejection"}})
+			// Ответ собираем не через RPCError, чтобы тест проверял
+			// декодирование полного внешнего JSON, а не обратную сериализацию
+			// того же Go-типа. Data нужно вызывающему коду для решения о повторе,
+			// но оно не должно попадать в обычный текст ошибки.
+			send(map[string]any{"id": m.ID, "error": map[string]any{
+				"code": -32000, "message": "test rejection", "data": map[string]any{"retryable": true},
+			}})
 			continue
 		}
 		reply := func(v any) { send(map[string]any{"id": m.ID, "result": v}) }
@@ -215,6 +221,15 @@ func TestRun(t *testing.T) {
 			if strings.HasPrefix(tc.name, "error:") && !errors.As(err, &rpc) || tc.name == "approval" && !errors.As(err, &interaction) ||
 				tc.name == "cancel" && !errors.Is(err, context.Canceled) || (tc.name == "save" || tc.name == "notify") && !errors.Is(err, failure) {
 				t.Fatalf("потерян тип ошибки: %v", err)
+			}
+			if strings.HasPrefix(tc.name, "error:") {
+				var data struct{ Retryable bool }
+				if decodeErr := json.Unmarshal(rpc.Data, &data); decodeErr != nil || !data.Retryable {
+					t.Fatalf("потеряны структурированные детали RPC: %s, %v", rpc.Data, decodeErr)
+				}
+				if strings.Contains(err.Error(), "retryable") {
+					t.Fatalf("RPC data не должны автоматически попадать в лог: %v", err)
+				}
 			}
 		})
 	}
