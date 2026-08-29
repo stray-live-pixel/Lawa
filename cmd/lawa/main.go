@@ -54,8 +54,8 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
 
 validate, skill и help не запускают агентов и не требуют подключения к Codex.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
-После сигнала новые волны не стартуют; Lawa ждёт терминального ответа уже переданных turn.
-Ошибка или отмена кубика не завершает run: продолжите тот же чат вручную.
+После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
+Resume отправляет continue только interrupted-чатам; failed продолжите вручную.
 `
 
 // skillInstruction хранится отдельным SKILL.md, чтобы инструкцию можно было читать,
@@ -66,8 +66,8 @@ validate, skill и help не запускают агентов и не треб�
 var skillInstruction string
 
 // main устанавливает обработчики только вокруг текущего процесса Lawa. Сигнал
-// отменяет наблюдение и новые волны; координатор не отправляет turn/interrupt уже
-// созданным чатам. Точный код нужен вызывающему агенту чата-инициатора.
+// отменяет наблюдение и новые волны; координатор адресно прерывает активные turn.
+// Точный код нужен вызывающему агенту чата-инициатора.
 func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	signals := make(chan os.Signal, 1)
@@ -246,7 +246,7 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 	if _, err = fmt.Fprintf(out, "runId: %s\n", snapshot.Meta.RunID); err != nil {
 		return err
 	}
-	return coordinate(ctx, parsed.root, snapshot.Meta.RunID, parsed.executable, out, stderr, deps, true)
+	return coordinate(ctx, parsed.root, snapshot.Meta.RunID, parsed.executable, out, stderr, deps, false)
 }
 
 // resumeCommand никогда не создаёт замену отсутствующему или повреждённому run.
@@ -258,12 +258,14 @@ func resumeCommand(ctx context.Context, args []string, out, stderr io.Writer, de
 	if parsed.root, err = resolveRoot(parsed.root, deps.userHomeDir); err != nil {
 		return err
 	}
-	return coordinate(ctx, parsed.root, parsed.runID, parsed.executable, out, stderr, deps, false)
+	return coordinate(ctx, parsed.root, parsed.runID, parsed.executable, out, stderr, deps, true)
 }
 
 // coordinate удерживает lock на протяжении preflight, сверки и исполнения.
 // Любая ошибка закрывает только владельца хранилища; сохранённые чаты не удаляются.
-func coordinate(ctx context.Context, root, runID, executable string, out, stderr io.Writer, deps dependencies, preflightDone bool) (err error) {
+// resume отличает явное продолжение от первого run: только resume имеет право
+// автоматически отправлять continue в interrupted-чаты.
+func coordinate(ctx context.Context, root, runID, executable string, out, stderr io.Writer, deps dependencies, resume bool) (err error) {
 	run, err := runstore.OpenLocked(root, runID)
 	if err != nil {
 		return fmt.Errorf("открыть запуск %q: %w", runID, err)
@@ -273,7 +275,7 @@ func coordinate(ctx context.Context, root, runID, executable string, out, stderr
 	if err != nil {
 		return fmt.Errorf("прочитать запуск %q: %w", runID, err)
 	}
-	if !preflightDone {
+	if resume {
 		if err = deps.check(ctx, codex.Connection{Executable: executable, CWD: snapshot.Meta.CWD, Stderr: stderr}); err != nil {
 			return fmt.Errorf("проверить подключение Codex: %w", err)
 		}
@@ -282,7 +284,7 @@ func coordinate(ctx context.Context, root, runID, executable string, out, stderr
 		return err
 	}
 	return coordinator.Execute(ctx, run, coordinator.Options{
-		Root: root, PollInterval: deps.pollInterval, Client: deps.client(executable, stderr),
+		Root: root, PollInterval: deps.pollInterval, Client: deps.client(executable, stderr), ContinueInterrupted: resume,
 		Notify: func(status coordinator.Status) error { return printStatus(out, status) },
 	})
 }

@@ -144,6 +144,9 @@ func TestSkillInstruction(t *testing.T) {
 		"--initiator-thread-id <id-этого-чата>",
 		"не интерполируя пользовательский текст в shell",
 		"lawa resume <run-id>",
+		"Resume сам отправляет один turn `continue`",
+		"Failed-чат пользователь продолжает",
+		"прерывают активные turn через Codex",
 		"ID\nтекущего чата недоступен",
 		"memory/<threadId>.md",
 		"изменять только собственный",
@@ -162,13 +165,14 @@ func TestSkillInstruction(t *testing.T) {
 }
 
 type cliFakeClient struct {
-	mu      sync.Mutex
-	runs    map[string]int
-	inspect map[string]codex.WorkStatus
+	mu        sync.Mutex
+	runs      map[string]int
+	continues map[string]int
+	inspect   map[string]codex.WorkStatus
 }
 
 func newCLIFakeClient() *cliFakeClient {
-	return &cliFakeClient{runs: map[string]int{}, inspect: map[string]codex.WorkStatus{}}
+	return &cliFakeClient{runs: map[string]int{}, continues: map[string]int{}, inspect: map[string]codex.WorkStatus{}}
 }
 
 func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Result, error) {
@@ -184,7 +188,31 @@ func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Res
 	if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 		return codex.Result{ThreadID: threadID, CreationAttempted: true, TurnAttempted: true}, err
 	}
+	if command.OnTurn != nil {
+		command.OnTurn("turn-" + stepID)
+	}
 	return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, Status: "completed", CreationAttempted: true, TurnAttempted: true}, nil
+}
+
+func (c *cliFakeClient) Continue(_ context.Context, threadID string, command codex.Command) (codex.Result, error) {
+	if command.Text != "continue" {
+		return codex.Result{ThreadID: threadID}, errors.New("resume передал неверный текст")
+	}
+	c.mu.Lock()
+	c.continues[threadID]++
+	c.inspect[threadID] = codex.WorkCompleted
+	c.mu.Unlock()
+	if command.OnTurn != nil {
+		command.OnTurn("continued-turn")
+	}
+	if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
+		return codex.Result{ThreadID: threadID, TurnID: "continued-turn", TurnAttempted: true}, err
+	}
+	return codex.Result{ThreadID: threadID, TurnID: "continued-turn", Status: "completed", TurnAttempted: true}, nil
+}
+
+func (c *cliFakeClient) Interrupt(context.Context, string, string, string, *codex.PermissionProfile) error {
+	return nil
 }
 
 func (c *cliFakeClient) Inspect(_ context.Context, _ string, threadID string) (codex.Observation, error) {
@@ -200,6 +228,8 @@ func (c *cliFakeClient) Inspect(_ context.Context, _ string, threadID string) (c
 		observation.LatestTurnStatus = "completed"
 	case codex.WorkFailed:
 		observation.LatestTurnStatus = "failed"
+	case codex.WorkInterrupted:
+		observation.LatestTurnStatus = "interrupted"
 	}
 	return observation, nil
 }
@@ -284,8 +314,8 @@ func TestRunPreflightFailureLeavesNoRun(t *testing.T) {
 	}
 }
 
-// TestResumeCommand использует сохранённый failed-чат, видит его ручной успех и
-// запускает только зависимый Pending-шаг. Исходный чат повторно не создаётся.
+// TestResumeCommand использует сохранённый interrupted-чат, отправляет ему один
+// continue и после успеха запускает зависимый Pending-шаг без нового чата родителя.
 func TestResumeCommand(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
@@ -300,7 +330,7 @@ func TestResumeCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err = run.Reserve([]string{"parent"}); err == nil {
-		err = run.Update("parent", scheduler.Failed, "chat-parent")
+		err = run.Update("parent", scheduler.Cancelled, "chat-parent")
 	}
 	if closeErr := run.Close(); err == nil {
 		err = closeErr
@@ -309,7 +339,7 @@ func TestResumeCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := newCLIFakeClient()
-	client.inspect["chat-parent"] = codex.WorkCompleted
+	client.inspect["chat-parent"] = codex.WorkInterrupted
 	checks := 0
 	deps := cliTestDependencies(client, func(context.Context, codex.Connection) error { checks++; return nil })
 	var out bytes.Buffer
@@ -318,8 +348,8 @@ func TestResumeCommand(t *testing.T) {
 	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
-	if checks != 1 || client.runs["parent"] != 0 || client.runs["child"] != 1 || !strings.Contains(out.String(), "успешно завершён") {
-		t.Fatalf("resume создал дубликат или не завершился: checks=%d, runs=%v, out=%q", checks, client.runs, out.String())
+	if checks != 1 || client.runs["parent"] != 0 || client.continues["chat-parent"] != 1 || client.runs["child"] != 1 || !strings.Contains(out.String(), "успешно завершён") {
+		t.Fatalf("resume неверно продолжил чат: checks=%d, runs=%v, continues=%v, out=%q", checks, client.runs, client.continues, out.String())
 	}
 }
 

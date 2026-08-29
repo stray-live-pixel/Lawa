@@ -32,6 +32,13 @@ type Preparation struct {
 	Complete bool
 }
 
+// Continuation описывает один новый turn в уже существующем чате. Он создаётся
+// только для Cancelled при явном resume и никогда не меняет CodexThreadID.
+type Continuation struct {
+	StepID, ThreadID string
+	Command          codex.Command
+}
+
 // Prepare выбирает готовые Pending-шаги и атомарно сохраняет намерение создать
 // всю готовую волну до возврата команд вызывающему коду. Благодаря этому ни
 // повторный Prepare, ни перезапуск процесса не создаст второй чат вслепую.
@@ -95,11 +102,54 @@ func Prepare(run *runstore.LockedRun, root string) (Preparation, error) {
 				CWD:         snapshot.Meta.CWD,
 				Title:       fmt.Sprintf("Lawa: %s / %s [%s]", snapshot.Workflow.ID, stepID, snapshot.Meta.RunID),
 				Text:        buildPrompt(snapshot, steps[stepID], saved, root),
-				Permissions: &codex.PermissionProfile{Name: "lawa-" + saved.ThreadID, ReadPaths: []string{runDir}, WritePaths: []string{ownMemory}},
+				Permissions: stepPermissions(runDir, ownMemory, saved.ThreadID),
 			},
 		})
 	}
 	return prepared, nil
+}
+
+// prepareContinuations выбирает только interrupted/Cancelled-чаты. Карта already
+// ограничивает один автоматический continue на один вызов Execute: повторный
+// interrupted не превращается в бесконечный цикл, но следующий явный resume снова
+// получает право продолжить незавершённую работу.
+func prepareContinuations(snapshot runstore.Snapshot, root string, enabled bool, already map[string]bool) ([]Continuation, error) {
+	if !enabled {
+		return nil, nil
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("координатор: определить root для продолжения: %w", err)
+	}
+	runDir := filepath.Join(root, snapshot.Meta.RunID)
+	var continuations []Continuation
+	for _, step := range snapshot.Meta.Steps {
+		if step.State != scheduler.Cancelled || already[step.ID] {
+			continue
+		}
+		memory := filepath.Join(runDir, "memory", step.ThreadID+".md")
+		info, statErr := os.Stat(memory)
+		if statErr != nil || !info.Mode().IsRegular() {
+			if statErr == nil {
+				statErr = fmt.Errorf("не является обычным файлом")
+			}
+			return nil, fmt.Errorf("координатор: проверить память шага %q перед продолжением: %w", step.ID, statErr)
+		}
+		continuations = append(continuations, Continuation{
+			StepID: step.ID, ThreadID: step.CodexThreadID,
+			Command: codex.Command{
+				CWD: snapshot.Meta.CWD, Text: "continue",
+				Permissions: stepPermissions(runDir, memory, step.ThreadID),
+			},
+		})
+	}
+	return continuations, nil
+}
+
+func stepPermissions(runDir, ownMemory, threadID string) *codex.PermissionProfile {
+	return &codex.PermissionProfile{
+		Name: "lawa-" + threadID, ReadPaths: []string{runDir}, WritePaths: []string{ownMemory},
+	}
 }
 
 // buildPrompt разделяет неизменяемую постановку, локальную задачу кубика и

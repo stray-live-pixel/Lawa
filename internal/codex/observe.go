@@ -17,6 +17,7 @@ import (
 type Connection struct {
 	Executable, CWD string
 	Stderr          io.Writer
+	Permissions     *PermissionProfile
 }
 
 // WorkStatus — нормализованный результат наблюдения сохранённого чата. Он не
@@ -120,6 +121,33 @@ func Inspect(ctx context.Context, connection Connection, threadID string) (obser
 		return Observation{}, fmt.Errorf("чат %q: %w", threadID, err)
 	}
 	return observation, nil
+}
+
+// Interrupt адресно отменяет только указанный выполняющийся turn. Отдельный
+// app-server сначала присоединяется к сохранённому thread, поэтому вызов работает
+// и для turn, запущенного другой stdio-сессией Lawa. Успешный RPC означает, что
+// сервер принял отмену; терминальный status=interrupted получает исходный Run.
+func Interrupt(ctx context.Context, connection Connection, threadID, turnID string) (err error) {
+	if err = validateConnection(ctx, connection); err != nil {
+		return err
+	}
+	if !validProtocolText(threadID) || !validProtocolText(turnID) {
+		return errors.New("для отмены нужны непустые ID чата и turn Codex в UTF-8")
+	}
+	result := Result{ThreadID: threadID, TurnID: turnID}
+	command := Command{
+		Executable: connection.Executable, CWD: connection.CWD,
+		Stderr: connection.Stderr, Permissions: connection.Permissions,
+	}
+	s, err := openSession(ctx, command, &result)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, s.Close(), ctx.Err()) }()
+	if err = resumeThread(s.client, command, threadID); err != nil {
+		return err
+	}
+	return s.client.call("turn/interrupt", map[string]any{"threadId": threadID, "turnId": turnID}, nil)
 }
 
 // Status сопоставляет расширяемый внешний протокол с консервативным состоянием

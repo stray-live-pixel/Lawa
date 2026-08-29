@@ -43,7 +43,7 @@ func openSession(ctx context.Context, command Command, result *Result) (*session
 	process.Dir, process.Stderr = command.CWD, command.Stderr
 	// Терминальный SIGINT/SIGTERM предназначен координатору. Отдельная группа
 	// не даёт ядру одновременно послать тот же сигнал дочернему app-server;
-	// координатор сначала прекращает новые волны и дожидается активного turn.
+	// координатор сам адресует turn/interrupt и получает точный терминальный статус.
 	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// WaitDelay ограничивает только очистку pipe после выхода app-server. Это не
 	// таймаут turn и не разрешение прерывать работу агента по времени.

@@ -51,8 +51,10 @@ type Event struct {
 // возвращается без обхода.
 // Stderr получает диагностику сервера; nil отбрасывает её, не накапливая в памяти.
 // OnThread вызывается после получения ID, строго до отправки команды: координатор
-// может сохранить связь и запретить turn своей ошибкой. Notify и Respond синхронны,
-// должны учитывать отмену и не вызывать Run рекурсивно для повтора той же задачи.
+// может сохранить связь и запретить turn своей ошибкой. OnTurn получает ID сразу
+// после ответа turn/start и позволяет адресно прервать уже начатую работу.
+// Notify и Respond синхронны, должны учитывать отмену и не вызывать Run или
+// Continue рекурсивно для повтора той же задачи.
 // Respond получает каждый запрос сервера, кроме служебного currentTime/read.
 // Обработчик обязан выбрать форму ответа по Event.Method и проверить Event.Params.
 // Для неподдерживаемого метода он может вернуть InteractionRequired. Nil Respond
@@ -63,6 +65,7 @@ type Command struct {
 	Permissions                           *PermissionProfile
 	Stderr                                io.Writer
 	OnThread                              func(string) error
+	OnTurn                                func(string)
 	Notify                                func(Event) error
 	Respond                               func(context.Context, Event) (any, error)
 }
@@ -147,42 +150,10 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 	if err = ctx.Err(); err != nil {
 		return result, err
 	}
-	if !utf8.ValidString(command.Text) || strings.TrimSpace(command.Text) == "" {
-		return result, errors.New("нужна непустая команда в UTF-8")
-	}
-	if !filepath.IsAbs(command.CWD) {
-		return result, errors.New("нужен абсолютный cwd")
-	}
-	for _, value := range []string{command.CWD, command.Title, command.Sandbox} {
-		if !utf8.ValidString(value) {
-			return result, errors.New("параметры Codex должны быть в UTF-8")
-		}
-	}
-	if command.Permissions != nil {
-		if command.Sandbox != "" {
-			return result, errors.New("именованный профиль permissions нельзя сочетать с sandbox")
-		}
-		if _, err = permissionOverride(command.Permissions); err != nil {
-			return result, err
-		}
-	}
-	info, err := os.Stat(command.CWD)
+	inputs, err := prepareTurn(command)
 	if err != nil {
-		return result, fmt.Errorf("проверить cwd: %w", err)
+		return result, err
 	}
-	if !info.IsDir() {
-		return result, errors.New("cwd должен быть папкой")
-	}
-	text := command.Text
-	inputs := []map[string]any{}
-	if skill := command.Skill; skill != nil {
-		if !utf8.ValidString(skill.Name+skill.Path) || strings.TrimSpace(skill.Name) == "" || strings.ContainsAny(skill.Name, "$ \t\r\n") || !filepath.IsAbs(skill.Path) {
-			return result, errors.New("скилл требует имени без $/пробелов и абсолютного пути")
-		}
-		text = "$" + skill.Name + " " + text
-		inputs = append(inputs, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
-	}
-	inputs = append([]map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}, inputs...)
 	session, err := openSession(ctx, command, &result)
 	if err != nil {
 		return result, err
@@ -218,29 +189,141 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 			return result, err
 		}
 	}
+	err = startAndWait(c, command, inputs, &result)
+	return result, err
+}
+
+// Continue открывает сохранённый чат и запускает в нём ровно один новый turn.
+// В отличие от Run функция никогда не создаёт новый thread и не меняет его имя.
+// Вызывающий код обязан предварительно проверить, что последний turn действительно
+// interrupted: сама команда не принимает решение о допустимости автоматического
+// продолжения и не повторяет неоднозначный turn/start.
+func Continue(ctx context.Context, threadID string, command Command) (result Result, err error) {
+	if err = ctx.Err(); err != nil {
+		return result, err
+	}
+	if !validProtocolText(threadID) {
+		return result, errors.New("нужен непустой ID чата Codex в UTF-8")
+	}
+	// ID уже сохранён в meta.json и остаётся достоверным даже при ошибке
+	// thread/resume. Координатор не должен принять такой сбой за создание нового
+	// чата с неоднозначным результатом.
+	result.ThreadID = threadID
+	inputs, err := prepareTurn(command)
+	if err != nil {
+		return result, err
+	}
+	session, err := openSession(ctx, command, &result)
+	if err != nil {
+		return result, err
+	}
+	defer func() { err = errors.Join(err, session.Close(), ctx.Err()) }()
+	if err = resumeThread(session.client, command, threadID); err != nil {
+		return result, err
+	}
+	err = startAndWait(session.client, command, inputs, &result)
+	return result, err
+}
+
+// prepareTurn проверяет общую часть Run и Continue до запуска app-server и
+// формирует protocol input без shell-интерполяции пользовательского текста.
+func prepareTurn(command Command) ([]map[string]any, error) {
+	if !utf8.ValidString(command.Text) || strings.TrimSpace(command.Text) == "" {
+		return nil, errors.New("нужна непустая команда в UTF-8")
+	}
+	if !filepath.IsAbs(command.CWD) {
+		return nil, errors.New("нужен абсолютный cwd")
+	}
+	for _, value := range []string{command.CWD, command.Title, command.Sandbox} {
+		if !utf8.ValidString(value) {
+			return nil, errors.New("параметры Codex должны быть в UTF-8")
+		}
+	}
+	if command.Permissions != nil {
+		if command.Sandbox != "" {
+			return nil, errors.New("именованный профиль permissions нельзя сочетать с sandbox")
+		}
+		if _, err := permissionOverride(command.Permissions); err != nil {
+			return nil, err
+		}
+	}
+	info, err := os.Stat(command.CWD)
+	if err != nil {
+		return nil, fmt.Errorf("проверить cwd: %w", err)
+	}
+	if !info.IsDir() {
+		return nil, errors.New("cwd должен быть папкой")
+	}
+	text := command.Text
+	inputs := []map[string]any{}
+	if skill := command.Skill; skill != nil {
+		if !utf8.ValidString(skill.Name+skill.Path) || strings.TrimSpace(skill.Name) == "" || strings.ContainsAny(skill.Name, "$ \t\r\n") || !filepath.IsAbs(skill.Path) {
+			return nil, errors.New("скилл требует имени без $/пробелов и абсолютного пути")
+		}
+		text = "$" + skill.Name + " " + text
+		inputs = append(inputs, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
+	}
+	return append([]map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}, inputs...), nil
+}
+
+// resumeThread загружает существующий thread в текущий app-server. Явные cwd,
+// permissions и approval-настройки сохраняют тот же контур доступа, что был у
+// исходного запуска; новый процесс не должен молча расширять или терять права.
+func resumeThread(c *client, command Command, threadID string) error {
+	params := map[string]any{
+		"threadId": threadID, "cwd": command.CWD,
+		"approvalPolicy": "on-request", "approvalsReviewer": "auto_review",
+	}
+	if command.Permissions != nil {
+		params["permissions"] = command.Permissions.Name
+	} else if command.Sandbox != "" {
+		params["sandbox"] = command.Sandbox
+	}
+	var resumed struct{ Thread struct{ ID, CWD string } }
+	if err := c.call("thread/resume", params, &resumed); err != nil {
+		return err
+	}
+	if resumed.Thread.ID != threadID {
+		return fmt.Errorf("Codex возобновил чат %q вместо %q", resumed.Thread.ID, threadID)
+	}
+	if same, err := sameDirectory(resumed.Thread.CWD, command.CWD); err != nil {
+		return fmt.Errorf("проверить cwd возобновлённого чата %q: %w", threadID, err)
+	} else if !same {
+		return fmt.Errorf("чат %q относится к cwd %q, ожидался %q", threadID, resumed.Thread.CWD, command.CWD)
+	}
+	return nil
+}
+
+// startAndWait отправляет один turn в уже загруженный thread и ждёт только его
+// терминального события. OnTurn вызывается до ожидания, чтобы координатор мог
+// адресовать turn/interrupt при сигнале, не угадывая ID по истории.
+func startAndWait(c *client, command Command, inputs []map[string]any, result *Result) error {
 	var started struct{ Turn struct{ ID string } }
 	result.TurnAttempted = true
 	// На 0.150.0-alpha.12.2 одного thread/start оказалось недостаточно: turn
 	// сохранил прежнюю политику. Передаём явный override; sandbox не меняем.
-	if err = c.call("turn/start", map[string]any{"threadId": result.ThreadID, "input": inputs, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}, &started); err != nil {
-		return result, err
+	if err := c.call("turn/start", map[string]any{"threadId": result.ThreadID, "input": inputs, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}, &started); err != nil {
+		return err
 	}
 	result.TurnID = started.Turn.ID
 	if result.TurnID == "" {
-		return result, errors.New("Codex не вернул ID turn; повтор запрещён")
+		return errors.New("Codex не вернул ID turn; повтор запрещён")
+	}
+	if command.OnTurn != nil {
+		command.OnTurn(result.TurnID)
 	}
 	for c.completed[result.TurnID].Status == "" {
-		var message envelope
-		if message, err = c.read(); err != nil {
-			return result, fmt.Errorf("ожидание завершения Codex: %w", err)
+		message, err := c.read()
+		if err != nil {
+			return fmt.Errorf("ожидание завершения Codex: %w", err)
 		}
 		if message.Method == "" {
-			return result, errors.New("ответ Codex без ожидающего RPC")
+			return errors.New("ответ Codex без ожидающего RPC")
 		}
 	}
 	completion := c.completed[result.TurnID]
 	result.Status, result.TurnError = completion.Status, completion.Error
-	return result, nil
+	return nil
 }
 
 // send проверяет отмену перед каждой записью, включая запись после OnThread.

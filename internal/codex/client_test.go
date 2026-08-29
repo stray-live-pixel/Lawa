@@ -82,6 +82,17 @@ func fakeServer(scenario string) {
 				id = ""
 			}
 			reply(map[string]any{"thread": map[string]any{"id": id}})
+		case "thread/resume":
+			cwd, _ := os.Getwd()
+			validIsolation := p["sandbox"] == "read-only" && p["permissions"] == nil
+			if scenario == "interrupt" {
+				validIsolation = p["sandbox"] == nil && p["permissions"] == "lawa-test"
+			}
+			if p["threadId"] != "thread-1" || p["cwd"] != cwd || !validIsolation ||
+				p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
+				panic("искажены параметры продолжения чата")
+			}
+			reply(map[string]any{"thread": map[string]any{"id": "thread-1", "cwd": cwd}})
 		case "thread/name/set":
 			// Имя задаётся уже созданному чату. Проверка обоих полей защищает
 			// контракт запроса: сервер не должен молча принимать неверный ID или заголовок.
@@ -96,6 +107,9 @@ func fakeServer(scenario string) {
 			}
 			items := p["input"].([]any)
 			want := "literal '$()`\\n"
+			if strings.HasPrefix(scenario, "continue:") {
+				want = "continue"
+			}
 			if scenario == "skill" {
 				want = "$demo " + want
 				if len(items) != 2 || items[1].(map[string]any)["path"] != "/test/SKILL.md" || items[1].(map[string]any)["type"] != "skill" {
@@ -156,10 +170,18 @@ func fakeServer(scenario string) {
 			if scenario == "failed" || scenario == "interrupted" {
 				status = scenario
 			}
+			if strings.HasPrefix(scenario, "continue:") {
+				status = strings.TrimPrefix(scenario, "continue:")
+			}
 			if scenario == "unknown-status" {
 				status = "new-unknown-status"
 			}
 			finish("thread-1", "turn-1", status)
+		case "turn/interrupt":
+			if scenario != "interrupt" || p["threadId"] != "thread-1" || p["turnId"] != "turn-1" {
+				panic("искажён адрес отменяемого turn")
+			}
+			reply(map[string]any{})
 		case "thread/read":
 			if p["threadId"] != "thread-1" || p["includeTurns"] != true {
 				panic("искажён запрос чтения чата")
@@ -311,6 +333,56 @@ func TestRun(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestContinue проверяет, что сохранённый чат сначала возобновляется, затем
+// получает ровно один новый turn с текстом continue. Все три терминальных статуса
+// сохраняются без создания нового thread и без интерпретации failed как RPC-сбоя.
+func TestContinue(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "interrupted"} {
+		t.Run(status, func(t *testing.T) {
+			t.Setenv("LAWA_TEST_CODEX_SERVER", "continue:"+status)
+			binary, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var trace bytes.Buffer
+			turnID := ""
+			result, err := Continue(t.Context(), "thread-1", Command{
+				Executable: binary, CWD: t.TempDir(), Text: "continue", Sandbox: "read-only", Stderr: &trace,
+				OnTurn: func(id string) { turnID = id },
+			})
+			if err != nil || result.ThreadID != "thread-1" || result.TurnID != "turn-1" || result.Status != status || turnID != "turn-1" {
+				t.Fatalf("неверный результат continue: %+v, callback=%q, ошибка=%v; сервер: %s", result, turnID, err, &trace)
+			}
+			if strings.Count(trace.String(), "thread/resume\n") != 1 || strings.Count(trace.String(), "thread/start\n") != 0 || strings.Count(trace.String(), "turn/start\n") != 1 {
+				t.Fatalf("continue создал новый чат или повторил turn: %s", &trace)
+			}
+		})
+	}
+}
+
+// TestInterrupt проверяет отдельное подключение к выполняющемуся чату и точный
+// адрес turn/interrupt. Модель не запускается, а профиль прав восстанавливается
+// в новом app-server до присоединения к thread.
+func TestInterrupt(t *testing.T) {
+	t.Setenv("LAWA_TEST_CODEX_SERVER", "interrupt")
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace bytes.Buffer
+	cwd := t.TempDir()
+	err = Interrupt(t.Context(), Connection{
+		Executable: binary, CWD: cwd, Stderr: &trace,
+		Permissions: &PermissionProfile{Name: "lawa-test", ReadPaths: []string{"/run dir"}, WritePaths: []string{"/run dir/own.md"}},
+	}, "thread-1", "turn-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Count(trace.String(), "thread/resume\n") != 1 || strings.Count(trace.String(), "turn/interrupt\n") != 1 {
+		t.Fatalf("не выполнена адресная отмена: %s", &trace)
 	}
 }
 
