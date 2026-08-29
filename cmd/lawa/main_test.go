@@ -4,12 +4,14 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -410,5 +412,75 @@ func TestArgumentParsingAndExitCodes(t *testing.T) {
 	}
 	if exitCode(nil, 0) != 0 || exitCode(errors.New("x"), 0) != 2 || exitCode(context.Canceled, 2) != 130 || exitCode(context.Canceled, 15) != 143 {
 		t.Fatal("неверные коды завершения")
+	}
+}
+
+// TestParseRunArgumentsRejectsMutuallyExclusiveEmptyFlags закрывает R7: явный
+// пустой флаг всё равно означает выбранный способ передачи текста. При этом пустой
+// inline-комментарий без файловой формы остаётся разрешённым контрактом CLI.
+func TestParseRunArgumentsRejectsMutuallyExclusiveEmptyFlags(t *testing.T) {
+	for _, args := range [][]string{
+		{"workflow.json", "--cwd", "/tmp", "--task=", "--task-file", "/tmp/task", "--initiator-thread-id", "i"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--comment=", "--comment-file", "/tmp/comment", "--initiator-thread-id", "i"},
+	} {
+		if _, err := parseRunArguments(args); err == nil {
+			t.Errorf("приняты взаимоисключающие флаги: %v", args)
+		}
+	}
+	parsed, err := parseRunArguments([]string{
+		"workflow.json", "--cwd", "/tmp", "--task", "x", "--comment=", "--initiator-thread-id", "i",
+	})
+	if err != nil || parsed.comment != "" || parsed.commentFile != "" {
+		t.Fatalf("одиночный пустой --comment= должен быть допустим: %+v, %v", parsed, err)
+	}
+}
+
+// TestReportExitDistinguishesCancellationFromStorageFailure закрывает R6.
+// Координатор именно так объединяет сигнал с ошибкой run.Update: код выхода должен
+// по-прежнему сообщать Ctrl+C, но управляющий агент обязан увидеть сбой записи.
+func TestReportExitDistinguishesCancellationFromStorageFailure(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		signal     syscall.Signal
+		wantCode   int
+		wantOutput []string
+	}{
+		{
+			name:     "чистая отмена остаётся тихой",
+			err:      errors.Join(context.Canceled, fmt.Errorf("turn остановлен: %w", context.Canceled)),
+			signal:   syscall.SIGINT,
+			wantCode: 130,
+		},
+		{
+			name:       "ошибка записи при отмене видна",
+			err:        errors.Join(context.Canceled, fmt.Errorf("координатор: сохранить результат шага %q: %w", "cube-1", syscall.EIO)),
+			signal:     syscall.SIGTERM,
+			wantCode:   143,
+			wantOutput: []string{"сохранить результат", "input/output error"},
+		},
+		{
+			name:       "обычная ошибка по-прежнему видна",
+			err:        errors.New("Codex unavailable"),
+			wantCode:   2,
+			wantOutput: []string{"Codex unavailable"},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			if code := reportExit(&stderr, test.err, int32(test.signal)); code != test.wantCode {
+				t.Fatalf("неверный код выхода: %d, нужен %d", code, test.wantCode)
+			}
+			if got := stderr.String(); len(test.wantOutput) == 0 && got != "" {
+				t.Fatalf("чистая отмена напечатала ошибку: %q", got)
+			} else {
+				for _, fragment := range test.wantOutput {
+					if !strings.Contains(got, fragment) {
+						t.Fatalf("потеряна диагностика %q: %q", fragment, got)
+					}
+				}
+			}
+		})
 	}
 }

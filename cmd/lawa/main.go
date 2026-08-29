@@ -56,6 +56,7 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
 validate, skill и help не запускают агентов и не требуют подключения к Codex.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
+Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
 Resume отправляет continue только interrupted-чатам; failed продолжите вручную.
 `
 
@@ -87,18 +88,49 @@ func main() {
 	signal.Stop(signals)
 	close(done)
 	cancel()
-	code := exitCode(err, received.Load())
-	if code == 130 || code == 143 {
-		if err != nil && !errors.Is(err, context.Canceled) {
-			fmt.Fprintln(os.Stderr, "lawa:", err)
-		}
-		os.Exit(code)
-	}
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "lawa:", err)
-	}
+	code := reportExit(os.Stderr, err, received.Load())
 	if code != 0 {
 		os.Exit(code)
+	}
+}
+
+// reportExit сохраняет код полученного сигнала, но скрывает только чистую отмену.
+// Координатор объединяет context.Canceled с ошибками interrupt и сохранения через
+// errors.Join. Проверка одного errors.Is поэтому теряет важную диагностику: она
+// истинна и для context.Canceled + EIO. Дополнительная причина всегда печатается,
+// чтобы управляющий агент не пытался продолжить run с незамеченным сбоем состояния.
+func reportExit(stderr io.Writer, err error, received int32) int {
+	code := exitCode(err, received)
+	if err != nil && (received == 0 || !isCancellationOnly(err)) {
+		fmt.Fprintln(stderr, "lawa:", err)
+	}
+	return code
+}
+
+// isCancellationOnly обходит как обычные обёртки с Unwrap() error, так и
+// составные errors.Join с Unwrap() []error. Ошибка считается чистой отменой,
+// только когда каждый лист дерева равен context.Canceled. errors.Is здесь
+// намеренно недостаточен: он отвечает, есть ли отмена, но не замечает соседний EIO.
+func isCancellationOnly(err error) bool {
+	if err == nil {
+		return false
+	}
+	switch current := err.(type) {
+	case interface{ Unwrap() []error }:
+		causes := current.Unwrap()
+		if len(causes) == 0 {
+			return false
+		}
+		for _, cause := range causes {
+			if !isCancellationOnly(cause) {
+				return false
+			}
+		}
+		return true
+	case interface{ Unwrap() error }:
+		return isCancellationOnly(current.Unwrap())
+	default:
+		return err == context.Canceled
 	}
 }
 
@@ -339,7 +371,14 @@ func parseRunArguments(args []string) (runArguments, error) {
 	parsed.taskFile, parsed.comment = values["task-file"], values["comment"]
 	parsed.commentFile, parsed.initiator = values["comment-file"], values["initiator-thread-id"]
 	parsed.root, parsed.executable = values["root"], values["codex"]
-	if parsed.task != "" && parsed.taskFile != "" || parsed.comment != "" && parsed.commentFile != "" {
+	_, hasTask := values["task"]
+	_, hasTaskFile := values["task-file"]
+	_, hasComment := values["comment"]
+	_, hasCommentFile := values["comment-file"]
+	// Взаимоисключение относится к выбранным способам передачи, а не к тексту.
+	// Пустой --comment= допустим сам по себе, но вместе с --comment-file он уже
+	// неоднозначен. Проверка значений пропускала такую пару как будто флага не было.
+	if (hasTask && hasTaskFile) || (hasComment && hasCommentFile) {
 		return runArguments{}, errors.New("используйте только один из --task/--task-file и --comment/--comment-file")
 	}
 	if strings.TrimSpace(parsed.cwd) == "" || strings.TrimSpace(parsed.initiator) == "" || strings.TrimSpace(parsed.task) == "" && parsed.taskFile == "" {
