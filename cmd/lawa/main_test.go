@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stray-live-pixel/flows-2/internal/codex"
-	"github.com/stray-live-pixel/flows-2/internal/coordinator"
-	"github.com/stray-live-pixel/flows-2/internal/runstore"
-	"github.com/stray-live-pixel/flows-2/internal/scheduler"
-	"github.com/stray-live-pixel/flows-2/internal/workflow"
+	"github.com/stray-live-pixel/Lawa/internal/codex"
+	"github.com/stray-live-pixel/Lawa/internal/coordinator"
+	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // TestCLI проверяет справку без Codex, аргументы и валидацию настоящих файлов.
@@ -187,13 +187,13 @@ func TestSkillInstruction(t *testing.T) {
 		"ID\nтекущего чата недоступен",
 		"memory/<threadId>.md",
 		"изменять только собственный",
-		"https://github.com/stray-live-pixel/flows-2",
-		"https://raw.githubusercontent.com/stray-live-pixel/flows-2/main/product/1.md",
+		"https://github.com/stray-live-pixel/Lawa",
+		"https://raw.githubusercontent.com/stray-live-pixel/Lawa/main/product/1.md",
 		"Если версия\nизвестна из источника установки",
 		"Если нет — не угадывай",
 		"его SHA-256 и полный вывод lawa help",
 		"получи явное разрешение перед публичной",
-		"https://github.com/stray-live-pixel/flows-2/issues/new",
+		"https://github.com/stray-live-pixel/Lawa/issues/new",
 	} {
 		if !strings.Contains(skillInstruction, fragment) {
 			t.Errorf("в инструкции отсутствует обязательный фрагмент %q", fragment)

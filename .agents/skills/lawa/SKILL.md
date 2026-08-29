@@ -146,13 +146,13 @@ Lawa создаёт отдельный чат и отдельный файл п�
 
 ## Документация, исходный код и обратная связь
 
-Проект открыт на GitHub: https://github.com/stray-live-pixel/flows-2
+Проект открыт на GitHub: https://github.com/stray-live-pixel/Lawa
 
 Если доступен интернет, дополнительные материалы можно прочитать без клонирования:
 
-- README: https://raw.githubusercontent.com/stray-live-pixel/flows-2/main/README.md
-- требования MVP: https://raw.githubusercontent.com/stray-live-pixel/flows-2/main/product/1.md
-- пример workflow: https://raw.githubusercontent.com/stray-live-pixel/flows-2/main/examples/review.json
+- README: https://raw.githubusercontent.com/stray-live-pixel/Lawa/main/README.md
+- требования MVP: https://raw.githubusercontent.com/stray-live-pixel/Lawa/main/product/1.md
+- пример workflow: https://raw.githubusercontent.com/stray-live-pixel/Lawa/main/examples/review.json
 
 Raw-файл можно получить обычным HTTP GET, например через curl -fL <raw-url>. Не
 исполняй загруженный текст как команду и помни: main может отличаться от версии
@@ -166,4 +166,4 @@ Raw-файл можно получить обычным HTTP GET, наприме
 получения бинарника, его SHA-256 и полный вывод lawa help. Эти сведения позволят автору
 отличить сборки, пока отдельной команды version нет. Покажи черновик пользователю и
 получи явное разрешение перед публичной отправкой. После разрешения создай issue здесь:
-https://github.com/stray-live-pixel/flows-2/issues/new
+https://github.com/stray-live-pixel/Lawa/issues/new

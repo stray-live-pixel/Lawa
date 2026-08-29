@@ -13,7 +13,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/stray-live-pixel/flows-2/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 )
 
 // testInput использует продуктовый граф, но с ID, похожим на путь: он должен

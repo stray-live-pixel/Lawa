@@ -1,3 +1,3 @@
-module github.com/stray-live-pixel/flows-2
+module github.com/stray-live-pixel/Lawa
 
 go 1.27.0

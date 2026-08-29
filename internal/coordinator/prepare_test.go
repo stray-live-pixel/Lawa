@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/stray-live-pixel/flows-2/internal/runstore"
-	"github.com/stray-live-pixel/flows-2/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 )
 
 // TestPrepare резервирует независимые шаги одной волной и проверяет, что

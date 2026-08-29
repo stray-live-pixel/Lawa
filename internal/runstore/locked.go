@@ -10,7 +10,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/stray-live-pixel/flows-2/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 )
 
 // ErrRunLocked означает, что run уже открыт другим координатором. Ожидания,

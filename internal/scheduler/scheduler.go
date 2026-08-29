@@ -5,7 +5,7 @@ package scheduler
 import (
 	"fmt"
 
-	"github.com/stray-live-pixel/flows-2/internal/workflow"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // State объединяет фазу создания чата и последний известный статус его работы.
