@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -24,6 +23,15 @@ import (
 // Абсолютный путь сам по себе не устанавливает скилл и не включает отключённый.
 // Run добавляет упоминание в текст и отдельный input типа skill по протоколу Codex.
 type Skill struct{ Name, Path string }
+
+// PermissionProfile описывает одноразовый именованный профиль для нового чата.
+// :workspace сохраняет обычные права проекта, ReadPaths открывает служебный run
+// только для чтения, а WritePaths даёт более узкие исключения, например ровно
+// один файл памяти. Managed restrictions Codex продолжают ограничивать профиль.
+type PermissionProfile struct {
+	Name                  string
+	ReadPaths, WritePaths []string
+}
 
 // Event сохраняет неизвестные поля Params: версии Codex могут добавлять события.
 // ID непустой только у запроса сервера; его нельзя путать с ID нашего RPC.
@@ -38,7 +46,9 @@ type Event struct {
 // явно передаётся серверу, который проверяет его против managed restrictions.
 // Кубик автономен внутри sandbox. on-request + auto_review поручает оценку
 // дополнительных прав самому Codex, не выдавая их автоматически из Lawa.
-// Managed restrictions остаются обязательными; отказ возвращается без обхода.
+// Permissions создаёт одноразовый :workspace-профиль с точечными путями и
+// взаимоисключён с Sandbox. Managed restrictions остаются обязательными; отказ
+// возвращается без обхода.
 // Stderr получает диагностику сервера; nil отбрасывает её, не накапливая в памяти.
 // OnThread вызывается после получения ID, строго до отправки команды: координатор
 // может сохранить связь и запретить turn своей ошибкой. Notify и Respond синхронны,
@@ -50,6 +60,7 @@ type Event struct {
 type Command struct {
 	Executable, CWD, Text, Title, Sandbox string
 	Skill                                 *Skill
+	Permissions                           *PermissionProfile
 	Stderr                                io.Writer
 	OnThread                              func(string) error
 	Notify                                func(Event) error
@@ -147,6 +158,14 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 			return result, errors.New("параметры Codex должны быть в UTF-8")
 		}
 	}
+	if command.Permissions != nil {
+		if command.Sandbox != "" {
+			return result, errors.New("именованный профиль permissions нельзя сочетать с sandbox")
+		}
+		if _, err = permissionOverride(command.Permissions); err != nil {
+			return result, err
+		}
+	}
 	info, err := os.Stat(command.CWD)
 	if err != nil {
 		return result, fmt.Errorf("проверить cwd: %w", err)
@@ -164,39 +183,20 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 		inputs = append(inputs, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
 	}
 	inputs = append([]map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}, inputs...)
-	if command.Executable == "" {
-		command.Executable = "codex"
-	}
-	process := exec.CommandContext(ctx, command.Executable, "app-server", "--stdio")
-	process.Dir, process.Stderr = command.CWD, command.Stderr
-	process.WaitDelay = time.Second // Только очистка pipe после выхода, не лимит работы агента.
-	stdin, err := process.StdinPipe()
+	session, err := openSession(ctx, command, &result)
 	if err != nil {
 		return result, err
 	}
-	defer stdin.Close()
-	stdout, err := process.StdoutPipe()
-	if err != nil {
-		return result, err
-	}
-	defer stdout.Close()
-	if err = process.Start(); err != nil {
-		return result, fmt.Errorf("запустить Codex: %w", err)
-	}
-	defer func() { err = errors.Join(err, stop(process, stdin), ctx.Err()) }()
-	c := client{ctx: ctx, command: command, input: json.NewEncoder(stdin), output: json.NewDecoder(stdout), result: &result, completed: map[string]turnCompletion{}}
-	if err = c.call("initialize", map[string]any{"clientInfo": map[string]string{"name": "lawa", "version": "0.1.0"}, "capabilities": map[string]bool{"experimentalApi": true}}, nil); err != nil {
-		return result, err
-	}
-	if err = c.send(map[string]any{"method": "initialized"}); err != nil {
-		return result, err
-	}
+	defer func() { err = errors.Join(err, session.Close(), ctx.Err()) }()
+	c := session.client
 	// Автономность относится только к этому чату; конфиг Desktop не изменяется.
 	// Экспериментальный historyMode не передаём: серверный legacy по умолчанию
-	// поддерживает создание и будущий resume, тогда как paginated доступен не во
+	// поддерживает создание и resume через thread/read, тогда как paginated доступен не во
 	// всех версиях app-server и пока не гарантирует полный жизненный цикл чата.
 	params := map[string]any{"cwd": command.CWD, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
-	if command.Sandbox != "" {
+	if command.Permissions != nil {
+		params["permissions"] = command.Permissions.Name
+	} else if command.Sandbox != "" {
 		params["sandbox"] = command.Sandbox
 	}
 	var created struct{ Thread struct{ ID string } }
@@ -332,22 +332,4 @@ func (c *client) read() (message envelope, err error) {
 		err = c.command.Notify(message.Event)
 	}
 	return message, err
-}
-
-// stop закрывает stdin и дожидается собственного процесса. Через секунду
-// принудительно завершает только его; Desktop, чаты и настройки не удаляются.
-// Wait вызывается после прекращения чтения stdout; его горутина всегда дождалась
-// завершения к возврату. Ошибка штатного выхода сохраняется, наше Kill ожидаемо.
-func stop(process *exec.Cmd, stdin io.Closer) error {
-	_ = stdin.Close()
-	done := make(chan error, 1)
-	go func() { done <- process.Wait() }()
-	select {
-	case err := <-done:
-		return err
-	case <-time.After(time.Second):
-		_ = process.Process.Kill()
-		<-done
-		return nil
-	}
 }
