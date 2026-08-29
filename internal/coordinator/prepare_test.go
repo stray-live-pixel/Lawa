@@ -38,10 +38,19 @@ func TestPrepare(t *testing.T) {
 	}
 	for index, launch := range prepared.Launches {
 		wantID := []string{"first", "second"}[index]
-		if launch.StepID != wantID || launch.Command.CWD != cwd || launch.Command.Title != "Lawa: demo / "+wantID {
+		wantTitle := "Lawa: demo / " + wantID + " [" + snapshot.Meta.RunID + "]"
+		if launch.StepID != wantID || launch.Command.CWD != cwd || launch.Command.Title != wantTitle {
 			t.Fatalf("неверная команда %d: %+v", index, launch)
 		}
-		for _, fragment := range []string{"Сделать MVP", "Проверить границы", "Первая задача", "Вторая задача", "memory/", "обновляй только этот файл"} {
+		profile := launch.Command.Permissions
+		wantRunDir := filepath.Join(root, snapshot.Meta.RunID)
+		wantMemory := filepath.Join(wantRunDir, "memory", snapshot.Meta.Steps[index].ThreadID+".md")
+		if profile == nil || profile.Name != "lawa-"+snapshot.Meta.Steps[index].ThreadID ||
+			len(profile.ReadPaths) != 1 || profile.ReadPaths[0] != wantRunDir ||
+			len(profile.WritePaths) != 1 || profile.WritePaths[0] != wantMemory {
+			t.Fatalf("шаг %q получил неверные права памяти: %+v", wantID, profile)
+		}
+		for _, fragment := range []string{snapshot.Meta.RunID, snapshot.Meta.Steps[index].ThreadID, "Сделать MVP", "Проверить границы", "Первая задача", "Вторая задача", "memory/", "обновляй только этот файл"} {
 			// В команде конкретного шага должен быть только его prompt, поэтому
 			// проверяем подходящий фрагмент задачи отдельно от общего набора.
 			if (fragment == "Первая задача" && wantID != "first") || (fragment == "Вторая задача" && wantID != "second") {

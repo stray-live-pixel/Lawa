@@ -65,7 +65,16 @@ func fakeServer(scenario string) {
 		case "thread/start":
 			cwd, _ := os.Getwd()
 			_, hasHistoryMode := p["historyMode"]
-			if p["cwd"] != cwd || hasHistoryMode || p["sandbox"] != "read-only" || p["model"] != nil || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
+			validIsolation := p["sandbox"] == "read-only" && p["permissions"] == nil
+			if scenario == "permissions" {
+				validIsolation = p["sandbox"] == nil && p["permissions"] == "lawa-test"
+				arguments := strings.Join(os.Args, "\n")
+				want := `permissions.lawa-test={extends=":workspace",filesystem={"/run dir"="read","/run dir/own.md"="write"}}`
+				if !strings.Contains(arguments, "\n-c\n"+want+"\n--stdio") {
+					panic("профиль не передан app-server одним безопасным аргументом")
+				}
+			}
+			if p["cwd"] != cwd || hasHistoryMode || !validIsolation || p["model"] != nil || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
 				panic("искажены параметры чата, автономность или модель")
 			}
 			id := "thread-1"
@@ -73,6 +82,14 @@ func fakeServer(scenario string) {
 				id = ""
 			}
 			reply(map[string]any{"thread": map[string]any{"id": id}})
+		case "thread/resume":
+			cwd, _ := os.Getwd()
+			validIsolation := p["sandbox"] == "read-only" && p["permissions"] == nil
+			if p["threadId"] != "thread-1" || p["cwd"] != cwd || !validIsolation ||
+				p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
+				panic("искажены параметры продолжения чата")
+			}
+			reply(map[string]any{"thread": map[string]any{"id": "thread-1", "cwd": cwd}})
 		case "thread/name/set":
 			// Имя задаётся уже созданному чату. Проверка обоих полей защищает
 			// контракт запроса: сервер не должен молча принимать неверный ID или заголовок.
@@ -87,6 +104,9 @@ func fakeServer(scenario string) {
 			}
 			items := p["input"].([]any)
 			want := "literal '$()`\\n"
+			if strings.HasPrefix(scenario, "continue:") {
+				want = "continue"
+			}
 			if scenario == "skill" {
 				want = "$demo " + want
 				if len(items) != 2 || items[1].(map[string]any)["path"] != "/test/SKILL.md" || items[1].(map[string]any)["type"] != "skill" {
@@ -125,6 +145,12 @@ func fakeServer(scenario string) {
 			}
 			reply(map[string]any{"turn": map[string]any{"id": "turn-1"}})
 			send(map[string]any{"method": "turn/started", "params": map[string]any{}})
+			if scenario == "interrupt" {
+				// Turn остаётся активным, пока тот же stdio-клиент не отправит
+				// turn/interrupt. Возврат в общий цикл важен: второй процесс или
+				// thread/resume в этом сценарии не участвуют.
+				continue
+			}
 			if scenario == "approval" || scenario == "handled" || scenario == "unsupported-request" {
 				// Даже неожиданный ручной запрос при auto_review нельзя подтвердить молча.
 				method := "item/commandExecution/requestApproval"
@@ -147,10 +173,73 @@ func fakeServer(scenario string) {
 			if scenario == "failed" || scenario == "interrupted" {
 				status = scenario
 			}
+			if strings.HasPrefix(scenario, "continue:") {
+				status = strings.TrimPrefix(scenario, "continue:")
+			}
 			if scenario == "unknown-status" {
 				status = "new-unknown-status"
 			}
 			finish("thread-1", "turn-1", status)
+		case "turn/interrupt":
+			if scenario != "interrupt" || p["threadId"] != "thread-1" || p["turnId"] != "turn-1" {
+				panic("искажён адрес отменяемого turn")
+			}
+			reply(map[string]any{})
+			send(map[string]any{"method": "turn/completed", "params": map[string]any{
+				"threadId": "thread-1", "turn": map[string]any{"id": "turn-1", "status": "interrupted"},
+			}})
+		case "thread/read":
+			requestedThreadID, _ := p["threadId"].(string)
+			multiple := scenario == "inspect:multiple"
+			if (!multiple && requestedThreadID != "thread-1") || p["includeTurns"] != true {
+				panic("искажён запрос чтения чата")
+			}
+			if multiple && requestedThreadID != "thread-1" && requestedThreadID != "thread-2" && requestedThreadID != "thread-3" {
+				panic("общая сессия прочитала неожиданный чат")
+			}
+			cwd, _ := os.Getwd()
+			threadID, threadCWD, threadStatus := "thread-1", cwd, "idle"
+			if multiple {
+				threadID = requestedThreadID
+			}
+			turnStatus, activeFlags := "completed", []string{}
+			switch scenario {
+			case "inspect:active":
+				threadStatus, turnStatus = "active", "inProgress"
+			case "inspect:waiting":
+				threadStatus, turnStatus, activeFlags = "active", "inProgress", []string{"waitingOnApproval"}
+			case "inspect:user-input":
+				threadStatus, turnStatus, activeFlags = "active", "inProgress", []string{"waitingOnUserInput"}
+			case "inspect:failed":
+				turnStatus = "failed"
+			case "inspect:interrupted":
+				turnStatus = "interrupted"
+			case "inspect:empty":
+				turnStatus = ""
+			case "inspect:system-error":
+				threadStatus, turnStatus = "systemError", ""
+			case "inspect:wrong-thread":
+				threadID = "other-thread"
+			case "inspect:wrong-cwd":
+				threadCWD = filepath.Dir(cwd)
+			case "inspect:unknown-thread":
+				threadStatus = "future-status"
+			case "inspect:unknown-turn":
+				turnStatus = "future-status"
+			case "inspect:unknown-flag":
+				threadStatus, turnStatus, activeFlags = "active", "inProgress", []string{"future-flag"}
+			}
+			turns := []any{}
+			if turnStatus != "" {
+				turn := map[string]any{"id": "turn-1", "status": turnStatus, "items": []any{}}
+				if turnStatus == "failed" {
+					turn["error"] = map[string]any{"message": "failed"}
+				}
+				turns = append(turns, turn)
+			}
+			reply(map[string]any{"thread": map[string]any{
+				"id": threadID, "cwd": threadCWD, "status": map[string]any{"type": threadStatus, "activeFlags": activeFlags}, "turns": turns,
+			}})
 		default:
 			panic("неожиданный метод: " + m.Method)
 		}
@@ -165,7 +254,7 @@ func TestRun(t *testing.T) {
 		creates, turns int
 	}{
 		{"ok", "completed", 1, 1}, {"early", "completed", 1, 1},
-		{"skill", "completed", 1, 1}, {"handled", "completed", 1, 1},
+		{"skill", "completed", 1, 1}, {"permissions", "completed", 1, 1}, {"handled", "completed", 1, 1},
 		{"failed", "failed", 1, 1}, {"interrupted", "interrupted", 1, 1},
 		{"error:initialize", "", 0, 0}, {"eof:thread/start", "", 1, 0},
 		{"missing-id", "", 1, 0}, {"save", "", 1, 0},
@@ -206,6 +295,10 @@ func TestRun(t *testing.T) {
 				}}
 			if tc.name == "skill" {
 				command.Skill = &Skill{"demo", "/test/SKILL.md"}
+			}
+			if tc.name == "permissions" {
+				command.Sandbox = ""
+				command.Permissions = &PermissionProfile{Name: "lawa-test", ReadPaths: []string{"/run dir"}, WritePaths: []string{"/run dir/own.md"}}
 			}
 			if tc.name == "handled" || tc.name == "unsupported-request" {
 				command.Respond = func(_ context.Context, event Event) (any, error) {
@@ -257,6 +350,88 @@ func TestRun(t *testing.T) {
 	}
 }
 
+// TestContinue проверяет, что сохранённый чат сначала возобновляется, затем
+// получает ровно один новый turn с текстом continue. Все три терминальных статуса
+// сохраняются без создания нового thread и без интерпретации failed как RPC-сбоя.
+func TestContinue(t *testing.T) {
+	for _, status := range []string{"completed", "failed", "interrupted"} {
+		t.Run(status, func(t *testing.T) {
+			t.Setenv("LAWA_TEST_CODEX_SERVER", "continue:"+status)
+			binary, err := os.Executable()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var trace bytes.Buffer
+			turnID := ""
+			result, err := Continue(t.Context(), "thread-1", Command{
+				Executable: binary, CWD: t.TempDir(), Text: "continue", Sandbox: "read-only", Stderr: &trace,
+				OnTurn: func(id string, _ func(context.Context) error) { turnID = id },
+			})
+			if err != nil || result.ThreadID != "thread-1" || result.TurnID != "turn-1" || result.Status != status || turnID != "turn-1" {
+				t.Fatalf("неверный результат continue: %+v, callback=%q, ошибка=%v; сервер: %s", result, turnID, err, &trace)
+			}
+			if strings.Count(trace.String(), "thread/resume\n") != 1 || strings.Count(trace.String(), "thread/start\n") != 0 || strings.Count(trace.String(), "turn/start\n") != 1 {
+				t.Fatalf("continue создал новый чат или повторил turn: %s", &trace)
+			}
+		})
+	}
+}
+
+// TestRunInterruptUsesOwningSession воспроизводит живой конфликт active writer:
+// пока исходный app-server выполняет turn, interrupt обязан пройти через его же
+// stdio. Один initialize и отсутствие thread/resume доказывают, что второй
+// процесс не запускался; терминальный interrupted приходит в исходный Run.
+func TestRunInterruptUsesOwningSession(t *testing.T) {
+	t.Setenv("LAWA_TEST_CODEX_SERVER", "interrupt")
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace bytes.Buffer
+	type outcome struct {
+		result Result
+		err    error
+	}
+	ready := make(chan func(context.Context) error, 1)
+	done := make(chan outcome, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cwd := t.TempDir()
+	go func() {
+		result, runErr := Run(ctx, Command{
+			Executable: binary, CWD: cwd, Text: "literal '$()`\\n", Sandbox: "read-only", Stderr: &trace,
+			OnTurn: func(id string, interrupt func(context.Context) error) {
+				if id != "turn-1" {
+					t.Errorf("неверный ID активного turn: %q", id)
+				}
+				ready <- interrupt
+			},
+		})
+		done <- outcome{result: result, err: runErr}
+	}()
+	var interrupt func(context.Context) error
+	select {
+	case interrupt = <-ready:
+	case <-time.After(time.Second):
+		t.Fatal("клиент не передал interrupt исходной сессии")
+	}
+	if err := interrupt(t.Context()); err != nil {
+		t.Fatalf("interrupt исходной сессии: %v", err)
+	}
+	select {
+	case got := <-done:
+		if got.err != nil || got.result.Status != "interrupted" || got.result.ThreadID != "thread-1" || got.result.TurnID != "turn-1" {
+			t.Fatalf("исходный Run не получил interrupted: %+v, %v", got.result, got.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("исходный Run не завершился после interrupt")
+	}
+	if strings.Count(trace.String(), "initialize\n") != 1 || strings.Count(trace.String(), "thread/start\n") != 1 ||
+		strings.Count(trace.String(), "thread/resume\n") != 0 || strings.Count(trace.String(), "turn/interrupt\n") != 1 {
+		t.Fatalf("interrupt открыл второй процесс или исказил RPC: %s", &trace)
+	}
+}
+
 // TestIntegration запускается только явно: расходует запросы и оставляет
 // видимый тестовый чат. Обычный go test использует только подставной сервер.
 func TestIntegration(t *testing.T) {
@@ -303,12 +478,103 @@ func TestIntegration(t *testing.T) {
 	t.Logf("Завершённый turn: %s", result.TurnID)
 }
 
+// TestInspect проверяет консервативное сопоставление истории и живого статуса.
+// Особенно важен приоритет active: старый successful turn не должен открыть
+// зависимости, если пользователь уже начал ручное продолжение того же чата.
+func TestInspect(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		scenario string
+		want     WorkStatus
+		wantErr  bool
+	}{
+		{"inspect:completed", WorkCompleted, false},
+		{"inspect:active", WorkRunning, false},
+		{"inspect:waiting", WorkWaitingForApproval, false},
+		{"inspect:user-input", WorkWaitingForApproval, false},
+		{"inspect:failed", WorkFailed, false},
+		{"inspect:interrupted", WorkInterrupted, false},
+		{"inspect:empty", WorkUnknown, false},
+		{"inspect:system-error", WorkFailed, false},
+		{"inspect:wrong-thread", "", true},
+		{"inspect:wrong-cwd", "", true},
+		{"inspect:unknown-thread", "", true},
+		{"inspect:unknown-turn", "", true},
+		{"inspect:unknown-flag", "", true},
+		{"error:thread/read", "", true},
+	} {
+		t.Run(tc.scenario, func(t *testing.T) {
+			t.Setenv("LAWA_TEST_CODEX_SERVER", tc.scenario)
+			observation, err := Inspect(t.Context(), Connection{Executable: binary, CWD: t.TempDir()}, "thread-1")
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("наблюдение: %+v, %v", observation, err)
+			}
+			if err == nil {
+				status, statusErr := observation.Status()
+				if statusErr != nil || status != tc.want || observation.ThreadID != "thread-1" {
+					t.Fatalf("статус: %q, %v; наблюдение: %+v", status, statusErr, observation)
+				}
+			}
+		})
+	}
+}
+
+// TestObserverReusesSession доказывает R4 на настоящем stdio-транспорте теста:
+// несколько thread/read идут через один initialize, то есть между проверками
+// app-server не перезапускается. Активные turn этот Observer не создаёт.
+func TestObserverReusesSession(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAWA_TEST_CODEX_SERVER", "inspect:multiple")
+	trace := bytes.Buffer{}
+	observer, err := OpenObserver(t.Context(), Connection{Executable: binary, CWD: t.TempDir(), Stderr: &trace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, threadID := range []string{"thread-1", "thread-2", "thread-3"} {
+		observation, inspectErr := observer.Inspect(threadID)
+		if inspectErr != nil || observation.LatestTurnStatus != "completed" {
+			t.Fatalf("повторное чтение: %+v, %v", observation, inspectErr)
+		}
+	}
+	if err := observer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(trace.String(), "initialize\n"); got != 1 {
+		t.Fatalf("наблюдение запустило %d сессий вместо одной; trace=%q", got, trace.String())
+	}
+	if got := strings.Count(trace.String(), "thread/read\n"); got != 3 {
+		t.Fatalf("ожидались три чтения через общую сессию, получено %d; trace=%q", got, trace.String())
+	}
+}
+
+// TestCheck доказывает, что preflight ограничивается рукопожатием и не создаёт
+// chat/turn. Подставной сервер завершится после закрытия stdin клиентом.
+func TestCheck(t *testing.T) {
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LAWA_TEST_CODEX_SERVER", "check")
+	if err := Check(t.Context(), Connection{Executable: binary, CWD: t.TempDir()}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestInvalidInput запрещает побочные эффекты при неверном вводе и до отмены.
 func TestInvalidInput(t *testing.T) {
 	for _, command := range []Command{
 		{CWD: t.TempDir()}, {CWD: t.TempDir(), Text: "\xff"}, {CWD: ".", Text: "test"},
 		{CWD: filepath.Join(t.TempDir(), "missing"), Text: "test"},
 		{CWD: t.TempDir(), Text: "test", Skill: &Skill{"bad name", "/test/SKILL.md"}},
+		{CWD: t.TempDir(), Text: "test", Sandbox: "read-only", Permissions: &PermissionProfile{Name: "test", ReadPaths: []string{"/run"}, WritePaths: []string{"/run/own"}}},
+		{CWD: t.TempDir(), Text: "test", Permissions: &PermissionProfile{Name: "bad.name", ReadPaths: []string{"/run"}, WritePaths: []string{"/run/own"}}},
+		{CWD: t.TempDir(), Text: "test", Permissions: &PermissionProfile{Name: "test", ReadPaths: []string{"relative"}, WritePaths: []string{"/run/own"}}},
 	} {
 		result, err := Run(context.Background(), command)
 		if err == nil || result.CreationAttempted {

@@ -114,7 +114,9 @@ func (r *LockedRun) Load() (Snapshot, error) {
 // Update меняет только состояние и связь одного шага. Pending может перейти
 // только в Starting без ID: успешная запись этого намерения предшествует запросу
 // создания чата. Из Starting можно привязать подтверждённый/восстановленный ID;
-// известный ID нельзя заменить или стереть, начатый шаг нельзя вернуть в Pending.
+// известный ID нельзя заменить или стереть. Обратный переход в Pending доступен
+// только через ReleaseUnattempted, когда клиент в том же процессе достоверно
+// сообщил, что thread/start ещё не пытался отправить.
 // Для существующего чата допустим ручной повтор, в том числе Succeeded → Running.
 // Повтор той же записи безопасен, но не даёт права повторять сетевой запрос.
 // Готовность зависимостей и достоверность статуса проверяет координатор.
@@ -164,6 +166,49 @@ func (r *LockedRun) Reserve(stepIDs []string) error {
 		}
 		s.Meta.Steps[index].State = scheduler.Starting
 	}
+	if err = s.validate(r.runID); err != nil {
+		return err
+	}
+	if err = saveMetadata(r.dir, s.Meta, (*os.File).Sync); err != nil {
+		r.failed = fmt.Errorf("сохранение запуска %q: %w; остановите новые запросы и восстановите состояние после повторного открытия", r.runID, err)
+		return r.failed
+	}
+	return nil
+}
+
+// ReleaseUnattempted снимает резервирование ровно одного шага после безопасного
+// отказа до thread/start. Метод принимает только Starting без CodexThreadID и
+// возвращает его в Pending, чтобы следующий явный resume мог повторить создание.
+//
+// Вызывающий код обязан иметь живое подтверждение CreationAttempted=false именно
+// от операции, ради которой был вызван Reserve. Одного сохранённого Starting без
+// ID после перезапуска недостаточно: процесс мог отправить thread/start и потерять
+// ответ, поэтому такой снимок остаётся неоднозначным и не сбрасывается автоматически.
+func (r *LockedRun) ReleaseUnattempted(stepID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.check(); err != nil {
+		return err
+	}
+	s, err := load(r.dir, r.runID)
+	if err != nil {
+		return err
+	}
+	index := -1
+	for i, step := range s.Meta.Steps {
+		if step.ID == stepID {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return fmt.Errorf("нет шага %q", stepID)
+	}
+	step := s.Meta.Steps[index]
+	if step.State != scheduler.Starting || step.CodexThreadID != "" {
+		return fmt.Errorf("шаг %q: снять можно только неподтверждённое резервирование Starting без ID чата", stepID)
+	}
+	s.Meta.Steps[index].State = scheduler.Pending
 	if err = s.validate(r.runID); err != nil {
 		return err
 	}

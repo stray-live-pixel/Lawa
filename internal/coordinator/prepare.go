@@ -1,6 +1,6 @@
 // Package coordinator связывает сохранённый запуск с планировщиком и клиентом
-// Codex. Этот файл отвечает только за безопасную подготовку новых задач: сетевые
-// запросы и наблюдение за уже созданными чатами добавляются отдельными этапами.
+// Codex. Prepare безопасно резервирует новые задачи, а Execute запускает волны,
+// наблюдает сохранённые чаты и продолжает workflow после ручной работы.
 package coordinator
 
 import (
@@ -32,6 +32,13 @@ type Preparation struct {
 	Complete bool
 }
 
+// Continuation описывает один новый turn в уже существующем чате. Он создаётся
+// только для Cancelled при явном resume и никогда не меняет CodexThreadID.
+type Continuation struct {
+	StepID, ThreadID string
+	Command          codex.Command
+}
+
 // Prepare выбирает готовые Pending-шаги и атомарно сохраняет намерение создать
 // всю готовую волну до возврата команд вызывающему коду. Благодаря этому ни
 // повторный Prepare, ни перезапуск процесса не создаст второй чат вслепую.
@@ -56,15 +63,19 @@ func Prepare(run *runstore.LockedRun, root string) (Preparation, error) {
 	}
 	states := make(map[string]scheduler.State, len(snapshot.Meta.Steps))
 	steps := make(map[string]workflow.Step, len(snapshot.Workflow.Steps))
+	savedSteps := make(map[string]runstore.Step, len(snapshot.Meta.Steps))
 	for _, step := range snapshot.Meta.Steps {
 		states[step.ID] = step.State
+		savedSteps[step.ID] = step
 	}
 	for _, step := range snapshot.Workflow.Steps {
 		steps[step.ID] = step
 	}
 	// Root приходит от CLI отдельно от LockedRun. До резервирования проверяем,
 	// что он действительно указывает на этот run: иначе агент получил бы пути
-	// несуществующей памяти, а состояние уже нельзя было бы вернуть в Pending.
+	// несуществующей памяти. Все детерминированные локальные ошибки должны быть
+	// найдены до публикации Starting, не заставляя механизм сетевого восстановления
+	// снимать резервирование, которое вообще не требовалось.
 	for _, step := range snapshot.Meta.Steps {
 		memory := filepath.Join(root, snapshot.Meta.RunID, "memory", step.ThreadID+".md")
 		info, statErr := os.Stat(memory)
@@ -84,23 +95,70 @@ func Prepare(run *runstore.LockedRun, root string) (Preparation, error) {
 		return Preparation{}, fmt.Errorf("координатор: зарезервировать готовые шаги: %w", err)
 	}
 	for _, stepID := range plan.Ready {
+		saved := savedSteps[stepID]
+		runDir := filepath.Join(root, snapshot.Meta.RunID)
+		ownMemory := filepath.Join(runDir, "memory", saved.ThreadID+".md")
 		prepared.Launches = append(prepared.Launches, Launch{
 			StepID: stepID,
 			Command: codex.Command{
-				CWD:   snapshot.Meta.CWD,
-				Title: "Lawa: " + snapshot.Workflow.ID + " / " + stepID,
-				Text:  buildPrompt(snapshot, steps[stepID], root),
+				CWD:         snapshot.Meta.CWD,
+				Title:       fmt.Sprintf("Lawa: %s / %s [%s]", snapshot.Workflow.ID, stepID, snapshot.Meta.RunID),
+				Text:        buildPrompt(snapshot, steps[stepID], saved, root),
+				Permissions: stepPermissions(runDir, ownMemory, saved.ThreadID),
 			},
 		})
 	}
 	return prepared, nil
 }
 
+// prepareContinuations выбирает только interrupted/Cancelled-чаты. Карта already
+// ограничивает один автоматический continue на один вызов Execute: повторный
+// interrupted не превращается в бесконечный цикл, но следующий явный resume снова
+// получает право продолжить незавершённую работу.
+func prepareContinuations(snapshot runstore.Snapshot, root string, enabled bool, already map[string]bool) ([]Continuation, error) {
+	if !enabled {
+		return nil, nil
+	}
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return nil, fmt.Errorf("координатор: определить root для продолжения: %w", err)
+	}
+	runDir := filepath.Join(root, snapshot.Meta.RunID)
+	var continuations []Continuation
+	for _, step := range snapshot.Meta.Steps {
+		if step.State != scheduler.Cancelled || already[step.ID] {
+			continue
+		}
+		memory := filepath.Join(runDir, "memory", step.ThreadID+".md")
+		info, statErr := os.Stat(memory)
+		if statErr != nil || !info.Mode().IsRegular() {
+			if statErr == nil {
+				statErr = fmt.Errorf("не является обычным файлом")
+			}
+			return nil, fmt.Errorf("координатор: проверить память шага %q перед продолжением: %w", step.ID, statErr)
+		}
+		continuations = append(continuations, Continuation{
+			StepID: step.ID, ThreadID: step.CodexThreadID,
+			Command: codex.Command{
+				CWD: snapshot.Meta.CWD, Text: "continue",
+				Permissions: stepPermissions(runDir, memory, step.ThreadID),
+			},
+		})
+	}
+	return continuations, nil
+}
+
+func stepPermissions(runDir, ownMemory, threadID string) *codex.PermissionProfile {
+	return &codex.PermissionProfile{
+		Name: "lawa-" + threadID, ReadPaths: []string{runDir}, WritePaths: []string{ownMemory},
+	}
+}
+
 // buildPrompt разделяет неизменяемую постановку, локальную задачу кубика и
 // служебный контракт. Пути абсолютны: чат может пережить процесс Lawa и не должен
 // зависеть от его текущей директории. Чужая память перечислена только для чтения;
 // единственный разрешённый файл записи назван отдельно и недвусмысленно.
-func buildPrompt(snapshot runstore.Snapshot, step workflow.Step, root string) string {
+func buildPrompt(snapshot runstore.Snapshot, step workflow.Step, savedStep runstore.Step, root string) string {
 	runDir := filepath.Join(root, snapshot.Meta.RunID)
 	memories := make([]string, 0, len(snapshot.Meta.Steps))
 	var ownMemory string
@@ -113,6 +171,8 @@ func buildPrompt(snapshot runstore.Snapshot, step workflow.Step, root string) st
 	}
 	return strings.Join([]string{
 		"Ты выполняешь кубик workflow Lawa.",
+		"ID запуска (runId): " + snapshot.Meta.RunID,
+		"ID этого кубика в run (threadId Lawa): " + savedStep.ThreadID,
 		"",
 		"Общий вход запуска:",
 		snapshot.Task,
