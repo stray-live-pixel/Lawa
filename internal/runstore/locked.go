@@ -127,6 +127,53 @@ func (r *LockedRun) Update(stepID string, state scheduler.State, codexThreadID s
 	return r.update(stepID, state, codexThreadID, (*os.File).Sync)
 }
 
+// Reserve атомарно переводит целую волну готовых Pending-шагов в Starting одним
+// новым meta.json. Координатор использует пакетную запись, чтобы отказ диска не
+// оставил только часть параллельной волны зарезервированной до сетевых запросов.
+// Пустая волна безопасна и ничего не записывает. ID обязаны быть уникальными:
+// повтор обычно означает ошибку плана, которую нельзя скрывать идемпотентностью.
+func (r *LockedRun) Reserve(stepIDs []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.check(); err != nil {
+		return err
+	}
+	if len(stepIDs) == 0 {
+		return nil
+	}
+	s, err := load(r.dir, r.runID)
+	if err != nil {
+		return err
+	}
+	indices := make(map[string]int, len(s.Meta.Steps))
+	for index, step := range s.Meta.Steps {
+		indices[step.ID] = index
+	}
+	seen := make(map[string]bool, len(stepIDs))
+	for _, stepID := range stepIDs {
+		index, exists := indices[stepID]
+		if !exists {
+			return fmt.Errorf("нет шага %q", stepID)
+		}
+		if seen[stepID] {
+			return fmt.Errorf("шаг %q повторён в резервировании", stepID)
+		}
+		seen[stepID] = true
+		if s.Meta.Steps[index].State != scheduler.Pending || s.Meta.Steps[index].CodexThreadID != "" {
+			return fmt.Errorf("шаг %q уже запускался и не может быть зарезервирован", stepID)
+		}
+		s.Meta.Steps[index].State = scheduler.Starting
+	}
+	if err = s.validate(r.runID); err != nil {
+		return err
+	}
+	if err = saveMetadata(r.dir, s.Meta, (*os.File).Sync); err != nil {
+		r.failed = fmt.Errorf("сохранение запуска %q: %w; остановите новые запросы и восстановите состояние после повторного открытия", r.runID, err)
+		return r.failed
+	}
+	return nil
+}
+
 // update принимает Sync явно для проверки отказов до и после публикации meta
 // без глобальных подмен или повреждения диска; обычные вызовы используют File.Sync.
 func (r *LockedRun) update(stepID string, state scheduler.State, chat string, syncFile func(*os.File) error) error {

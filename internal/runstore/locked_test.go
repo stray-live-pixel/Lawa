@@ -108,6 +108,44 @@ func TestLockedUpdates(t *testing.T) {
 	}
 }
 
+// TestReserveWave проверяет единую публикацию параллельной волны и отказ до
+// изменения снимка при неизвестном, повторном или уже запущенном шаге.
+func TestReserveWave(t *testing.T) {
+	_, initial, r := testLockedRun(t)
+	ids := []string{initial.Meta.Steps[0].ID, initial.Meta.Steps[1].ID}
+	for _, invalid := range [][]string{{ids[0], "missing"}, {ids[0], ids[0]}} {
+		if err := r.Reserve(invalid); err == nil {
+			t.Fatalf("принята неверная волна: %v", invalid)
+		}
+		got, err := r.Load()
+		if err != nil || !reflect.DeepEqual(got, initial) {
+			t.Fatalf("отказ изменил снимок: %+v, %v", got, err)
+		}
+	}
+	if err := r.Reserve(ids); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, step := range got.Meta.Steps {
+		want := scheduler.Pending
+		if step.ID == ids[0] || step.ID == ids[1] {
+			want = scheduler.Starting
+		}
+		if step.State != want || step.CodexThreadID != "" {
+			t.Errorf("волна сохранена частично: %+v", step)
+		}
+	}
+	if err := r.Reserve(ids[:1]); err == nil {
+		t.Fatal("уже запущенный шаг зарезервирован повторно")
+	}
+	if err := r.Reserve(nil); err != nil {
+		t.Fatalf("пустая волна должна быть безопасна: %v", err)
+	}
+}
+
 // TestLockedConcurrentUpdates защищает от потери одного из параллельных
 // обновлений: второй вызов должен прочитать meta только после публикации первого.
 // Пауза в существующем Sync-hook фиксирует первый вызов перед Rename. Окно
