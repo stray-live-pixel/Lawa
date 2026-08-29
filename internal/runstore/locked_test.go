@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stray-live-pixel/flows-2/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 )
 
 // testLockedRun создаёт изолированный run; cleanup освобождает lock даже при Fatal.

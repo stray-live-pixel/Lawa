@@ -14,8 +14,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/stray-live-pixel/flows-2/internal/scheduler"
-	"github.com/stray-live-pixel/flows-2/internal/workflow"
+	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // ErrInitiatorAsExecutor означает нарушение внутреннего инварианта: чат постановки

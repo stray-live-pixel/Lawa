@@ -19,10 +19,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/stray-live-pixel/flows-2/internal/codex"
-	"github.com/stray-live-pixel/flows-2/internal/coordinator"
-	"github.com/stray-live-pixel/flows-2/internal/runstore"
-	"github.com/stray-live-pixel/flows-2/internal/workflow"
+	"github.com/stray-live-pixel/Lawa/internal/codex"
+	"github.com/stray-live-pixel/Lawa/internal/coordinator"
+	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 const help = `Lawa — выполнение JSON-workflow через отдельные задачи Codex.

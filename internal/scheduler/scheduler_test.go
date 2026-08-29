@@ -8,7 +8,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/stray-live-pixel/flows-2/internal/workflow"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // reviewWorkflow берёт продуктовый пример: сборщик записан раньше родителей,
