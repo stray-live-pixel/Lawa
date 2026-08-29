@@ -377,13 +377,26 @@ func startContinuation(run *runstore.LockedRun, client Client, ctx context.Conte
 // Ошибка запроса, требующего пользователя, оставляет тот же чат доступным для
 // ручного продолжения. Иные ошибки интеграции останавливают новые запуски после
 // сохранения Unknown, потому что их нельзя выдавать за ошибку самого агента.
+// Единственное исключение — достоверный отказ до thread/start: чата ещё нет,
+// поэтому резервирование безопасно снимается для следующего явного resume.
 func saveLaunchResult(run *runstore.LockedRun, completed launchResult) error {
 	result, runErr := completed.result, completed.err
 	if result.ThreadID == "" {
 		if result.CreationAttempted {
-			return fmt.Errorf("координатор: шаг %q: %w; ID чата не получен, повтор запрещён", completed.stepID, ErrAmbiguousStart)
+			return fmt.Errorf("координатор: шаг %q: %w; Codex мог создать чат, но не вернул его ID; "+
+				"автоматический повтор запрещён из-за риска дубликата — не запускайте новый run, "+
+				"сообщите пользователю runId, ID шага и эту ошибку для диагностики Codex", completed.stepID, ErrAmbiguousStart)
 		}
-		return fmt.Errorf("координатор: шаг %q: Codex не начал создание чата: %w", completed.stepID, runErr)
+		if runErr == nil {
+			runErr = errors.New("Codex завершил операцию без результата и без причины")
+		}
+		codexErr := fmt.Errorf("координатор: шаг %q: Codex не начал создание чата: %w", completed.stepID, runErr)
+		if releaseErr := run.ReleaseUnattempted(completed.stepID); releaseErr != nil {
+			return errors.Join(codexErr, fmt.Errorf("вернуть шаг в Pending: %w; не повторяйте создание автоматически, "+
+				"сообщите пользователю runId, ID шага и обе ошибки", releaseErr))
+		}
+		return fmt.Errorf("%w; чат не создан, шаг возвращён в Pending — устраните ошибку Codex и повторите "+
+			"`lawa resume <runId>` с ранее напечатанным runId", codexErr)
 	}
 	state := scheduler.Unknown
 	if runErr == nil {
@@ -493,7 +506,9 @@ func stateFromObservation(status codex.WorkStatus) (scheduler.State, error) {
 func rejectAmbiguous(snapshot runstore.Snapshot, active map[string]*activeExecution) error {
 	for _, step := range snapshot.Meta.Steps {
 		if step.State == scheduler.Starting && step.CodexThreadID == "" && active[step.ID] == nil {
-			return fmt.Errorf("координатор: шаг %q: %w; сохранено Starting без codexThreadId", step.ID, ErrAmbiguousStart)
+			return fmt.Errorf("координатор: шаг %q: %w; сохранено Starting без codexThreadId — Codex мог создать чат, "+
+				"поэтому автоматический повтор запрещён из-за риска дубликата; не запускайте новый run, "+
+				"сообщите пользователю runId, ID шага и эту ошибку для диагностики Codex", step.ID, ErrAmbiguousStart)
 		}
 	}
 	return nil

@@ -146,6 +146,43 @@ func TestReserveWave(t *testing.T) {
 	}
 }
 
+// TestReleaseUnattempted проверяет единственное безопасное исключение из запрета
+// Starting → Pending. Пока клиент в том же процессе подтвердил, что thread/start
+// не вызывался, резервирование можно снять; известный или возможный чат защищён
+// от такого сброса и повторного создания.
+func TestReleaseUnattempted(t *testing.T) {
+	_, initial, r := testLockedRun(t)
+	id := initial.Meta.Steps[0].ID
+	if err := r.ReleaseUnattempted(id); err == nil {
+		t.Fatal("Pending ошибочно принят как неподтверждённое резервирование")
+	}
+	if err := r.Reserve([]string{id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ReleaseUnattempted(id); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.Load()
+	if err != nil || got.Meta.Steps[0].State != scheduler.Pending || got.Meta.Steps[0].CodexThreadID != "" {
+		t.Fatalf("безопасное резервирование не снято: %+v, %v", got.Meta.Steps, err)
+	}
+	// После подтверждённого отказа следующий явный resume снова получает право
+	// зарезервировать шаг, но появление ID немедленно делает сброс недопустимым.
+	if err := r.Reserve([]string{id}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Update(id, scheduler.Starting, "chat-one"); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ReleaseUnattempted(id); err == nil {
+		t.Fatal("резервирование с известным чатом сброшено в Pending")
+	}
+	got, err = r.Load()
+	if err != nil || got.Meta.Steps[0].State != scheduler.Starting || got.Meta.Steps[0].CodexThreadID != "chat-one" {
+		t.Fatalf("отказ сброса изменил известный чат: %+v, %v", got.Meta.Steps, err)
+	}
+}
+
 // TestLockedConcurrentUpdates защищает от потери одного из параллельных
 // обновлений: второй вызов должен прочитать meta только после публикации первого.
 // Пауза в существующем Sync-hook фиксирует первый вызов перед Rename. Окно

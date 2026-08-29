@@ -73,7 +73,9 @@ func Prepare(run *runstore.LockedRun, root string) (Preparation, error) {
 	}
 	// Root приходит от CLI отдельно от LockedRun. До резервирования проверяем,
 	// что он действительно указывает на этот run: иначе агент получил бы пути
-	// несуществующей памяти, а состояние уже нельзя было бы вернуть в Pending.
+	// несуществующей памяти. Все детерминированные локальные ошибки должны быть
+	// найдены до публикации Starting, не заставляя механизм сетевого восстановления
+	// снимать резервирование, которое вообще не требовалось.
 	for _, step := range snapshot.Meta.Steps {
 		memory := filepath.Join(root, snapshot.Meta.RunID, "memory", step.ThreadID+".md")
 		info, statErr := os.Stat(memory)

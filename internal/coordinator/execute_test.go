@@ -16,34 +16,37 @@ import (
 // fakeClient моделирует только границу координатора. Протокол stdio отдельно
 // проверяется internal/codex; здесь важны волны, сохранение ID и ручной повтор.
 type fakeClient struct {
-	mu                sync.Mutex
-	runStatuses       map[string][]string
-	continueStatuses  map[string][]string
-	inspectStatuses   map[string][]codex.WorkStatus
-	releases          map[string]chan struct{}
-	released          map[string]bool
-	interrupted       map[string]bool
-	started           chan string
-	runs, continues   map[string]int
-	interrupts        map[string]int
-	interruptFailures map[string]error
-	inspects          map[string]int
+	mu                         sync.Mutex
+	runStatuses                map[string][]string
+	beforeCreateErrors         map[string][]error
+	continueStatuses           map[string][]string
+	inspectStatuses            map[string][]codex.WorkStatus
+	releases                   map[string]chan struct{}
+	released                   map[string]bool
+	interrupted                map[string]bool
+	started                    chan string
+	runs, creations, continues map[string]int
+	interrupts                 map[string]int
+	interruptFailures          map[string]error
+	inspects                   map[string]int
 }
 
 func newFakeClient() *fakeClient {
 	return &fakeClient{
-		runStatuses:       map[string][]string{},
-		continueStatuses:  map[string][]string{},
-		inspectStatuses:   map[string][]codex.WorkStatus{},
-		releases:          map[string]chan struct{}{},
-		released:          map[string]bool{},
-		interrupted:       map[string]bool{},
-		started:           make(chan string, 16),
-		runs:              map[string]int{},
-		continues:         map[string]int{},
-		interrupts:        map[string]int{},
-		interruptFailures: map[string]error{},
-		inspects:          map[string]int{},
+		runStatuses:        map[string][]string{},
+		beforeCreateErrors: map[string][]error{},
+		continueStatuses:   map[string][]string{},
+		inspectStatuses:    map[string][]codex.WorkStatus{},
+		releases:           map[string]chan struct{}{},
+		released:           map[string]bool{},
+		interrupted:        map[string]bool{},
+		started:            make(chan string, 16),
+		runs:               map[string]int{},
+		creations:          map[string]int{},
+		continues:          map[string]int{},
+		interrupts:         map[string]int{},
+		interruptFailures:  map[string]error{},
+		inspects:           map[string]int{},
 	}
 }
 
@@ -52,6 +55,12 @@ func (c *fakeClient) Run(ctx context.Context, command codex.Command) (codex.Resu
 	threadID := "chat-" + stepID
 	c.mu.Lock()
 	c.runs[stepID]++
+	beforeCreateErrors := c.beforeCreateErrors[stepID]
+	var beforeCreateErr error
+	if len(beforeCreateErrors) != 0 {
+		beforeCreateErr = beforeCreateErrors[0]
+		c.beforeCreateErrors[stepID] = beforeCreateErrors[1:]
+	}
 	statuses := c.runStatuses[stepID]
 	status := "completed"
 	if len(statuses) != 0 {
@@ -59,6 +68,12 @@ func (c *fakeClient) Run(ctx context.Context, command codex.Command) (codex.Resu
 		c.runStatuses[stepID] = statuses[1:]
 	}
 	release := c.releases[stepID]
+	c.mu.Unlock()
+	if beforeCreateErr != nil {
+		return codex.Result{}, beforeCreateErr
+	}
+	c.mu.Lock()
+	c.creations[stepID]++
 	c.mu.Unlock()
 	if command.OnThread != nil {
 		if err := command.OnThread(threadID); err != nil {
@@ -327,13 +342,52 @@ func TestExecuteRejectsAmbiguousStarting(t *testing.T) {
 	}
 	client := newFakeClient()
 	err := Execute(t.Context(), run, Options{Root: root, PollInterval: time.Millisecond, Client: client})
-	if !errors.Is(err, ErrAmbiguousStart) {
-		t.Fatalf("неоднозначный запуск не распознан: %v", err)
+	if !errors.Is(err, ErrAmbiguousStart) || !strings.Contains(err.Error(), "мог создать чат") || !strings.Contains(err.Error(), "не запускайте новый run") {
+		t.Fatalf("неоднозначный запуск не распознан или не объяснён агенту: %v", err)
 	}
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if len(client.runs) != 0 {
 		t.Fatalf("после неоднозначности начались новые запросы: %v", client.runs)
+	}
+}
+
+// TestExecuteReleasesUnattemptedCreation воспроизводит безопасный сбой Codex до
+// thread/start. Первый вызов обязан сохранить исходную диагностику и вернуть шаг
+// в Pending; после повторного открытия явный resume создаёт ровно один чат.
+func TestExecuteReleasesUnattemptedCreation(t *testing.T) {
+	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"one","type":"agent","prompt":"Один","dependsOn":[]}]}`)
+	failure := errors.New("initialize Codex: connection refused")
+	client := newFakeClient()
+	client.beforeCreateErrors["one"] = []error{failure}
+	err := Execute(t.Context(), run, Options{Root: root, PollInterval: time.Millisecond, Client: client})
+	if !errors.Is(err, failure) || !strings.Contains(err.Error(), "шаг возвращён в Pending") || !strings.Contains(err.Error(), "lawa resume <runId>") {
+		t.Fatalf("агент не получил причину и безопасную рекомендацию: %v", err)
+	}
+	snapshot, loadErr := run.Load()
+	if loadErr != nil || snapshot.Meta.Steps[0].State != scheduler.Pending || snapshot.Meta.Steps[0].CodexThreadID != "" {
+		t.Fatalf("неотправленное создание заблокировало run: %+v, %v", snapshot.Meta.Steps, loadErr)
+	}
+	if err := run.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := Execute(t.Context(), reopened, Options{Root: root, PollInterval: time.Millisecond, Client: client}); err != nil {
+		t.Fatalf("resume не повторил безопасное создание: %v", err)
+	}
+	client.mu.Lock()
+	runs, creations := client.runs["one"], client.creations["one"]
+	client.mu.Unlock()
+	if runs != 2 || creations != 1 {
+		t.Fatalf("ожидались один безопасный повтор и одно создание чата: runs=%d, creations=%d", runs, creations)
+	}
+	snapshot, err = reopened.Load()
+	if err != nil || snapshot.Meta.Steps[0].State != scheduler.Succeeded || snapshot.Meta.Steps[0].CodexThreadID != "chat-one" {
+		t.Fatalf("повтор не завершил исходный шаг: %+v, %v", snapshot.Meta.Steps, err)
 	}
 }
 
