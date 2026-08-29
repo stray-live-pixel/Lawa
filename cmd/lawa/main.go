@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -291,23 +292,30 @@ func coordinate(ctx context.Context, root, runID, executable string, out, stderr
 
 // printStatus выводит полный новый снимок. Execute вызывает функцию только при
 // изменении состояния или связи, поэтому одинаковые результаты polling не шумят.
+// Все ID кодируются как строковые литералы: workflow и внешний Codex не могут
+// добавить ложную строку статуса, возврат каретки или ANSI-команду терминала.
 func printStatus(out io.Writer, status coordinator.Status) error {
 	for _, step := range status.Steps {
 		chat := "—"
 		if step.CodexThreadID != "" {
 			chat = step.CodexThreadID
 		}
-		if _, err := fmt.Fprintf(out, "%s: %s; threadId=%s; codexThreadId=%s\n", step.ID, step.State, step.ThreadID, chat); err != nil {
+		if _, err := fmt.Fprintf(out, "%s: %s; threadId=%s; codexThreadId=%s\n",
+			strconv.QuoteToGraphic(step.ID), step.State, strconv.QuoteToGraphic(step.ThreadID), strconv.QuoteToGraphic(chat)); err != nil {
 			return err
 		}
 	}
 	if len(status.Waiting) != 0 {
-		if _, err := fmt.Fprintf(out, "Ждут зависимостей: %s.\n", strings.Join(status.Waiting, ", ")); err != nil {
+		waiting := make([]string, len(status.Waiting))
+		for index, stepID := range status.Waiting {
+			waiting[index] = strconv.QuoteToGraphic(stepID)
+		}
+		if _, err := fmt.Fprintf(out, "Ждут зависимостей: %s.\n", strings.Join(waiting, ", ")); err != nil {
 			return err
 		}
 	}
 	if status.Complete {
-		_, err := fmt.Fprintf(out, "Run %s успешно завершён.\n", status.RunID)
+		_, err := fmt.Fprintf(out, "Run %s успешно завершён.\n", strconv.QuoteToGraphic(status.RunID))
 		return err
 	}
 	return nil

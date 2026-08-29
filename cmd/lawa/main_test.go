@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -78,6 +79,40 @@ func TestOutputError(t *testing.T) {
 		if err := execute(args, failingWriter{failure}); !errors.Is(err, failure) {
 			t.Fatalf("ошибка вывода потеряна: %v", err)
 		}
+	}
+}
+
+// TestPrintStatusEscapesTerminalControlCharacters закрывает R5: все внешние ID
+// остаются узнаваемыми, но управляющие символы видны как текст и не меняют строки,
+// цвет или положение курсора в терминале пользователя.
+func TestPrintStatusEscapesTerminalControlCharacters(t *testing.T) {
+	values := []string{
+		"cube\nложный успех\r\x1b[2J",
+		"thread\r\n",
+		"codex\x1b[31m\n",
+		"waiting\nподмена",
+		"run\r\x1b[0m",
+	}
+	status := coordinator.Status{
+		RunID: values[4],
+		Steps: []coordinator.StepStatus{{
+			ID: values[0], ThreadID: values[1], CodexThreadID: values[2], State: scheduler.Succeeded,
+		}},
+		Waiting:  []string{values[3]},
+		Complete: true,
+	}
+	var out bytes.Buffer
+	if err := printStatus(&out, status); err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, value := range values {
+		if quoted := strconv.QuoteToGraphic(value); !strings.Contains(got, quoted) {
+			t.Errorf("ID не выведен безопасным литералом %q: %q", quoted, got)
+		}
+	}
+	if strings.ContainsAny(got, "\r\x1b") || strings.Count(got, "\n") != 3 {
+		t.Fatalf("управляющие символы изменили терминальный вывод: %q", got)
 	}
 }
 
