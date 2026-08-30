@@ -249,7 +249,7 @@ func createExecutionRun(t *testing.T, workflowJSON string) (string, *runstore.Lo
 }
 
 // controlledTicker позволяет продвинуть только нужные часы координатора. Тесты
-// минутного статуса не зависят от скорости CI и не ждут реальную минуту.
+// периодического статуса не зависят от скорости CI и не ждут реальные пять минут.
 type controlledTicker struct {
 	events  chan time.Time
 	mu      sync.Mutex
@@ -279,6 +279,14 @@ func (t *controlledTicker) isStopped() bool {
 	return t.stopped
 }
 
+// TestDefaultRefreshIntervalIsOneMinute фиксирует период обновления локального
+// подробного отчёта независимо от отдельного интервала сообщений в чат.
+func TestDefaultRefreshIntervalIsOneMinute(t *testing.T) {
+	if DefaultRefreshInterval != time.Minute {
+		t.Fatalf("интервал обновления локального статуса: %s, ожидалось 1m", DefaultRefreshInterval)
+	}
+}
+
 // TestExecuteReportsEveryIntervalAndStopsAfterFinalState проверяет цикл issue #17.
 // Изменение состояния публикуется сразу, неизменный Running — по управляемому
 // минутному событию, а после финального Succeeded оба ticker останавливаются.
@@ -286,19 +294,19 @@ func TestExecuteReportsEveryIntervalAndStopsAfterFinalState(t *testing.T) {
 	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"child","type":"agent","prompt":"Итог","dependsOn":["parent"]},{"id":"parent","type":"agent","prompt":"Факты","dependsOn":[]}]}`)
 	client := newFakeClient()
 	client.releases["parent"] = make(chan struct{})
-	pollTicker, reportTicker := newControlledTicker(), newControlledTicker()
+	pollTicker, refreshTicker := newControlledTicker(), newControlledTicker()
 	unexpectedIntervals := make(chan time.Duration, 1)
 	notifications := make(chan Status, 16)
 	done := make(chan error, 1)
 	go func() {
 		done <- Execute(t.Context(), run, Options{
-			Root: root, PollInterval: time.Second, ReportInterval: time.Minute, Client: client,
+			Root: root, PollInterval: time.Second, Client: client,
 			NewTicker: func(interval time.Duration) Ticker {
 				if interval == time.Second {
 					return pollTicker
 				}
-				if interval == time.Minute {
-					return reportTicker
+				if interval == DefaultRefreshInterval {
+					return refreshTicker
 				}
 				unexpectedIntervals <- interval
 				return newControlledTicker()
@@ -323,12 +331,12 @@ func TestExecuteReportsEveryIntervalAndStopsAfterFinalState(t *testing.T) {
 		t.Fatalf("снимок потерял workflow или зависимости: %+v", running)
 	}
 
-	reportTicker.events <- time.Now()
+	refreshTicker.events <- time.Now()
 	repeated := waitForStatus(t, notifications, func(status Status) bool {
 		return len(status.Steps) == 2 && status.Steps[1].State == scheduler.Running
 	})
 	if len(repeated.Steps) != 2 {
-		t.Fatalf("минутный список содержит не каждый кубик ровно один раз: %+v", repeated.Steps)
+		t.Fatalf("периодический список содержит не каждый кубик ровно один раз: %+v", repeated.Steps)
 	}
 
 	close(client.releases["parent"])
@@ -344,15 +352,15 @@ func TestExecuteReportsEveryIntervalAndStopsAfterFinalState(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("координатор не остановился после финального статуса")
 	}
-	if !pollTicker.isStopped() || !reportTicker.isStopped() {
-		t.Fatal("после финального статуса минутный цикл не остановлен")
+	if !pollTicker.isStopped() || !refreshTicker.isStopped() {
+		t.Fatal("после финального статуса периодический цикл не остановлен")
 	}
 	select {
 	case interval := <-unexpectedIntervals:
 		t.Fatalf("создан ticker с неожиданным интервалом %s", interval)
 	default:
 	}
-	reportTicker.events <- time.Now()
+	refreshTicker.events <- time.Now()
 	select {
 	case status := <-notifications:
 		t.Fatalf("после финала опубликован лишний статус: %+v", status)

@@ -14,6 +14,12 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 )
 
+// DefaultRefreshInterval ограничивает паузу между повторными снимками активного
+// workflow. Изменение состояния передаётся сразу и не ждёт этого интервала.
+// Production использует периодический снимок для обновления локального Markdown
+// и изображения, а частота коротких сообщений в чат задаётся отдельно в CLI.
+const DefaultRefreshInterval = time.Minute
+
 // ErrAmbiguousStart означает сохранённое намерение создать чат без его ID.
 // Повтор мог бы создать второго исполнителя, поэтому автоматического лечения нет.
 var ErrAmbiguousStart = errors.New("создание чата имеет неоднозначный результат")
@@ -103,7 +109,7 @@ type Status struct {
 }
 
 // Ticker скрывает реальное время за минимальной границей. Production использует
-// time.Ticker, а тесты статуса вручную подают события без ожидания минуты.
+// time.Ticker, а тесты статуса вручную подают события без ожидания интервала.
 type Ticker interface {
 	C() <-chan time.Time
 	Stop()
@@ -120,14 +126,14 @@ func (t realTicker) Stop() { t.ticker.Stop() }
 
 // Options задаёт зависимости длительного исполнения. PollInterval не является
 // таймаутом работы: он определяет только частоту чтения ручных продолжений.
-// ReportInterval задаёт максимальную паузу между одинаковыми снимками; изменение
+// RefreshInterval задаёт максимальную паузу между одинаковыми снимками; изменение
 // состояния по-прежнему публикуется сразу. NewTicker существует для управляемых
 // часов в тестах. Ошибка Notify означает отказ пользовательского интерфейса и
 // останавливает координатор, не запуская новые задачи после этого.
 type Options struct {
 	Root                string
 	PollInterval        time.Duration
-	ReportInterval      time.Duration
+	RefreshInterval     time.Duration
 	Client              Client
 	Notify              func(Status) error
 	ContinueInterrupted bool
@@ -208,10 +214,10 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 	if options.PollInterval <= 0 {
 		return errors.New("координатор: интервал опроса должен быть положительным")
 	}
-	if options.ReportInterval <= 0 {
+	if options.RefreshInterval <= 0 {
 		// Внутренние вызовы до появления периодического отчёта не задавали это
-		// поле. Безопасный default сохраняет минутный продуктовый контракт.
-		options.ReportInterval = time.Minute
+		// поле. Единый default сохраняет минутное обновление локальных файлов.
+		options.RefreshInterval = DefaultRefreshInterval
 	}
 	if options.NewTicker == nil {
 		options.NewTicker = func(interval time.Duration) Ticker {
@@ -246,11 +252,11 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 		}
 	}()
 	pollTicker := options.NewTicker(options.PollInterval)
-	reportTicker := options.NewTicker(options.ReportInterval)
+	refreshTicker := options.NewTicker(options.RefreshInterval)
 	defer pollTicker.Stop()
-	defer reportTicker.Stop()
-	lastReport := ""
-	periodicReportDue := false
+	defer refreshTicker.Stop()
+	lastSnapshot := ""
+	periodicRefreshDue := false
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -291,14 +297,14 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 		if err != nil {
 			return err
 		}
-		if signature != lastReport || periodicReportDue {
+		if signature != lastSnapshot || periodicRefreshDue {
 			if options.Notify != nil {
 				if err = options.Notify(status); err != nil {
 					return fmt.Errorf("координатор: сообщить статус: %w", err)
 				}
 			}
-			lastReport = signature
-			periodicReportDue = false
+			lastSnapshot = signature
+			periodicRefreshDue = false
 		}
 		if status.Complete && len(active) == 0 {
 			return nil
@@ -313,8 +319,8 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 				return err
 			}
 		case <-pollTicker.C():
-		case <-reportTicker.C():
-			periodicReportDue = true
+		case <-refreshTicker.C():
+			periodicRefreshDue = true
 		}
 	}
 }

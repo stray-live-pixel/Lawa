@@ -70,6 +70,18 @@ func TestCLI(t *testing.T) {
 	}
 }
 
+// TestProductionDependenciesSeparateLocalAndChatIntervals не позволяет снова
+// связать частое локальное обновление с дорогой публикацией в чат.
+func TestProductionDependenciesSeparateLocalAndChatIntervals(t *testing.T) {
+	dependencies := productionDependencies()
+	if dependencies.refreshInterval != time.Minute {
+		t.Fatalf("интервал локального отчёта: %s, ожидалось 1m", dependencies.refreshInterval)
+	}
+	if dependencies.chatInterval != 5*time.Minute {
+		t.Fatalf("интервал чат-сводки: %s, ожидалось 5m", dependencies.chatInterval)
+	}
+}
+
 // failingWriter позволяет проверить ошибку вывода без реального закрытого канала.
 type failingWriter struct{ err error }
 
@@ -101,41 +113,75 @@ func TestOutputError(t *testing.T) {
 	}
 }
 
-// TestPrintStatusEscapesTerminalControlCharacters закрывает R5: все внешние ID
-// остаются узнаваемыми, но управляющие символы видны как текст и не меняют строки,
-// цвет или положение курсора в терминале пользователя.
-func TestPrintStatusEscapesTerminalControlCharacters(t *testing.T) {
-	values := []string{
-		"cube\nложный успех\r\x1b[2J",
-		"codex\x1b[31m\n",
-		"workflow\r\x1b[0m",
-	}
-	status := coordinator.Status{
-		WorkflowID: values[2],
-		Steps: []coordinator.StepStatus{{
-			ID: values[0], CodexThreadID: values[1], State: scheduler.Succeeded,
-		}},
-		Complete: true,
-	}
+// TestStatusPublisherUpdatesFilesButThrottlesChat проверяет оба независимых
+// интерфейса: каждый входной снимок обновляет Markdown и PNG, но в stdout попадают
+// только первая, пятиминутная и финальная краткие сводки без деталей и картинки.
+func TestStatusPublisherUpdatesFilesButThrottlesChat(t *testing.T) {
+	runDir := t.TempDir()
+	now := time.Date(2026, time.August, 30, 12, 0, 0, 0, time.UTC)
+	renders := 0
+	renderer := cliRendererFunc(func(context.Context, []byte) ([]byte, error) {
+		renders++
+		return []byte("\x89PNG\r\n\x1a\ntest"), nil
+	})
 	var out bytes.Buffer
-	if err := printStatus(t.Context(), &out, t.TempDir(), status, successfulCLIRenderer()); err != nil {
+	publisher := newStatusPublisher(t.Context(), &out, runDir, renderer, 5*time.Minute, func() time.Time { return now })
+	status := coordinator.Status{
+		RunID: "run-1", WorkflowID: "flow",
+		Steps: []coordinator.StepStatus{{ID: "cube", CodexThreadID: "chat-cube", State: scheduler.Starting}},
+	}
+	if err := publisher.Publish(status); err != nil {
+		t.Fatal(err)
+	}
+	firstOutput := out.String()
+	if !strings.Contains(firstOutput, "Всего: 1, готово: 0, работает: 1, ожидают: 0") || !strings.Contains(firstOutput, "vscode://file/") {
+		t.Fatalf("первая краткая сводка неполна: %q", firstOutput)
+	}
+
+	now = now.Add(time.Minute)
+	status.Steps[0].State = scheduler.Running
+	if err := publisher.Publish(status); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != firstOutput {
+		t.Fatalf("изменение состояния преждевременно попало в чат: %q", out.String())
+	}
+	report, err := os.ReadFile(filepath.Join(runDir, statusreport.ReportFilename))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := string(report); !strings.Contains(text, "[cube](codex://threads/chat-cube) — running") || !strings.Contains(text, "![Текущая схема workflow](workflow-status.png)") {
+		t.Fatalf("локальный подробный отчёт не обновлён: %q", text)
+	}
+	if renders != 2 {
+		t.Fatalf("визуализация обновлена %d раз, ожидалось 2", renders)
+	}
+
+	now = now.Add(4 * time.Minute)
+	if err := publisher.Publish(status); err != nil {
+		t.Fatal(err)
+	}
+	status.Steps[0].State = scheduler.Succeeded
+	status.Complete = true
+	now = now.Add(time.Second)
+	if err := publisher.Publish(status); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, fragment := range []string{`cube\nложный успех\r\u001B\[2J`, `workflow\r\u001B\[0m`, "codex://threads/"} {
-		if !strings.Contains(got, fragment) {
-			t.Errorf("внешний текст потерян или не экранирован %q: %q", fragment, got)
-		}
+	if strings.Count(got, "Всего:") != 3 || !strings.Contains(got, "Run run-1 успешно завершён") {
+		t.Fatalf("пятиминутная или финальная сводка потеряна: %q", got)
 	}
-	if strings.ContainsAny(got, "\r\x1b") || strings.Count(got, "\n") < 4 {
-		t.Fatalf("управляющие символы изменили терминальный вывод: %q", got)
+	for _, forbidden := range []string{"cube —", "codex://threads/", "workflow-status.png", "PlantUML image"} {
+		if strings.Contains(got, forbidden) {
+			t.Errorf("в чат попала лишняя деталь %q: %q", forbidden, got)
+		}
 	}
 }
 
-// TestPrintStatusKeepsWorkflowAliveWithoutPlantUML фиксирует границу отказа:
-// renderer может отсутствовать, но текст остаётся доступен и функция возвращает
-// только ошибки самого пользовательского вывода.
-func TestPrintStatusKeepsWorkflowAliveWithoutPlantUML(t *testing.T) {
+// TestStatusPublisherKeepsWorkflowAliveWithoutPlantUML фиксирует границу отказа:
+// renderer может отсутствовать, но подробный Markdown и короткая чат-сводка
+// остаются доступны; координатору возвращается только ошибка самого stdout.
+func TestStatusPublisherKeepsWorkflowAliveWithoutPlantUML(t *testing.T) {
 	runDir := t.TempDir()
 	status := coordinator.Status{
 		WorkflowID: "flow",
@@ -146,17 +192,23 @@ func TestPrintStatusKeepsWorkflowAliveWithoutPlantUML(t *testing.T) {
 		return nil, renderFailure
 	})
 	var out bytes.Buffer
-	if err := printStatus(t.Context(), &out, runDir, status, brokenRenderer); err != nil {
+	publisher := newStatusPublisher(t.Context(), &out, runDir, brokenRenderer, 5*time.Minute, nil)
+	if err := publisher.Publish(status); err != nil {
 		t.Fatalf("ошибка визуализации остановила статус: %v", err)
 	}
-	if got := out.String(); !strings.Contains(got, "cube — running") || !strings.Contains(got, renderFailure.Error()) || !strings.Contains(got, "Текстовый статус выше остаётся актуальным") {
-		t.Fatalf("текст или диагностика renderer потеряны: %q", got)
+	if got := out.String(); !strings.Contains(got, "Всего: 1") || !strings.Contains(got, renderFailure.Error()) || strings.Contains(got, "cube — running") {
+		t.Fatalf("краткая диагностика renderer неверна: %q", got)
 	}
 	if _, err := os.Stat(filepath.Join(runDir, statusreport.SourceFilename)); err != nil {
 		t.Fatalf("source не сохранён при отказе renderer: %v", err)
 	}
+	report, err := os.ReadFile(filepath.Join(runDir, statusreport.ReportFilename))
+	if err != nil || !strings.Contains(string(report), "cube — running") || !strings.Contains(string(report), "Схема PlantUML не обновлена") {
+		t.Fatalf("подробный Markdown потерян при отказе renderer: %v, %q", err, report)
+	}
 	outputFailure := errors.New("stdout unavailable")
-	if err := printStatus(t.Context(), failingWriter{outputFailure}, runDir, status, brokenRenderer); !errors.Is(err, outputFailure) {
+	brokenOutput := newStatusPublisher(t.Context(), failingWriter{outputFailure}, runDir, statusreport.Renderer(brokenRenderer), 5*time.Minute, nil)
+	if err := brokenOutput.Publish(status); !errors.Is(err, outputFailure) {
 		t.Fatalf("ошибка пользовательского вывода не остановила координатор: %v", err)
 	}
 }
@@ -225,12 +277,15 @@ func TestSkillInstruction(t *testing.T) {
 		"не интерполируя пользовательский текст в shell",
 		"не оставляй команду без наблюдения дольше 60 секунд",
 		"не реже раза в минуту",
-		"Не отправляй ради статуса\nновые turn",
-		"codex://threads/<percent-encoded-codexThreadId>",
+		"не чаще раза в 5 минут",
+		"не прикладывай PNG в чат",
+		"Не отправляй ради статуса новые turn",
+		"ведёт в точный чат кубика",
 		"`vscode://file/<percent-encoded-absolute-run-dir>`",
+		"`workflow-status.md`",
 		"`workflow-status.puml` и `workflow-status.png`",
 		"`plantuml -pipe`",
-		"Схема PlantUML не обновлена",
+		"короткую диагностику в ближайшую чат-сводку",
 		"lawa resume <run-id>",
 		"Resume сам отправляет один turn `continue`",
 		"Failed-чат пользователь продолжает",
@@ -329,11 +384,13 @@ func (o *cliFakeObserver) Close() error { return nil }
 
 func cliTestDependencies(client coordinator.Client, check func(context.Context, codex.Connection) error) dependencies {
 	return dependencies{
-		check:          check,
-		client:         func(string, io.Writer) coordinator.Client { return client },
-		pollInterval:   time.Millisecond,
-		reportInterval: time.Minute,
-		renderer:       successfulCLIRenderer(),
+		check:           check,
+		client:          func(string, io.Writer) coordinator.Client { return client },
+		pollInterval:    time.Millisecond,
+		refreshInterval: coordinator.DefaultRefreshInterval,
+		chatInterval:    defaultChatInterval,
+		now:             time.Now,
+		renderer:        successfulCLIRenderer(),
 		userHomeDir: func() (string, error) {
 			return "", errors.New("home не должен использоваться при --root")
 		},
