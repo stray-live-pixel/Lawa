@@ -248,6 +248,134 @@ func createExecutionRun(t *testing.T, workflowJSON string) (string, *runstore.Lo
 	return root, run
 }
 
+// controlledTicker позволяет продвинуть только нужные часы координатора. Тесты
+// минутного статуса не зависят от скорости CI и не ждут реальную минуту.
+type controlledTicker struct {
+	events  chan time.Time
+	mu      sync.Mutex
+	stopped bool
+}
+
+// newControlledTicker создаёт буфер, чтобы тест не зависел от точного момента select.
+func newControlledTicker() *controlledTicker {
+	return &controlledTicker{events: make(chan time.Time, 8)}
+}
+
+// C отдаёт только события, явно добавленные тестом.
+func (t *controlledTicker) C() <-chan time.Time { return t.events }
+
+// Stop отмечает завершение цикла, не закрывая канал, в который ещё пишет тест.
+func (t *controlledTicker) Stop() {
+	t.mu.Lock()
+	t.stopped = true
+	t.mu.Unlock()
+}
+
+// isStopped читает признак под тем же mutex, что и Stop, чтобы race detector
+// проверял именно поведение координатора, а не служебный код теста.
+func (t *controlledTicker) isStopped() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopped
+}
+
+// TestExecuteReportsEveryIntervalAndStopsAfterFinalState проверяет цикл issue #17.
+// Изменение состояния публикуется сразу, неизменный Running — по управляемому
+// минутному событию, а после финального Succeeded оба ticker останавливаются.
+func TestExecuteReportsEveryIntervalAndStopsAfterFinalState(t *testing.T) {
+	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"child","type":"agent","prompt":"Итог","dependsOn":["parent"]},{"id":"parent","type":"agent","prompt":"Факты","dependsOn":[]}]}`)
+	client := newFakeClient()
+	client.releases["parent"] = make(chan struct{})
+	pollTicker, reportTicker := newControlledTicker(), newControlledTicker()
+	unexpectedIntervals := make(chan time.Duration, 1)
+	notifications := make(chan Status, 16)
+	done := make(chan error, 1)
+	go func() {
+		done <- Execute(t.Context(), run, Options{
+			Root: root, PollInterval: time.Second, ReportInterval: time.Minute, Client: client,
+			NewTicker: func(interval time.Duration) Ticker {
+				if interval == time.Second {
+					return pollTicker
+				}
+				if interval == time.Minute {
+					return reportTicker
+				}
+				unexpectedIntervals <- interval
+				return newControlledTicker()
+			},
+			Notify: func(status Status) error {
+				notifications <- status
+				return nil
+			},
+		})
+	}()
+
+	select {
+	case <-client.started:
+	case <-time.After(time.Second):
+		t.Fatal("родительский кубик не стартовал")
+	}
+	pollTicker.events <- time.Now()
+	running := waitForStatus(t, notifications, func(status Status) bool {
+		return len(status.Steps) == 2 && status.Steps[1].State == scheduler.Running
+	})
+	if running.WorkflowID != "flow" || len(running.Steps[0].DependsOn) != 1 || running.Steps[0].DependsOn[0] != "parent" {
+		t.Fatalf("снимок потерял workflow или зависимости: %+v", running)
+	}
+
+	reportTicker.events <- time.Now()
+	repeated := waitForStatus(t, notifications, func(status Status) bool {
+		return len(status.Steps) == 2 && status.Steps[1].State == scheduler.Running
+	})
+	if len(repeated.Steps) != 2 {
+		t.Fatalf("минутный список содержит не каждый кубик ровно один раз: %+v", repeated.Steps)
+	}
+
+	close(client.releases["parent"])
+	final := waitForStatus(t, notifications, func(status Status) bool { return status.Complete })
+	if len(final.Steps) != 2 || final.Steps[0].State != scheduler.Succeeded || final.Steps[1].State != scheduler.Succeeded {
+		t.Fatalf("финальный снимок опубликован преждевременно: %+v", final)
+	}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("координатор не остановился после финального статуса")
+	}
+	if !pollTicker.isStopped() || !reportTicker.isStopped() {
+		t.Fatal("после финального статуса минутный цикл не остановлен")
+	}
+	select {
+	case interval := <-unexpectedIntervals:
+		t.Fatalf("создан ticker с неожиданным интервалом %s", interval)
+	default:
+	}
+	reportTicker.events <- time.Now()
+	select {
+	case status := <-notifications:
+		t.Fatalf("после финала опубликован лишний статус: %+v", status)
+	default:
+	}
+}
+
+// waitForStatus пропускает промежуточные изменения и возвращает первый нужный
+// снимок; секундный timeout остаётся только защитой от зависшего теста.
+func waitForStatus(t *testing.T, statuses <-chan Status, match func(Status) bool) Status {
+	t.Helper()
+	for {
+		select {
+		case status := <-statuses:
+			if match(status) {
+				return status
+			}
+		case <-time.After(time.Second):
+			t.Fatal("ожидаемый статус не опубликован")
+		}
+	}
+}
+
 // TestExecuteParallelChain доказывает две границы: независимые шаги уже запущены
 // до завершения любого из них, а сборщик создаётся один раз только после обоих.
 func TestExecuteParallelChain(t *testing.T) {

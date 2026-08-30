@@ -90,27 +90,48 @@ func (c ProductionClient) OpenObserver(ctx context.Context, cwd string) (Observe
 type StepStatus struct {
 	ID, ThreadID, CodexThreadID string
 	State                       scheduler.State
+	DependsOn                   []string
 }
 
 // Status — целостный снимок для терминала или другого интерфейса. Waiting
 // содержит только ещё не запущенные шаги, заблокированные зависимостями.
 type Status struct {
-	RunID    string
-	Steps    []StepStatus
-	Waiting  []string
-	Complete bool
+	RunID, WorkflowID string
+	Steps             []StepStatus
+	Waiting           []string
+	Complete          bool
 }
+
+// Ticker скрывает реальное время за минимальной границей. Production использует
+// time.Ticker, а тесты статуса вручную подают события без ожидания минуты.
+type Ticker interface {
+	C() <-chan time.Time
+	Stop()
+}
+
+// realTicker адаптирует стандартный time.Ticker к тестируемому интерфейсу.
+type realTicker struct{ ticker *time.Ticker }
+
+// C возвращает канал событий стандартного ticker без дополнительной горутины.
+func (t realTicker) C() <-chan time.Time { return t.ticker.C }
+
+// Stop освобождает системный timer при любом выходе из Execute.
+func (t realTicker) Stop() { t.ticker.Stop() }
 
 // Options задаёт зависимости длительного исполнения. PollInterval не является
 // таймаутом работы: он определяет только частоту чтения ручных продолжений.
-// Notify вызывается только при изменении видимого снимка и может остановить
-// координатор ошибкой вывода, не запуская новые задачи после этого.
+// ReportInterval задаёт максимальную паузу между одинаковыми снимками; изменение
+// состояния по-прежнему публикуется сразу. NewTicker существует для управляемых
+// часов в тестах. Ошибка Notify означает отказ пользовательского интерфейса и
+// останавливает координатор, не запуская новые задачи после этого.
 type Options struct {
 	Root                string
 	PollInterval        time.Duration
+	ReportInterval      time.Duration
 	Client              Client
 	Notify              func(Status) error
 	ContinueInterrupted bool
+	NewTicker           func(time.Duration) Ticker
 }
 
 type launchResult struct {
@@ -187,6 +208,16 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 	if options.PollInterval <= 0 {
 		return errors.New("координатор: интервал опроса должен быть положительным")
 	}
+	if options.ReportInterval <= 0 {
+		// Внутренние вызовы до появления периодического отчёта не задавали это
+		// поле. Безопасный default сохраняет минутный продуктовый контракт.
+		options.ReportInterval = time.Minute
+	}
+	if options.NewTicker == nil {
+		options.NewTicker = func(interval time.Duration) Ticker {
+			return realTicker{ticker: time.NewTicker(interval)}
+		}
+	}
 	initial, err := run.Load()
 	if err != nil {
 		return fmt.Errorf("координатор: прочитать запуск: %w", err)
@@ -214,9 +245,12 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 			}
 		}
 	}()
-	ticker := time.NewTicker(options.PollInterval)
-	defer ticker.Stop()
+	pollTicker := options.NewTicker(options.PollInterval)
+	reportTicker := options.NewTicker(options.ReportInterval)
+	defer pollTicker.Stop()
+	defer reportTicker.Stop()
 	lastReport := ""
+	periodicReportDue := false
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -257,13 +291,14 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 		if err != nil {
 			return err
 		}
-		if signature != lastReport {
+		if signature != lastReport || periodicReportDue {
 			if options.Notify != nil {
 				if err = options.Notify(status); err != nil {
 					return fmt.Errorf("координатор: сообщить статус: %w", err)
 				}
 			}
 			lastReport = signature
+			periodicReportDue = false
 		}
 		if status.Complete && len(active) == 0 {
 			return nil
@@ -277,7 +312,9 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 			if err = saveLaunchResult(run, completed); err != nil {
 				return err
 			}
-		case <-ticker.C:
+		case <-pollTicker.C():
+		case <-reportTicker.C():
+			periodicReportDue = true
 		}
 	}
 }
@@ -542,20 +579,27 @@ func rejectAmbiguous(snapshot runstore.Snapshot, active map[string]*activeExecut
 	return nil
 }
 
-// currentStatus строит отчёт из уже сохранённого снимка. Signature включает
-// состояния и связи, поэтому периодический опрос без изменений не засоряет вывод.
+// currentStatus строит отчёт из одного уже сохранённого снимка. Список и порядок
+// шагов берутся из meta.json, а зависимости — из неизменяемого workflow.json того
+// же Snapshot. Поэтому пользовательский текст и визуализация не могут разойтись
+// из-за изменения meta.json между двумя чтениями.
 func currentStatus(run *runstore.LockedRun) (Status, string, error) {
 	snapshot, err := run.Load()
 	if err != nil {
 		return Status{}, "", fmt.Errorf("координатор: прочитать статус запуска: %w", err)
 	}
 	states := make(map[string]scheduler.State, len(snapshot.Meta.Steps))
-	status := Status{RunID: snapshot.Meta.RunID}
+	status := Status{RunID: snapshot.Meta.RunID, WorkflowID: snapshot.Workflow.ID}
+	dependencies := make(map[string][]string, len(snapshot.Workflow.Steps))
+	for _, step := range snapshot.Workflow.Steps {
+		dependencies[step.ID] = step.DependsOn
+	}
 	var signature strings.Builder
 	for _, step := range snapshot.Meta.Steps {
 		states[step.ID] = step.State
 		status.Steps = append(status.Steps, StepStatus{
 			ID: step.ID, ThreadID: step.ThreadID, CodexThreadID: step.CodexThreadID, State: step.State,
+			DependsOn: append([]string(nil), dependencies[step.ID]...),
 		})
 		fmt.Fprintf(&signature, "%s=%s:%s;", step.ID, step.State, step.CodexThreadID)
 	}

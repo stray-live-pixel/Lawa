@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +18,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/statusreport"
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
@@ -74,6 +74,21 @@ type failingWriter struct{ err error }
 // Write имитирует отказ приёмника до записи первого байта.
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
+// cliRendererFunc подставляет renderer в сквозные CLI-тесты без внешнего PlantUML.
+type cliRendererFunc func(context.Context, []byte) ([]byte, error)
+
+// Render реализует интерфейс statusreport.Renderer тестовой функцией.
+func (f cliRendererFunc) Render(ctx context.Context, source []byte) ([]byte, error) {
+	return f(ctx, source)
+}
+
+// successfulCLIRenderer возвращает минимальный результат с корректной PNG-сигнатурой.
+func successfulCLIRenderer() statusreport.Renderer {
+	return cliRendererFunc(func(context.Context, []byte) ([]byte, error) {
+		return []byte("\x89PNG\r\n\x1a\ntest"), nil
+	})
+}
+
 // TestOutputError не позволяет объявить успех, когда результат не удалось вывести.
 func TestOutputError(t *testing.T) {
 	failure := errors.New("ошибка вывода")
@@ -90,31 +105,57 @@ func TestOutputError(t *testing.T) {
 func TestPrintStatusEscapesTerminalControlCharacters(t *testing.T) {
 	values := []string{
 		"cube\nложный успех\r\x1b[2J",
-		"thread\r\n",
 		"codex\x1b[31m\n",
-		"waiting\nподмена",
-		"run\r\x1b[0m",
+		"workflow\r\x1b[0m",
 	}
 	status := coordinator.Status{
-		RunID: values[4],
+		WorkflowID: values[2],
 		Steps: []coordinator.StepStatus{{
-			ID: values[0], ThreadID: values[1], CodexThreadID: values[2], State: scheduler.Succeeded,
+			ID: values[0], CodexThreadID: values[1], State: scheduler.Succeeded,
 		}},
-		Waiting:  []string{values[3]},
 		Complete: true,
 	}
 	var out bytes.Buffer
-	if err := printStatus(&out, status); err != nil {
+	if err := printStatus(t.Context(), &out, t.TempDir(), status, successfulCLIRenderer()); err != nil {
 		t.Fatal(err)
 	}
 	got := out.String()
-	for _, value := range values {
-		if quoted := strconv.QuoteToGraphic(value); !strings.Contains(got, quoted) {
-			t.Errorf("ID не выведен безопасным литералом %q: %q", quoted, got)
+	for _, fragment := range []string{`cube\nложный успех\r\u001B\[2J`, `workflow\r\u001B\[0m`, "codex://threads/"} {
+		if !strings.Contains(got, fragment) {
+			t.Errorf("внешний текст потерян или не экранирован %q: %q", fragment, got)
 		}
 	}
-	if strings.ContainsAny(got, "\r\x1b") || strings.Count(got, "\n") != 3 {
+	if strings.ContainsAny(got, "\r\x1b") || strings.Count(got, "\n") < 4 {
 		t.Fatalf("управляющие символы изменили терминальный вывод: %q", got)
+	}
+}
+
+// TestPrintStatusKeepsWorkflowAliveWithoutPlantUML фиксирует границу отказа:
+// renderer может отсутствовать, но текст остаётся доступен и функция возвращает
+// только ошибки самого пользовательского вывода.
+func TestPrintStatusKeepsWorkflowAliveWithoutPlantUML(t *testing.T) {
+	runDir := t.TempDir()
+	status := coordinator.Status{
+		WorkflowID: "flow",
+		Steps:      []coordinator.StepStatus{{ID: "cube", State: scheduler.Running}},
+	}
+	renderFailure := errors.New("plantuml не установлен")
+	brokenRenderer := cliRendererFunc(func(context.Context, []byte) ([]byte, error) {
+		return nil, renderFailure
+	})
+	var out bytes.Buffer
+	if err := printStatus(t.Context(), &out, runDir, status, brokenRenderer); err != nil {
+		t.Fatalf("ошибка визуализации остановила статус: %v", err)
+	}
+	if got := out.String(); !strings.Contains(got, "cube — running") || !strings.Contains(got, renderFailure.Error()) || !strings.Contains(got, "Текстовый статус выше остаётся актуальным") {
+		t.Fatalf("текст или диагностика renderer потеряны: %q", got)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, statusreport.SourceFilename)); err != nil {
+		t.Fatalf("source не сохранён при отказе renderer: %v", err)
+	}
+	outputFailure := errors.New("stdout unavailable")
+	if err := printStatus(t.Context(), failingWriter{outputFailure}, runDir, status, brokenRenderer); !errors.Is(err, outputFailure) {
+		t.Fatalf("ошибка пользовательского вывода не остановила координатор: %v", err)
 	}
 }
 
@@ -180,6 +221,14 @@ func TestSkillInstruction(t *testing.T) {
 		"--task-file <файл-постановки>",
 		"--initiator-thread-id <id-этого-чата>",
 		"не интерполируя пользовательский текст в shell",
+		"не оставляй команду без наблюдения дольше 60 секунд",
+		"не реже раза в минуту",
+		"Не отправляй ради статуса\nновые turn",
+		"codex://threads/<percent-encoded-codexThreadId>",
+		"`vscode://file/<percent-encoded-absolute-run-dir>`",
+		"`workflow-status.puml` и `workflow-status.png`",
+		"`plantuml -pipe`",
+		"Схема PlantUML не обновлена",
 		"lawa resume <run-id>",
 		"Resume сам отправляет один turn `continue`",
 		"Failed-чат пользователь продолжает",
@@ -278,9 +327,11 @@ func (o *cliFakeObserver) Close() error { return nil }
 
 func cliTestDependencies(client coordinator.Client, check func(context.Context, codex.Connection) error) dependencies {
 	return dependencies{
-		check:        check,
-		client:       func(string, io.Writer) coordinator.Client { return client },
-		pollInterval: time.Millisecond,
+		check:          check,
+		client:         func(string, io.Writer) coordinator.Client { return client },
+		pollInterval:   time.Millisecond,
+		reportInterval: time.Minute,
+		renderer:       successfulCLIRenderer(),
 		userHomeDir: func() (string, error) {
 			return "", errors.New("home не должен использоваться при --root")
 		},
