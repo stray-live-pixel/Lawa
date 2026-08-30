@@ -1,7 +1,7 @@
-// Package statusreport превращает один снимок координатора в сообщение для
-// чата-инициатора и локальные PlantUML-артефакты. Пакет ничего не читает из run:
-// вызывающий код передаёт уже согласованные состояния и зависимости, поэтому
-// текст и схема одного обновления не могут относиться к разным версиям meta.json.
+// Package statusreport превращает один снимок координатора в короткую чат-сводку,
+// подробный локальный Markdown и PlantUML-артефакты. Пакет ничего не читает из run:
+// вызывающий код передаёт уже согласованные состояния и зависимости, поэтому все
+// представления одного обновления не могут относиться к разным версиям meta.json.
 package statusreport
 
 import (
@@ -22,9 +22,10 @@ import (
 )
 
 const (
-	// SourceFilename и ImageFilename — стабильные имена последнего снимка в run.
-	// Временные файлы публикуются через rename, поэтому пользователь не увидит
-	// частично записанный source или PNG.
+	// ReportFilename, SourceFilename и ImageFilename — стабильные имена последнего
+	// снимка в run. Временные файлы публикуются через rename, поэтому пользователь
+	// не увидит частично записанный Markdown, source или PNG.
+	ReportFilename = "workflow-status.md"
 	SourceFilename = "workflow-status.puml"
 	ImageFilename  = "workflow-status.png"
 )
@@ -78,21 +79,39 @@ func (r CommandRenderer) Render(ctx context.Context, source []byte) ([]byte, err
 	return stdout.Bytes(), nil
 }
 
-// Artifacts перечисляет только успешно опубликованные файлы. SourcePath может
-// быть заполнен без ImagePath, если source сохранён, а локальный renderer сломан.
+// Artifacts перечисляет только успешно опубликованные файлы. ReportPath и
+// SourcePath могут быть заполнены без ImagePath, если локальный renderer сломан:
+// подробный текст тогда остаётся доступен и объясняет отсутствие картинки.
 type Artifacts struct {
+	ReportPath string
 	SourcePath string
 	ImagePath  string
 }
 
-// WriteArtifacts сохраняет source и PNG в папке конкретного run. При ошибке
-// рендера актуальный source остаётся доступен для диагностики, а прежний PNG
-// удаляется: основной агент не должен случайно приложить старую картинку к новому
-// текстовому снимку. Ошибка не меняет meta.json, workflow.json или память кубиков.
-func WriteArtifacts(ctx context.Context, runDir string, status coordinator.Status, renderer Renderer) (Artifacts, error) {
+// WriteReport обновляет подробный Markdown и визуализацию одного Status. Сначала
+// публикуются source и PNG, затем Markdown со ссылками на уже готовые файлы. При
+// отказе renderer новый отчёт всё равно сохраняется, а прежний PNG удаляется:
+// пользователь не примет старую картинку за текущую. Ошибки не меняют meta.json,
+// workflow.json или память кубиков и возвращаются вызывающему коду для краткой
+// диагностики в чат-сводке.
+func WriteReport(ctx context.Context, runDir string, status coordinator.Status, renderer Renderer) (Artifacts, error) {
 	if !filepath.IsAbs(runDir) {
 		return Artifacts{}, fmt.Errorf("папка run должна быть абсолютной: %q", runDir)
 	}
+	artifacts, visualizationErr := writeVisualization(ctx, runDir, status, renderer)
+	reportPath := filepath.Join(runDir, ReportFilename)
+	report := DetailedReport(status, runDir, artifacts, visualizationErr)
+	if err := writeAtomic(reportPath, []byte(report)); err != nil {
+		cleanupErr := removeArtifact(reportPath)
+		return artifacts, errors.Join(visualizationErr, fmt.Errorf("сохранить подробный Markdown-отчёт: %w", err), cleanupErr)
+	}
+	artifacts.ReportPath = reportPath
+	return artifacts, visualizationErr
+}
+
+// writeVisualization сохраняет source и PNG одного снимка. Source остаётся при
+// ошибке renderer для диагностики, а старый PNG удаляется до публикации Markdown.
+func writeVisualization(ctx context.Context, runDir string, status coordinator.Status, renderer Renderer) (Artifacts, error) {
 	sourcePath := filepath.Join(runDir, SourceFilename)
 	imagePath := filepath.Join(runDir, ImageFilename)
 	source, err := PlantUML(status)
@@ -128,12 +147,13 @@ func WriteArtifacts(ctx context.Context, runDir string, status coordinator.Statu
 	return artifacts, nil
 }
 
-// Message строит один готовый Markdown-блок для исходного чата. Каждый кубик
+// DetailedReport строит содержимое локального workflow-status.md. Каждый кубик
 // появляется ровно один раз и в порядке meta.json. Пустой codexThreadId никогда
-// не подменяется ссылкой на инициатора или другой чат.
-func Message(status coordinator.Status, runDir string, artifacts Artifacts, visualizationErr error) string {
+// не подменяется ссылкой на инициатора или другой чат. Успешный PNG подключается
+// относительной Markdown-ссылкой и отображается прямо при просмотре файла.
+func DetailedReport(status coordinator.Status, runDir string, artifacts Artifacts, visualizationErr error) string {
 	var message strings.Builder
-	fmt.Fprintf(&message, "Статус workflow \"%s\":\n", markdownText(status.WorkflowID))
+	fmt.Fprintf(&message, "# Статус workflow \"%s\"\n\n", markdownText(status.WorkflowID))
 	for _, step := range status.Steps {
 		label := markdownText(step.ID)
 		if step.CodexThreadID != "" {
@@ -151,10 +171,10 @@ func Message(status coordinator.Status, runDir string, artifacts Artifacts, visu
 	}
 	fmt.Fprintf(&message, "\n[Открыть папку run в VS Code](%s)\n", vscodeFolderURL(runDir))
 	if visualizationErr == nil && artifacts.SourcePath != "" && artifacts.ImagePath != "" {
-		fmt.Fprintf(&message, "PlantUML source: %s\nPlantUML image: %s\n",
-			markdownText(artifacts.SourcePath), markdownText(artifacts.ImagePath))
+		fmt.Fprintf(&message, "\n![Текущая схема workflow](%s)\n\n[PlantUML source](%s)\n",
+			ImageFilename, SourceFilename)
 	} else {
-		message.WriteString("Схема PlantUML не обновлена")
+		message.WriteString("\nСхема PlantUML не обновлена")
 		if visualizationErr != nil {
 			fmt.Fprintf(&message, ": %s", safeDiagnostic(visualizationErr.Error()))
 		}
@@ -165,6 +185,55 @@ func Message(status coordinator.Status, runDir string, artifacts Artifacts, visu
 	}
 	message.WriteByte('\n')
 	return message.String()
+}
+
+// Summary строит короткий блок для редкой публикации в чат. Состояния, которые
+// нельзя честно назвать готовыми, работающими или ожидающими зависимости, не
+// скрываются: ошибки, отмена, неизвестность и ожидание подтверждения получают
+// отдельный счётчик «требуют внимания». Ссылок на PNG и отдельных кубиков здесь
+// намеренно нет — подробности пользователь открывает локально через VS Code.
+func Summary(status coordinator.Status, runDir string, artifactErr error) string {
+	statistics := countStates(status)
+	var message strings.Builder
+	fmt.Fprintf(&message, "Всего: %d, готово: %d, работает: %d, ожидают: %d",
+		statistics.total, statistics.ready, statistics.running, statistics.waiting)
+	if statistics.attention != 0 {
+		fmt.Fprintf(&message, ", требуют внимания: %d", statistics.attention)
+	}
+	message.WriteString(".\n")
+	if status.Complete {
+		fmt.Fprintf(&message, "Run %s успешно завершён.\n", markdownText(status.RunID))
+	}
+	fmt.Fprintf(&message, "[Открыть статус в VS Code](%s)\n", vscodeFolderURL(runDir))
+	if artifactErr != nil {
+		fmt.Fprintf(&message, "Локальные файлы статуса обновлены не полностью: %s\n", safeDiagnostic(artifactErr.Error()))
+	}
+	message.WriteByte('\n')
+	return message.String()
+}
+
+type stateStatistics struct {
+	total, ready, running, waiting, attention int
+}
+
+// countStates распределяет каждый шаг ровно в одну пользовательскую категорию.
+// Неизвестное будущее состояние относится к требующим внимания, чтобы сумма
+// счётчиков оставалась равна total и новая проблема не выглядела как ожидание.
+func countStates(status coordinator.Status) stateStatistics {
+	statistics := stateStatistics{total: len(status.Steps)}
+	for _, step := range status.Steps {
+		switch step.State {
+		case scheduler.Succeeded:
+			statistics.ready++
+		case scheduler.Starting, scheduler.Running:
+			statistics.running++
+		case scheduler.Pending:
+			statistics.waiting++
+		default:
+			statistics.attention++
+		}
+	}
+	return statistics
 }
 
 // PlantUML показывает состояние одновременно подписью и цветом. Неизвестное

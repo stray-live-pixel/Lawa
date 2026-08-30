@@ -69,9 +69,10 @@ validate, skill, version, update и help не запускают агентов 
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
 Resume отправляет continue только interrupted-чатам; failed продолжите вручную.
-Run и resume печатают полный Markdown-статус при изменениях и не реже раза в минуту.
-В папке run обновляются workflow-status.puml и workflow-status.png. Для PNG нужна
-локальная команда plantuml с поддержкой -pipe; её ошибка не останавливает workflow.
+Run и resume печатают краткую статистику и VS Code-ссылку не чаще раза в 5 минут;
+первый и финальный снимки выводятся сразу. Подробный workflow-status.md и схема
+обновляются локально при изменениях и не реже раза в минуту.
+Для PNG нужна команда plantuml с поддержкой -pipe; её ошибка не останавливает workflow.
 `
 
 // skillInstruction хранится отдельным SKILL.md, чтобы инструкцию можно было читать,
@@ -164,13 +165,15 @@ func exitCode(err error, received int32) int {
 // dependencies содержит заменяемые границы CLI. Production использует настоящий
 // app-server, тесты — клиент без модели и изолированное временное хранилище.
 type dependencies struct {
-	check          func(context.Context, codex.Connection) error
-	client         func(string, io.Writer) coordinator.Client
-	pollInterval   time.Duration
-	reportInterval time.Duration
-	renderer       statusreport.Renderer
-	userHomeDir    func() (string, error)
-	update         updateDependencies
+	check           func(context.Context, codex.Connection) error
+	client          func(string, io.Writer) coordinator.Client
+	pollInterval    time.Duration
+	refreshInterval time.Duration
+	chatInterval    time.Duration
+	now             func() time.Time
+	renderer        statusreport.Renderer
+	userHomeDir     func() (string, error)
+	update          updateDependencies
 }
 
 // productionDependencies собирает стандартное окружение команд run/resume.
@@ -183,8 +186,10 @@ func productionDependencies() dependencies {
 		// Одна read-only app-server-сессия обслуживает все сверки текущего запуска.
 		// Пять секунд сохраняют отзывчивость ручного продолжения и не создают
 		// лишний поток thread/read-запросов в ожидании действий пользователя.
-		pollInterval:   5 * time.Second,
-		reportInterval: time.Minute,
+		pollInterval:    5 * time.Second,
+		refreshInterval: coordinator.DefaultRefreshInterval,
+		chatInterval:    defaultChatInterval,
+		now:             time.Now,
 		// Pipe-режим не даёт renderer доступ к путям run. Отсутствующий или
 		// сломанный PlantUML станет видимой диагностикой, но не остановит workflow.
 		renderer:    statusreport.CommandRenderer{Executable: "plantuml", Timeout: 30 * time.Second},
@@ -347,24 +352,12 @@ func coordinate(ctx context.Context, root, runID, executable string, out, stderr
 	if _, err = fmt.Fprintf(out, "Наблюдение за run %s.\n", runID); err != nil {
 		return err
 	}
+	publisher := newStatusPublisher(ctx, out, filepath.Join(root, runID), deps.renderer, deps.chatInterval, deps.now)
 	return coordinator.Execute(ctx, run, coordinator.Options{
-		Root: root, PollInterval: deps.pollInterval, ReportInterval: deps.reportInterval,
+		Root: root, PollInterval: deps.pollInterval, RefreshInterval: deps.refreshInterval,
 		Client: deps.client(executable, stderr), ContinueInterrupted: resume,
-		Notify: func(status coordinator.Status) error {
-			return printStatus(ctx, out, filepath.Join(root, runID), status, deps.renderer)
-		},
+		Notify: publisher.Publish,
 	})
-}
-
-// printStatus сначала пытается обновить PlantUML-артефакты, затем всегда пишет
-// текстовый снимок и диагностику визуализации одним блоком. Ошибка renderer или
-// записи его файлов не возвращается координатору: кубики не должны останавливаться
-// из-за необязательной картинки. Ошибка самого out остаётся фатальной, потому что
-// без канала вывода основной агент не сможет наблюдать workflow.
-func printStatus(ctx context.Context, out io.Writer, runDir string, status coordinator.Status, renderer statusreport.Renderer) error {
-	artifacts, visualizationErr := statusreport.WriteArtifacts(ctx, runDir, status, renderer)
-	_, err := io.WriteString(out, statusreport.Message(status, runDir, artifacts, visualizationErr))
-	return err
 }
 
 // parseRunArguments проверяет обязательные значения и взаимоисключающие формы
