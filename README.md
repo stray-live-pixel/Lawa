@@ -325,7 +325,7 @@ Workflow — один JSON-объект с непустым `id` и массив
 Готовые примеры:
 
 - [`examples/review.json`](examples/review.json) — компактное ревью с параллельными ветками;
-- [`examples/review-by-criteria.json`](examples/review-by-criteria.json) — подробное ревью по 12 критериям;
+- [`examples/review-by-criteria.json`](examples/review-by-criteria.json) — подробное ревью по 12 критериям с перепроверкой и разделением продуктовых и технических замечаний;
 - [`examples/integration-smoke.json`](examples/integration-smoke.json) — сквозная проверка интеграции.
 
 ## CLI
