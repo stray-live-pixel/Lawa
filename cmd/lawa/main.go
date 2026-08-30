@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -22,6 +21,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/statusreport"
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
@@ -58,6 +58,9 @@ validate, skill и help не запускают агентов и не треб�
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
 Resume отправляет continue только interrupted-чатам; failed продолжите вручную.
+Run и resume печатают полный Markdown-статус при изменениях и не реже раза в минуту.
+В папке run обновляются workflow-status.puml и workflow-status.png. Для PNG нужна
+локальная команда plantuml с поддержкой -pipe; её ошибка не останавливает workflow.
 `
 
 // skillInstruction хранится отдельным SKILL.md, чтобы инструкцию можно было читать,
@@ -150,10 +153,12 @@ func exitCode(err error, received int32) int {
 // dependencies содержит заменяемые границы CLI. Production использует настоящий
 // app-server, тесты — клиент без модели и изолированное временное хранилище.
 type dependencies struct {
-	check        func(context.Context, codex.Connection) error
-	client       func(string, io.Writer) coordinator.Client
-	pollInterval time.Duration
-	userHomeDir  func() (string, error)
+	check          func(context.Context, codex.Connection) error
+	client         func(string, io.Writer) coordinator.Client
+	pollInterval   time.Duration
+	reportInterval time.Duration
+	renderer       statusreport.Renderer
+	userHomeDir    func() (string, error)
 }
 
 // productionDependencies собирает стандартное окружение команд run/resume.
@@ -166,8 +171,12 @@ func productionDependencies() dependencies {
 		// Одна read-only app-server-сессия обслуживает все сверки текущего запуска.
 		// Пять секунд сохраняют отзывчивость ручного продолжения и не создают
 		// лишний поток thread/read-запросов в ожидании действий пользователя.
-		pollInterval: 5 * time.Second,
-		userHomeDir:  os.UserHomeDir,
+		pollInterval:   5 * time.Second,
+		reportInterval: time.Minute,
+		// Pipe-режим не даёт renderer доступ к путям run. Отсутствующий или
+		// сломанный PlantUML станет видимой диагностикой, но не остановит workflow.
+		renderer:    statusreport.CommandRenderer{Executable: "plantuml", Timeout: 30 * time.Second},
+		userHomeDir: os.UserHomeDir,
 	}
 }
 
@@ -317,40 +326,23 @@ func coordinate(ctx context.Context, root, runID, executable string, out, stderr
 		return err
 	}
 	return coordinator.Execute(ctx, run, coordinator.Options{
-		Root: root, PollInterval: deps.pollInterval, Client: deps.client(executable, stderr), ContinueInterrupted: resume,
-		Notify: func(status coordinator.Status) error { return printStatus(out, status) },
+		Root: root, PollInterval: deps.pollInterval, ReportInterval: deps.reportInterval,
+		Client: deps.client(executable, stderr), ContinueInterrupted: resume,
+		Notify: func(status coordinator.Status) error {
+			return printStatus(ctx, out, filepath.Join(root, runID), status, deps.renderer)
+		},
 	})
 }
 
-// printStatus выводит полный новый снимок. Execute вызывает функцию только при
-// изменении состояния или связи, поэтому одинаковые результаты polling не шумят.
-// Все ID кодируются как строковые литералы: workflow и внешний Codex не могут
-// добавить ложную строку статуса, возврат каретки или ANSI-команду терминала.
-func printStatus(out io.Writer, status coordinator.Status) error {
-	for _, step := range status.Steps {
-		chat := "—"
-		if step.CodexThreadID != "" {
-			chat = step.CodexThreadID
-		}
-		if _, err := fmt.Fprintf(out, "%s: %s; threadId=%s; codexThreadId=%s\n",
-			strconv.QuoteToGraphic(step.ID), step.State, strconv.QuoteToGraphic(step.ThreadID), strconv.QuoteToGraphic(chat)); err != nil {
-			return err
-		}
-	}
-	if len(status.Waiting) != 0 {
-		waiting := make([]string, len(status.Waiting))
-		for index, stepID := range status.Waiting {
-			waiting[index] = strconv.QuoteToGraphic(stepID)
-		}
-		if _, err := fmt.Fprintf(out, "Ждут зависимостей: %s.\n", strings.Join(waiting, ", ")); err != nil {
-			return err
-		}
-	}
-	if status.Complete {
-		_, err := fmt.Fprintf(out, "Run %s успешно завершён.\n", strconv.QuoteToGraphic(status.RunID))
-		return err
-	}
-	return nil
+// printStatus сначала пытается обновить PlantUML-артефакты, затем всегда пишет
+// текстовый снимок и диагностику визуализации одним блоком. Ошибка renderer или
+// записи его файлов не возвращается координатору: кубики не должны останавливаться
+// из-за необязательной картинки. Ошибка самого out остаётся фатальной, потому что
+// без канала вывода основной агент не сможет наблюдать workflow.
+func printStatus(ctx context.Context, out io.Writer, runDir string, status coordinator.Status, renderer statusreport.Renderer) error {
+	artifacts, visualizationErr := statusreport.WriteArtifacts(ctx, runDir, status, renderer)
+	_, err := io.WriteString(out, statusreport.Message(status, runDir, artifacts, visualizationErr))
+	return err
 }
 
 // parseRunArguments проверяет обязательные значения и взаимоисключающие формы
