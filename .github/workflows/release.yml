@@ -1,0 +1,153 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Публичным становится только draft, в который уже загружены и проверены все
+# assets. Поэтому сбой сборки или upload не оставляет частичный публичный Release.
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    name: Проверки (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Go tests
+        run: go test -race -count=1 ./...
+      - name: Go vet
+        run: go vet ./...
+      - name: Go modules are tidy
+        run: go mod tidy -diff
+      - name: POSIX sh syntax
+        run: sh -n install.sh
+      - name: ShellCheck
+        if: runner.os == 'Linux'
+        run: shellcheck --shell=sh install.sh
+      - name: Native release smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          smoke_binary="$RUNNER_TEMP/lawa"
+          go build -trimpath \
+            -ldflags "-s -w -X github.com/stray-live-pixel/Lawa/internal/buildinfo.Version=${GITHUB_REF_NAME}" \
+            -o "$smoke_binary" ./cmd/lawa
+          test "$("$smoke_binary" version)" = "$GITHUB_REF_NAME"
+          "$smoke_binary" help >/dev/null
+          "$smoke_binary" skill > "$RUNNER_TEMP/SKILL.md"
+          cmp cmd/lawa/SKILL.md "$RUNNER_TEMP/SKILL.md"
+
+  release:
+    name: Сборка и публикация
+    needs: verify
+    runs-on: ubuntu-latest
+    env:
+      VERSION_PACKAGE: github.com/stray-live-pixel/Lawa/internal/buildinfo.Version
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Проверить release tag
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "Поддерживаются только стабильные теги vMAJOR.MINOR.PATCH: $GITHUB_REF_NAME" >&2
+            exit 1
+          fi
+
+      - name: Собрать четыре автономных бинарника
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            output="dist/lawa_${os}_${arch}"
+            env CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
+              go build -trimpath \
+              -ldflags "-s -w -X ${VERSION_PACKAGE}=${GITHUB_REF_NAME}" \
+              -o "$output" ./cmd/lawa
+          done
+
+      - name: Проверить встроенную версию и упаковать архивы
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(dist/lawa_linux_amd64 version)" = "$GITHUB_REF_NAME"
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            os=${target%/*}
+            arch=${target#*/}
+            package_dir="dist/package_${os}_${arch}"
+            mkdir "$package_dir"
+            cp "dist/lawa_${os}_${arch}" "$package_dir/lawa"
+            chmod 0755 "$package_dir/lawa"
+            tar -C "$package_dir" -czf "dist/lawa_${GITHUB_REF_NAME}_${os}_${arch}.tar.gz" lawa
+            rm -rf "$package_dir" "dist/lawa_${os}_${arch}"
+          done
+
+      - name: Подготовить versioned install.sh и checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          sed "s/^release_version='dev'$/release_version='${GITHUB_REF_NAME}'/" install.sh > dist/install.sh
+          grep -Fqx "release_version='${GITHUB_REF_NAME}'" dist/install.sh
+          chmod 0755 dist/install.sh
+          cd dist
+          sha256sum lawa_*.tar.gz install.sh > SHA256SUMS
+          sha256sum -c SHA256SUMS
+
+      - name: Загрузить полный draft и только затем опубликовать Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            test "$(gh release view "$GITHUB_REF_NAME" --json isDraft --jq .isDraft)" = true || {
+              echo "Release $GITHUB_REF_NAME уже опубликован; автоматическая перезапись запрещена" >&2
+              exit 1
+            }
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --draft \
+              --verify-tag \
+              --title "Lawa $GITHUB_REF_NAME" \
+              --notes "Готовый к установке релиз Lawa для macOS и Linux. Включает бинарник, скилл Codex, безопасный install.sh и lawa update. PNG-схемы требуют локальный PlantUML. Бинарники macOS пока не подписаны и не notarized."
+          fi
+
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/lawa_*.tar.gz dist/install.sh dist/SHA256SUMS \
+            --clobber
+
+          expected_assets=$(printf '%s\n' \
+            "SHA256SUMS" \
+            "install.sh" \
+            "lawa_${GITHUB_REF_NAME}_darwin_amd64.tar.gz" \
+            "lawa_${GITHUB_REF_NAME}_darwin_arm64.tar.gz" \
+            "lawa_${GITHUB_REF_NAME}_linux_amd64.tar.gz" \
+            "lawa_${GITHUB_REF_NAME}_linux_arm64.tar.gz" | sort)
+          actual_assets=$(gh release view "$GITHUB_REF_NAME" --json assets --jq '.assets[].name' | sort)
+          if [[ "$actual_assets" != "$expected_assets" ]]; then
+            echo "Draft содержит неверный набор assets и останется непубличным" >&2
+            diff -u <(printf '%s\n' "$expected_assets") <(printf '%s\n' "$actual_assets") || true
+            exit 1
+          fi
+
+          gh release edit "$GITHUB_REF_NAME" --draft=false --latest

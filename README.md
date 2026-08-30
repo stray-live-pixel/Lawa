@@ -23,6 +23,192 @@ Lawa превращает большую задачу в управляемый 
 зависимости. Как и лава, работа свободно течёт по готовым веткам графа, а затем
 собирается в общий результат.
 
+## Установка
+
+Готовый бинарник не требует Go. Поддерживаются macOS и Linux на `amd64` и
+`arm64`. Нужны `curl` или `wget`, а для запуска workflow — установленный и
+авторизованный Codex CLI в `PATH`.
+
+Интерактивная установка последней стабильной версии:
+
+```sh
+curl -fsSL https://github.com/stray-live-pixel/Lawa/releases/latest/download/install.sh | sh
+```
+
+Если `curl` отсутствует:
+
+```sh
+wget -qO- https://github.com/stray-live-pixel/Lawa/releases/latest/download/install.sh | sh
+```
+
+Только посмотреть план без загрузки release assets и изменений:
+
+```sh
+curl -fsSL https://github.com/stray-live-pixel/Lawa/releases/latest/download/install.sh | sh -s -- --plan
+```
+
+Перед изменениями установщик показывает версию и точные пути. По умолчанию это:
+
+```text
+бинарник: ~/.local/bin/lawa
+скилл:    ~/.codex/skills/lawa/SKILL.md
+```
+
+Если `~/.local/bin` отсутствует в `PATH`, установщик заранее показывает выбранный
+shell profile и добавляемую строку. Подтверждение по умолчанию — `Нет`; при
+`curl | sh` ответ читается из `/dev/tty`, а не из загруженного скриптом stdin.
+
+### Установка через Codex-агента
+
+Можно отправить агенту такой запрос:
+
+```text
+Установи последнюю стабильную Lawa на этот компьютер. Скачай install.sh из
+https://github.com/stray-live-pixel/Lawa/releases/latest/download/install.sh
+во временный файл и сначала запусти его с --plan. Покажи мне версию, пути,
+изменение PATH и состояние PlantUML. Если PlantUML отсутствует, отдельно спроси
+разрешение на показанную системную команду. После моего ответа запусти тот же
+временный install.sh с --yes; добавь --install-plantuml только если я явно
+разрешил установку. В конце проверь lawa version, lawa help и установленный скилл.
+```
+
+Агент должен использовать один и тот же временный файл для `--plan` и установки:
+так между подтверждением и записью не подменится выбранная версия. Обычный
+`--yes` разрешает только показанные файлы Lawa и изменение `PATH`. Системный
+пакетный менеджер и `sudo` разрешает только отдельный `--install-plantuml`.
+
+### PlantUML
+
+Установщик всегда запускает `plantuml -version` до изменения Lawa. Без PlantUML
+workflow и текстовые статусы работают, но `workflow-status.png` не создаётся.
+Если команда недоступна, установщик показывает подходящий вариант:
+
+```sh
+# macOS
+brew install plantuml
+
+# Debian/Ubuntu
+sudo apt-get update
+sudo apt-get install -y plantuml
+
+# Fedora
+sudo dnf install -y plantuml
+
+# Arch Linux
+sudo pacman -S --needed --noconfirm plantuml
+```
+
+В интерактивном режиме установка PlantUML имеет отдельный вопрос с ответом
+`Нет` по умолчанию. Для агента или CI нужны оба флага:
+
+```sh
+sh install.sh --yes --install-plantuml
+```
+
+Перед `sudo` печатается точная команда. После пакетного менеджера повторно
+проверяется `plantuml -version`; ошибка останавливает процесс до изменения
+бинарника и скилла Lawa. Для неизвестного пакетного менеджера автоматическая
+установка запрещена — используйте
+[официальную инструкцию PlantUML](https://plantuml.com/command-line).
+
+### Проверка и PATH
+
+После установки откройте новую shell-сессию и выполните:
+
+```sh
+command -v lawa
+lawa version
+lawa help
+test -f "${CODEX_HOME:-$HOME/.codex}/skills/lawa/SKILL.md"
+plantuml -version
+```
+
+Если текущая сессия ещё не видит Lawa, выполните строку `export PATH=...`, которую
+напечатал установщик, или перечитайте изменённый profile. После обновления скилла
+перезапустите Codex либо обновите список скиллов.
+
+Пути и версия переопределяются аргументами или окружением:
+
+```sh
+sh install.sh --version v0.1.0 \
+  --install-dir "$HOME/bin" \
+  --codex-home "$HOME/.codex"
+
+LAWA_VERSION=v0.1.0 \
+LAWA_INSTALL_DIR="$HOME/bin" \
+LAWA_CODEX_HOME="$HOME/.codex" \
+sh install.sh
+```
+
+Пути должны быть абсолютными; пробелы поддерживаются. `--plan` не скачивает
+release assets и ничего не изменяет. Неподдерживаемая платформа, отсутствие
+инструментов, ошибка сети, неверный checksum или сбой записи завершаются понятной
+ошибкой. Прежний рабочий бинарник и скилл восстанавливаются при ошибке публикации.
+
+### Обновление
+
+```sh
+lawa update
+```
+
+Команда показывает переход версии и пути, скачивает `install.sh` и
+`SHA256SUMS` из последнего стабильного GitHub Release, проверяет SHA-256 скрипта
+и только затем запускает его. Установщик повторно проверяет checksum архива.
+Неинтерактивное обновление файлов Lawa:
+
+```sh
+lawa update --yes
+```
+
+`lawa update --yes --install-plantuml` допустим только после отдельного согласия
+пользователя. Для нестандартного корня скиллов передайте `--codex-home`. Сборка
+`dev` не обновляет себя и предлагает установить официальный release.
+
+### Ручная проверка конкретного release
+
+Для аудита без `curl | sh` скачайте три asset одного тега:
+
+```sh
+version=v0.1.0
+base="https://github.com/stray-live-pixel/Lawa/releases/download/$version"
+archive="lawa_${version}_darwin_arm64.tar.gz" # выберите свою ОС/архитектуру
+curl -fLO "$base/install.sh"
+curl -fLO "$base/SHA256SUMS"
+curl -fLO "$base/$archive"
+```
+
+Сверьте только скачанные файлы. На Linux:
+
+```sh
+awk -v archive="$archive" '$2 == "install.sh" || $2 == archive' SHA256SUMS | sha256sum -c -
+```
+
+На macOS:
+
+```sh
+awk -v archive="$archive" '$2 == "install.sh" || $2 == archive' SHA256SUMS | shasum -a 256 -c -
+```
+
+После двух ответов `OK` запустите `sh install.sh --version "$version"`. Не
+смешивайте файлы разных тегов.
+
+### Удаление
+
+Узнайте пути через `command -v lawa` и `echo "${CODEX_HOME:-$HOME/.codex}"`, затем
+удалите только установленные файлы:
+
+```sh
+rm "$HOME/.local/bin/lawa"
+rm "$HOME/.codex/skills/lawa/SKILL.md"
+```
+
+Если установщик добавлял `export PATH=...`, удалите показанную строку и соседний
+комментарий Lawa из `.zshrc`, `.bashrc` или `.profile`. Пользовательские workflow
+и run в `~/.light-ai-workflows` автоматически не удаляются.
+
+Бинарники macOS первого релиза не подписаны и не notarized. Если Gatekeeper
+блокирует скачанный файл, проверьте тег и SHA-256 перед ручным разрешением запуска.
+
 ## Зачем нужна Lawa
 
 Один агент хорошо решает последовательную задачу. Но ревью, исследование,
@@ -62,41 +248,6 @@ flowchart LR
 Чат-инициатор остаётся интерфейсом управления: в нём пользователь запускает
 workflow, получает `runId`, следит за важными изменениями и продолжает остановленный
 запуск. Каждый кубик выполняется в своей задаче Codex и остаётся видимым в приложении.
-
-## Быстрый старт
-
-### Требования
-
-- Go 1.27.0 или новее;
-- macOS или Linux;
-- установленный и авторизованный Codex CLI, доступный как `codex` в `PATH`.
-
-Живой сквозной сценарий подтверждён на macOS. Для Linux код и файловые блокировки
-поддерживаются, но перед выпуском Linux-сборки нужна отдельная ручная проверка.
-
-### Сборка
-
-```sh
-git clone https://github.com/stray-live-pixel/Lawa.git
-cd Lawa
-go build -o bin/lawa ./cmd/lawa
-./bin/lawa help
-```
-
-Внешних Go-зависимостей у проекта нет. Версия Go закреплена в `go.mod`.
-
-### Установка скилла в проект
-
-Команда `skill` печатает готовый `SKILL.md`, но намеренно не выбирает место
-установки за пользователя:
-
-```sh
-mkdir -p .agents/skills/lawa
-./bin/lawa skill > .agents/skills/lawa/SKILL.md
-```
-
-После установки обновите список скиллов Codex. В этом репозитории проектный скилл
-уже находится в `.agents/skills/lawa`.
 
 ## Запуск из Codex App
 
@@ -187,6 +338,8 @@ lawa run <workflow.json> --cwd <проект> \
 lawa resume <run-id>
 lawa validate <workflow.json>
 lawa skill
+lawa version
+lawa update [--yes] [--install-plantuml] [--codex-home <путь>]
 lawa help
 ```
 
@@ -264,16 +417,32 @@ PNG удаляется, чтобы его нельзя было принять �
 
 ## Разработка
 
+Для сборки из исходников нужен Go из `go.mod`:
+
+```sh
+git clone https://github.com/stray-live-pixel/Lawa.git
+cd Lawa
+go build -o bin/lawa ./cmd/lawa
+./bin/lawa version # dev
+./bin/lawa help
+```
+
+Локальная версия намеренно равна `dev`. Release workflow задаёт tag через linker
+metadata и собирает автономные бинарники с `CGO_ENABLED=0`.
+
 ```sh
 go test -race -count=1 ./...
 go vet ./...
 go mod tidy -diff
+sh -n install.sh
+shellcheck --shell=sh install.sh
 ```
 
 Основные модули:
 
 ```text
 cmd/lawa/             CLI, сигналы, preflight и встроенный SKILL.md
+internal/buildinfo/   единый источник версии release-сборки
 internal/workflow/    строгий разбор и проверка JSON-графа
 internal/scheduler/   расчёт готовых и ожидающих кубиков
 internal/coordinator/ запуск волн, наблюдение и восстановление

@@ -40,6 +40,7 @@ func TestCLI(t *testing.T) {
 		{"короткая справка", []string{"-h"}, "Команды:"},
 		{"длинная справка", []string{"--help"}, "Команды:"},
 		{"инструкция скилла", []string{"skill"}, "# Lawa: запуск workflow из чата Codex"},
+		{"версия", []string{"version"}, "dev"},
 		{"пример", []string{"validate", "../../examples/review.json"}, `Workflow "review" корректен; шагов: 4.`},
 		{"неверный граф", []string{"validate", invalid}, ""},
 		{"нет файла", []string{"validate", invalid + ".missing"}, ""},
@@ -49,6 +50,7 @@ func TestCLI(t *testing.T) {
 		{"несуществующая команда", []string{"unknown"}, ""},
 		{"run не маскируется проверкой", []string{"run", invalid}, ""},
 		{"лишний аргумент скилла", []string{"skill", "extra"}, ""},
+		{"лишний аргумент версии", []string{"version", "extra"}, ""},
 		{"лишний аргумент справки", []string{"help", "extra"}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -238,10 +240,10 @@ func TestSkillInstruction(t *testing.T) {
 		"изменять только собственный",
 		"https://github.com/stray-live-pixel/Lawa",
 		"https://raw.githubusercontent.com/stray-live-pixel/Lawa/main/product/1.md",
-		"Если версия\nизвестна из источника установки",
-		"Если нет — не угадывай",
-		"его SHA-256 и полный вывод lawa help",
-		"получи явное разрешение перед публичной",
+		"lawa version",
+		"Значение\n   dev означает локальную сборку",
+		"его SHA-256 и полный вывод `lawa help`",
+		"явное\nразрешение перед публичной",
 		"https://github.com/stray-live-pixel/Lawa/issues/new",
 	} {
 		if !strings.Contains(skillInstruction, fragment) {

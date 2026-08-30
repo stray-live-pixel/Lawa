@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/stray-live-pixel/Lawa/internal/buildinfo"
 )
 
 // session владеет одним процессом app-server и его stdio. Активные turn разных
@@ -74,7 +76,7 @@ func openSession(ctx context.Context, command Command, result *Result) (*session
 		completed: map[string]turnCompletion{},
 	}
 	if err = s.client.call("initialize", map[string]any{
-		"clientInfo":   map[string]string{"name": "lawa", "version": "0.1.0"},
+		"clientInfo":   map[string]string{"name": "lawa", "version": buildinfo.CodexVersion()},
 		"capabilities": map[string]bool{"experimentalApi": true},
 	}, nil); err == nil {
 		err = s.client.send(map[string]any{"method": "initialized"})

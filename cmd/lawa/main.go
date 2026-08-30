@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/stray-live-pixel/Lawa/internal/buildinfo"
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
@@ -36,6 +37,10 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
       Проверить поля, ссылки и отсутствие циклов без создания run.
   lawa skill
       Вывести готовый SKILL.md для установки скилла /lawa.
+  lawa version
+      Показать версию текущего бинарника.
+  lawa update [--yes] [--install-plantuml] [--codex-home <путь>]
+      Проверить GitHub Release и безопасно обновить бинарник и скилл.
   lawa help
       Показать справку (также -h и --help).
 
@@ -53,7 +58,13 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
   --root <путь>                То же хранилище run.
   --codex <путь>               Исполняемый файл Codex.
 
-validate, skill и help не запускают агентов и не требуют подключения к Codex.
+Параметры update:
+  --yes                        Не ждать подтверждения файлов Lawa и PATH.
+  --install-plantuml           Отдельно разрешить системную установку PlantUML;
+                               требует --yes.
+  --codex-home <путь>          Корень скиллов; по умолчанию $CODEX_HOME или ~/.codex.
+
+validate, skill, version, update и help не запускают агентов и не требуют подключения к Codex.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
@@ -159,6 +170,7 @@ type dependencies struct {
 	reportInterval time.Duration
 	renderer       statusreport.Renderer
 	userHomeDir    func() (string, error)
+	update         updateDependencies
 }
 
 // productionDependencies собирает стандартное окружение команд run/resume.
@@ -177,6 +189,7 @@ func productionDependencies() dependencies {
 		// сломанный PlantUML станет видимой диагностикой, но не остановит workflow.
 		renderer:    statusreport.CommandRenderer{Executable: "plantuml", Timeout: 30 * time.Second},
 		userHomeDir: os.UserHomeDir,
+		update:      productionUpdateDependencies(),
 	}
 }
 
@@ -201,6 +214,13 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		_, err := io.WriteString(out, skillInstruction)
 		return err
 	}
+	if args[0] == "version" {
+		if len(args) != 1 {
+			return fmt.Errorf("использование: lawa version")
+		}
+		_, err := fmt.Fprintln(out, buildinfo.Version)
+		return err
+	}
 	switch args[0] {
 	case "validate":
 		return validateCommand(args[1:], out)
@@ -208,6 +228,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return runCommand(ctx, args[1:], out, stderr, deps)
 	case "resume":
 		return resumeCommand(ctx, args[1:], out, stderr, deps)
+	case "update":
+		return updateCommand(ctx, args[1:], out, stderr, deps.update)
 	default:
 		return fmt.Errorf("неизвестная команда %q; см. lawa help", args[0])
 	}

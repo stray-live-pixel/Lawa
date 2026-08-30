@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stray-live-pixel/Lawa/internal/buildinfo"
 )
 
 // TestMain позволяет запускать этот же бинарник вместо Codex. Проверяются
@@ -54,8 +56,10 @@ func fakeServer(scenario string) {
 		reply := func(v any) { send(map[string]any{"id": m.ID, "result": v}) }
 		switch m.Method {
 		case "initialize":
-			if p["capabilities"].(map[string]any)["experimentalApi"] != true {
-				panic("не включён экспериментальный протокол")
+			clientInfo := p["clientInfo"].(map[string]any)
+			if p["capabilities"].(map[string]any)["experimentalApi"] != true ||
+				clientInfo["name"] != "lawa" || clientInfo["version"] != buildinfo.CodexVersion() {
+				panic("неверны возможности или единая версия clientInfo")
 			}
 			reply(map[string]any{})
 		case "initialized":
