@@ -3,6 +3,7 @@
   const slides = [...document.querySelectorAll("[data-slide]")];
   const arrows = [...document.querySelectorAll("[data-direction]")];
   const currentLabel = document.querySelector(".slide-progress__current");
+  const totalLabel = document.querySelector(".slide-progress__total");
   const progressBar = document.querySelector(".slide-progress b");
   const status = document.querySelector("[data-slide-status]");
   const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -20,6 +21,8 @@
   arrows.forEach((button) => {
     button.addEventListener("click", () => {
       const next = currentSlide + Number(button.dataset.direction);
+      // Выравнивание слайда запускают только крупные стрелки. Обычный скролл не
+      // перехватывается и не доводится до секции через CSS scroll-snap.
       slides[next]?.scrollIntoView({ behavior: reducedMotion ? "auto" : "smooth" });
     });
   });
@@ -36,53 +39,43 @@
     { threshold: [0, 0.2, 0.4, 0.6, 0.8] },
   );
   slides.forEach((slide) => slideObserver.observe(slide));
+  totalLabel.textContent = String(slides.length).padStart(2, "0");
   selectSlide(0);
   const copyButton = document.querySelector("[data-copy]");
+  const copySource = document.querySelector("[data-copy-source]");
+  const defaultCopyLabel = copyButton?.getAttribute("aria-label") ?? "";
+  const defaultCopyTitle = copyButton?.getAttribute("title") ?? "";
+  let copyFeedbackTimer = 0;
+
+  /** Показывает результат копирования, не заменяя компактную иконку текстовой кнопкой. */
+  function showCopyFeedback(state, label, title) {
+    window.clearTimeout(copyFeedbackTimer);
+    copyButton.classList.remove("is-copied", "is-error");
+    copyButton.classList.add(state);
+    copyButton.setAttribute("aria-label", label);
+    copyButton.setAttribute("title", title);
+    copyFeedbackTimer = window.setTimeout(() => {
+      copyButton.classList.remove("is-copied", "is-error");
+      copyButton.setAttribute("aria-label", defaultCopyLabel);
+      copyButton.setAttribute("title", defaultCopyTitle);
+    }, 1800);
+  }
+
   copyButton?.addEventListener("click", async () => {
-    const command = copyButton.previousElementSibling.textContent.trim();
+    const prompt = copySource?.textContent.trim();
+    if (!prompt) return;
     try {
-      await navigator.clipboard.writeText(command);
-      copyButton.textContent = "Скопировано";
-      window.setTimeout(() => (copyButton.textContent = "Копировать"), 1800);
+      await navigator.clipboard.writeText(prompt);
+      showCopyFeedback("is-copied", "Промпт скопирован", "Промпт скопирован");
     } catch {
-      copyButton.textContent = "Выделите вручную";
+      showCopyFeedback("is-error", "Не удалось скопировать промпт", "Выделите текст вручную");
     }
   });
 
-  const parallaxLayers = [...document.querySelectorAll("[data-parallax]")];
-  let parallaxFrame = 0;
-  /** Смещает только декоративные изображения; контент всегда прокручивается браузером. */
-  function renderParallax() {
-    parallaxFrame = 0;
-    const viewportCenter = window.innerHeight / 2;
-    parallaxLayers.forEach((layer) => {
-      const stage = layer.parentElement.getBoundingClientRect();
-      const distance = viewportCenter - (stage.top + stage.height / 2);
-      const offset = reducedMotion ? 0 : distance * Number(layer.dataset.parallax);
-      layer.style.transform = `translate(-50%, calc(-50% + ${offset}px))`;
-    });
-  }
-
-  function scheduleParallax() {
-    if (!parallaxFrame) parallaxFrame = window.requestAnimationFrame(renderParallax);
-  }
-
-  window.addEventListener("scroll", scheduleParallax, { passive: true });
-  window.addEventListener("resize", scheduleParallax);
-  renderParallax();
   const canvas = document.querySelector(".lava-canvas");
   if (!canvas) return;
   const context = canvas.getContext("2d", { alpha: true });
   if (!context) return;
-  const hero = document.querySelector(".slide--hero");
-  const pointer = {
-    x: 0.78,
-    y: 0.5,
-    targetX: 0.78,
-    targetY: 0.5,
-    influence: 0,
-    active: false,
-  };
   const waves = [
     {
       base: 0.14,
@@ -91,7 +84,7 @@
       frequency: 1.35,
       speed: 0.00026,
       phase: 0.4,
-      colors: ["rgba(255, 61, 0, 0)", "rgba(255, 78, 0, 0.68)", "rgba(255, 166, 0, 0.86)"],
+      colors: ["rgba(65, 11, 3, 0.3)", "rgba(132, 31, 7, 0.54)", "rgba(180, 66, 10, 0.58)"],
     },
     {
       base: 0.4,
@@ -100,7 +93,7 @@
       frequency: 1.12,
       speed: -0.0002,
       phase: 2.1,
-      colors: ["rgba(255, 61, 0, 0)", "rgba(255, 90, 0, 0.74)", "rgba(255, 184, 0, 0.94)"],
+      colors: ["rgba(54, 9, 3, 0.28)", "rgba(151, 39, 7, 0.58)", "rgba(197, 81, 11, 0.64)"],
     },
     {
       base: 0.69,
@@ -109,7 +102,7 @@
       frequency: 0.92,
       speed: 0.00017,
       phase: 4.4,
-      colors: ["rgba(143, 28, 0, 0)", "rgba(255, 61, 0, 0.66)", "rgba(255, 119, 0, 0.88)"],
+      colors: ["rgba(48, 7, 2, 0.3)", "rgba(119, 25, 5, 0.52)", "rgba(168, 49, 8, 0.58)"],
     },
     {
       base: 0.94,
@@ -118,7 +111,7 @@
       frequency: 0.74,
       speed: -0.00013,
       phase: 5.7,
-      colors: ["rgba(111, 17, 0, 0)", "rgba(211, 47, 0, 0.52)", "rgba(255, 90, 0, 0.76)"],
+      colors: ["rgba(38, 6, 2, 0.32)", "rgba(91, 18, 4, 0.48)", "rgba(137, 35, 6, 0.54)"],
     },
   ];
   let width = 0;
@@ -138,41 +131,26 @@
   /**
    * Возвращает вертикальную координату поверхности волны.
    *
-   * Две синусоиды создают живое течение без повторяющегося «эквалайзера».
-   * Курсор не тянет отдельную точку: он локально отталкивает весь слой и запускает
-   * затухающую рябь. Поэтому эффект остаётся непрерывной жидкостью.
+   * Две синусоиды с разной частотой создают самостоятельное медленное течение.
+   * Координата зависит только от времени: курсор не вмешивается в фон и не
+   * перетягивает внимание с содержимого страницы на декоративную анимацию.
    */
   function getWaveY(wave, x, time, edge) {
-    const startX = width < 640 ? width * 0.38 : width * 0.42;
-    const span = Math.max(width - startX, 1);
-    const progress = (x - startX) / span;
+    const progress = x / Math.max(width, 1);
     const flow = Math.sin(progress * Math.PI * 2 * wave.frequency + time * wave.speed + wave.phase);
     const detail = Math.sin(progress * Math.PI * 5.2 - time * wave.speed * 0.72 + wave.phase * 1.7);
-    const naturalY =
-      wave.base * height +
-      flow * wave.amplitude * height +
-      detail * wave.amplitude * height * 0.24;
-    const pointerX = pointer.x * width;
-    const pointerY = pointer.y * height;
-    const radius = Math.max(Math.min(width, height) * 0.28, 180);
-    const horizontalDistance = (x - pointerX) / radius;
-    const proximity = Math.exp(-horizontalDistance * horizontalDistance * 2.7) * pointer.influence;
-    const repulsion = (naturalY - pointerY) * proximity * 0.48;
-    const ripple =
-      Math.sin(Math.abs(horizontalDistance) * 8.5 - time * 0.004) *
-      height *
-      0.013 *
-      proximity;
-    const breathing = 1 + Math.sin(progress * Math.PI * 2.4 + wave.phase) * 0.12;
-    const halfThickness = wave.thickness * height * breathing * (0.5 + proximity * 0.12);
-    return naturalY + repulsion + ripple + halfThickness * edge;
+    const baseline = wave.base * height;
+    const texture =
+      flow * wave.amplitude * height + detail * wave.amplitude * height * 0.24;
+    const breathing = 1 + Math.sin(progress * Math.PI * 2.4 + wave.phase) * 0.1;
+    const halfThickness = wave.thickness * height * breathing * 0.5;
+    return baseline + texture + halfThickness * edge;
   }
 
   function traceWaveEdge(wave, time, edge, reverse = false) {
-    const startX = width < 640 ? width * 0.34 : width * 0.38;
     const step = Math.max(8, width / 140);
     const points = [];
-    for (let x = startX; x <= width + step; x += step) {
+    for (let x = -step; x <= width + step; x += step) {
       points.push([x, getWaveY(wave, x, time, edge)]);
     }
     if (reverse) points.reverse();
@@ -184,14 +162,13 @@
 
   /** Рисует цельную ленту и внутренний блик, подчёркивающий вязкость материала. */
   function drawWave(wave, time, index) {
-    const startX = width < 640 ? width * 0.34 : width * 0.38;
-    const fill = context.createLinearGradient(startX, 0, width, 0);
-    fill.addColorStop(0, wave.colors[0]);
-    fill.addColorStop(0.38, wave.colors[1]);
+    const fill = context.createLinearGradient(0, 0, width, 0);
+    fill.addColorStop(0, wave.colors[1]);
+    fill.addColorStop(0.48, wave.colors[2]);
     fill.addColorStop(1, wave.colors[2]);
     context.save();
-    context.shadowColor = index === 1 ? "rgba(255, 111, 0, 0.42)" : "rgba(255, 61, 0, 0.24)";
-    context.shadowBlur = index === 1 ? 38 : 26;
+    context.shadowColor = index === 1 ? "rgba(151, 44, 8, 0.3)" : "rgba(108, 24, 5, 0.2)";
+    context.shadowBlur = index === 1 ? 34 : 24;
     context.fillStyle = fill;
     context.beginPath();
     traceWaveEdge(wave, time, -1);
@@ -200,10 +177,10 @@
     context.fill();
     context.restore();
 
-    const highlight = context.createLinearGradient(startX, 0, width, 0);
-    highlight.addColorStop(0, "rgba(255, 207, 128, 0)");
-    highlight.addColorStop(0.5, "rgba(255, 214, 136, 0.2)");
-    highlight.addColorStop(1, "rgba(255, 239, 185, 0.62)");
+    const highlight = context.createLinearGradient(0, 0, width, 0);
+    highlight.addColorStop(0, "rgba(176, 49, 9, 0.1)");
+    highlight.addColorStop(0.5, "rgba(205, 69, 11, 0.16)");
+    highlight.addColorStop(1, "rgba(230, 98, 14, 0.28)");
     context.strokeStyle = highlight;
     context.lineWidth = Math.max(1, height * 0.003);
     context.beginPath();
@@ -214,9 +191,6 @@
   function renderCanvas(time) {
     if (!canvasVisible) return;
     const animationTime = reducedMotion ? 0 : time;
-    pointer.x += (pointer.targetX - pointer.x) * 0.085;
-    pointer.y += (pointer.targetY - pointer.y) * 0.085;
-    pointer.influence += ((pointer.active && !reducedMotion ? 1 : 0) - pointer.influence) * 0.07;
     context.clearRect(0, 0, width, height);
     context.save();
     context.globalCompositeOperation = "screen";
@@ -225,24 +199,16 @@
     animationFrame = window.requestAnimationFrame(renderCanvas);
   }
 
-  canvas.addEventListener("pointermove", (event) => {
-    const bounds = canvas.getBoundingClientRect();
-    pointer.targetX = (event.clientX - bounds.left) / bounds.width;
-    pointer.targetY = (event.clientY - bounds.top) / bounds.height;
-    pointer.active = true;
-  });
-
-  canvas.addEventListener("pointerleave", () => (pointer.active = false));
-  // Вне первого экрана анимация полностью останавливается и не расходует ресурсы.
-  new IntersectionObserver(([entry]) => {
-    canvasVisible = entry.isIntersecting;
+  /** Общий фон нужен на каждом слайде, но в скрытой вкладке цикл можно безопасно остановить. */
+  document.addEventListener("visibilitychange", () => {
+    canvasVisible = !document.hidden;
     if (canvasVisible && !animationFrame) {
       animationFrame = window.requestAnimationFrame(renderCanvas);
     } else if (!canvasVisible && animationFrame) {
       window.cancelAnimationFrame(animationFrame);
       animationFrame = 0;
     }
-  }).observe(hero);
+  });
   window.addEventListener("resize", resizeCanvas);
   resizeCanvas();
   animationFrame = window.requestAnimationFrame(renderCanvas);
