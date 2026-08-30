@@ -63,7 +63,10 @@ func (fixture *installerFixture) prepareTools() {
 	fixture.t.Helper()
 	// Эти команды не подменяются по смыслу; ссылки лишь не дают тесту случайно
 	// увидеть настоящий plantuml, brew или пакетный менеджер из PATH машины.
-	for _, name := range []string{"awk", "chmod", "cp", "dirname", "grep", "mkdir", "mktemp", "mv", "readlink", "rm", "sed", "tar"} {
+	// GNU tar запускает gzip отдельным процессом при распаковке .tar.gz, поэтому
+	// gzip тоже должен входить в изолированный PATH. BSD tar на macOS распаковывает
+	// тот же архив сам, из-за чего отсутствие ссылки раньше обнаруживалось лишь CI Linux.
+	for _, name := range []string{"awk", "chmod", "cp", "dirname", "grep", "gzip", "mkdir", "mktemp", "mv", "readlink", "rm", "sed", "tar"} {
 		target, err := exec.LookPath(name)
 		if err != nil {
 			fixture.t.Fatalf("для теста установщика нужна команда %s: %v", name, err)
