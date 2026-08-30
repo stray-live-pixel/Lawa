@@ -24,6 +24,10 @@
   <body>
     <a class="skip-link" href="#main">Перейти к содержимому</a>
 
+    <div class="lava-backdrop" aria-hidden="true">
+      <canvas class="lava-canvas"></canvas>
+    </div>
+
     <header class="site-header" aria-label="Основная навигация">
       <a class="brand" href="#hero" aria-label="Lawa — к первому слайду">
         <img src="assets/lawa-logo.png" width="44" height="44" alt="">
@@ -42,85 +46,157 @@
 
     <main id="main">
       <section class="slide slide--hero" id="hero" data-slide="0" aria-labelledby="hero-title">
-        <canvas class="lava-canvas" aria-hidden="true"></canvas>
-        <div class="hero-orbit hero-orbit--one" aria-hidden="true"></div>
-        <div class="hero-orbit hero-orbit--two" aria-hidden="true"></div>
         <div class="slide__inner hero-content">
-          <p class="eyebrow"><span></span> Workflow-оркестратор для Codex</p>
-          <h1 id="hero-title">
-            Большие задачи<br>
-            <em>текут быстрее.</em>
-          </h1>
-          <p class="hero-lead">
-            Разложите работу на независимые потоки. Lawa запустит AI-агентов параллельно,
-            дождётся зависимостей и соберёт всё в один результат.
-          </p>
-          <div class="hero-actions">
-            <a class="button button--primary" href="#flow">
-              Смотреть поток
-              <span aria-hidden="true">↓</span>
-            </a>
-            <a
-              class="button button--ghost"
-              href="https://github.com/stray-live-pixel/Lawa"
-              target="_blank"
-              rel="noreferrer"
-            >
-              Открыть GitHub
-            </a>
+          <div class="hero-copy">
+            <p class="eyebrow"><span></span> Workflow-оркестратор для Codex</p>
+            <h1 id="hero-title">
+              Большие задачи<br>
+              <em>текут быстрее.</em>
+            </h1>
+            <p class="hero-lead">
+              Разложите работу на независимые потоки. Lawa запустит AI-агентов параллельно,
+              дождётся зависимостей и соберёт всё в один результат.
+            </p>
+            <div class="hero-actions">
+              <a class="button button--primary" href="#example">
+                Смотреть реальный запуск
+                <span aria-hidden="true">↓</span>
+              </a>
+              <a
+                class="button button--ghost"
+                href="https://github.com/stray-live-pixel/Lawa"
+                target="_blank"
+                rel="noreferrer"
+              >
+                Открыть GitHub
+              </a>
+            </div>
           </div>
+          <p class="scroll-hint" aria-hidden="true"><span></span> Листайте вниз</p>
         </div>
-        <p class="scroll-hint" aria-hidden="true"><span></span> Листайте вниз</p>
       </section>
 
-      <section class="slide slide--problem" id="why" data-slide="1" aria-labelledby="why-title">
+      <section class="slide slide--example" id="example" data-slide="1" aria-labelledby="example-title">
+        <div class="slide__inner example-layout">
+          <div class="example-intro">
+            <p class="slide-number">01 / Живой запуск</p>
+            <h2 id="example-title">15 агентов.<br><em>Один отчёт.</em></h2>
+            <p class="section-lead">
+              Реальный workflow полного ревью: один агент фиксирует снимок проекта,
+              12 экспертов работают параллельно, ещё два собирают и перепроверяют выводы.
+            </p>
+            <dl class="example-facts" aria-label="Результаты запуска">
+              <div><dt>12</dt><dd>параллельных критериев</dd></div>
+              <div><dt>15 / 15</dt><dd>кубиков завершены</dd></div>
+              <div><dt>84 / 100</dt><dd>итог ревью</dd></div>
+            </dl>
+          </div>
+
+          <article class="workflow-example" aria-label="Схема реального запуска review-by-criteria">
+            <div class="workflow-example__header">
+              <span><i></i> REAL RUN / REVIEW-BY-CRITERIA</span>
+              <b>SUCCEEDED</b>
+            </div>
+            <div class="workflow-diagram">
+              <div class="workflow-node workflow-node--scope">
+                <span>01 · Контекст</span>
+                <strong>scope</strong>
+                <small>единый снимок</small>
+              </div>
+
+              <div class="workflow-parallel">
+                <p>12 параллельных проверок</p>
+                <div class="workflow-criteria">
+                  <span>Читаемость</span>
+                  <span>Комментарии</span>
+                  <span>Архитектура</span>
+                  <span>Скорость</span>
+                  <span>Устойчивость</span>
+                  <span>Тесты</span>
+                  <span>Контракты</span>
+                  <span>Корректность</span>
+                  <span>Безопасность</span>
+                  <span>Совместимость</span>
+                  <span>Эксплуатация</span>
+                  <span>Минимальность</span>
+                </div>
+              </div>
+
+              <div class="workflow-node workflow-node--review">
+                <span>14 · Проверка</span>
+                <strong>findings-review</strong>
+                <small>убирает повторы</small>
+              </div>
+
+              <div class="workflow-node workflow-node--final">
+                <span>15 · Результат</span>
+                <strong>final-report</strong>
+                <small>20 элементов</small>
+              </div>
+            </div>
+            <div class="workflow-example__result">
+              <span>Один снимок проекта</span>
+              <strong>→ 12 мнений → перепроверка → отчёт</strong>
+            </div>
+          </article>
+        </div>
+      </section>
+
+      <section class="slide slide--problem" id="why" data-slide="2" aria-labelledby="why-title">
         <div class="slide__inner split-layout">
           <div>
-            <p class="slide-number">01 / Поток вместо очереди</p>
+            <p class="slide-number">02 / Поток вместо очереди</p>
             <h2 id="why-title">Один агент не должен делать всё по очереди.</h2>
           </div>
-          <div class="comparison" aria-label="Сравнение последовательной работы и Lawa">
-            <article class="comparison-card comparison-card--muted">
-              <p class="comparison-card__label">Обычный сценарий</p>
-              <div class="linear-flow" aria-hidden="true">
-                <span>Исследование</span><i></i><span>Код</span><i></i><span>Ревью</span>
-              </div>
-              <p>Каждый следующий шаг ждёт предыдущий, даже если задачи не связаны.</p>
-            </article>
-            <article class="comparison-card comparison-card--hot">
-              <p class="comparison-card__label">С Lawa</p>
-              <div class="parallel-flow" aria-hidden="true">
-                <span>Исследование</span><span>Код</span><span>Ревью</span><b>Результат</b>
-              </div>
-              <p>Независимые ветки идут одновременно и сходятся только там, где это нужно.</p>
-            </article>
+          <div class="comparison-table">
+            <table>
+              <caption class="sr-only">Сравнение работы без Lawa и с Lawa</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Сценарий</th>
+                  <th scope="col">Без Lawa</th>
+                  <th scope="col">С Lawa</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <th scope="row">Независимые задачи</th>
+                  <td data-label="Без Lawa">Идут по очереди</td>
+                  <td data-label="С Lawa">Стартуют параллельно</td>
+                </tr>
+                <tr>
+                  <th scope="row">Зависимости</th>
+                  <td data-label="Без Lawa">Контролирует человек</td>
+                  <td data-label="С Lawa">Проверяет граф</td>
+                </tr>
+                <tr>
+                  <th scope="row">Контекст</th>
+                  <td data-label="Без Lawa">Смешивается в одном чате</td>
+                  <td data-label="С Lawa">Разделён по агентам</td>
+                </tr>
+                <tr>
+                  <th scope="row">Пауза или сбой</th>
+                  <td data-label="Без Lawa">Продолжение вручную</td>
+                  <td data-label="С Lawa"><code>resume</code> с того же run</td>
+                </tr>
+                <tr>
+                  <th scope="row">Общий итог</th>
+                  <td data-label="Без Lawa">Нужно сводить вручную</td>
+                  <td data-label="С Lawa">Собирает итоговый кубик</td>
+                </tr>
+              </tbody>
+            </table>
+            <p class="comparison-note">
+              Короткую линейную задачу проще оставить одному агенту. Lawa раскрывается,
+              когда есть несколько независимых веток и общий этап сборки.
+            </p>
           </div>
         </div>
       </section>
 
-      <section class="slide slide--flow" id="flow" data-slide="2" aria-labelledby="flow-title">
-        <div class="parallax-stage" aria-hidden="true">
-          <img
-            class="parallax-layer parallax-layer--back"
-            src="assets/landing/lava-depth-back.webp"
-            alt=""
-            data-parallax="0.04"
-          >
-          <img
-            class="parallax-layer parallax-layer--middle"
-            src="assets/landing/lava-depth-middle.webp"
-            alt=""
-            data-parallax="0.09"
-          >
-          <img
-            class="parallax-layer parallax-layer--front"
-            src="assets/landing/lava-depth-front.webp"
-            alt=""
-            data-parallax="0.15"
-          >
-        </div>
+      <section class="slide slide--flow" id="flow" data-slide="3" aria-labelledby="flow-title">
         <div class="slide__inner flow-content">
-          <p class="slide-number">02 / Как это работает</p>
+          <p class="slide-number">03 / Как это работает</p>
           <h2 id="flow-title">Опишите граф.<br>Дальше поток ведёт Lawa.</h2>
           <ol class="flow-steps">
             <li><span>01</span><strong>Проверяет</strong> зависимости и циклы до запуска.</li>
@@ -130,10 +206,10 @@
         </div>
       </section>
 
-      <section class="slide slide--control" id="control" data-slide="3" aria-labelledby="control-title">
+      <section class="slide slide--control" id="control" data-slide="4" aria-labelledby="control-title">
         <div class="slide__inner control-layout">
           <div>
-            <p class="slide-number">03 / Состояние под контролем</p>
+            <p class="slide-number">04 / Состояние под контролем</p>
             <h2 id="control-title">Остановитесь.<br><em>Продолжите с того же места.</em></h2>
             <p class="section-lead">
               Lawa сохраняет граф, чаты и память каждого агента. После сбоя или паузы
@@ -155,20 +231,36 @@
         </div>
       </section>
 
-      <section class="slide slide--start" id="start" data-slide="4" aria-labelledby="start-title">
+      <section class="slide slide--start" id="start" data-slide="5" aria-labelledby="start-title">
         <div class="slide__inner start-layout">
           <div>
-            <p class="slide-number">04 / Быстрый старт</p>
+            <p class="slide-number">05 / Быстрый старт</p>
             <h2 id="start-title">Направьте<br><em>свой первый поток.</em></h2>
             <p class="section-lead">macOS и Linux · один бинарник · работа из привычного чата Codex.</p>
           </div>
           <div class="install-panel">
-            <p>Установка последней версии</p>
-            <div class="command">
-              <code>curl -fsSL https://github.com/stray-live-pixel/Lawa/releases/latest/download/install.sh | sh</code>
-              <button type="button" data-copy aria-label="Скопировать команду установки">Копировать</button>
+            <div class="install-panel__heading">
+              <p>Промпт для Codex-агента</p>
+              <button
+                class="copy-button"
+                type="button"
+                data-copy
+                aria-label="Скопировать промпт для Codex-агента"
+                title="Скопировать промпт"
+              >
+                <svg class="copy-button__icon copy-button__icon--copy" viewBox="0 0 24 24" aria-hidden="true">
+                  <rect x="8" y="8" width="11" height="11" rx="2"></rect>
+                  <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"></path>
+                </svg>
+                <svg class="copy-button__icon copy-button__icon--success" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="m5 12 4 4L19 6"></path>
+                </svg>
+              </button>
             </div>
-            <p class="install-note">После установки сформулируйте задачу и вызовите <code>$lawa</code> в Codex.</p>
+            <div class="command">
+              <code data-copy-source>Установи последнюю стабильную версию Lawa из GitHub Release. Сначала запусти install.sh с --plan и покажи план установки. Перед системными командами отдельно запроси моё разрешение. После подтверждения установи Lawa и проверь lawa version, lawa help и установленный скилл.</code>
+            </div>
+            <p class="install-note">Скопируйте текст в Codex: агент покажет план до изменений и запросит нужные подтверждения.</p>
             <a
               class="button button--primary button--wide"
               href="https://github.com/stray-live-pixel/Lawa#установка"
@@ -178,11 +270,11 @@
               Начать с Lawa <span aria-hidden="true">↗</span>
             </a>
           </div>
+          <footer>
+            <span>Lawa · open source</span>
+            <a href="https://github.com/stray-live-pixel/Lawa">github.com/stray-live-pixel/Lawa</a>
+          </footer>
         </div>
-        <footer>
-          <span>Lawa · open source</span>
-          <a href="https://github.com/stray-live-pixel/Lawa">github.com/stray-live-pixel/Lawa</a>
-        </footer>
       </section>
     </main>
 
@@ -193,12 +285,12 @@
       <div class="slide-progress">
         <span class="slide-progress__current">01</span>
         <i aria-hidden="true"><b></b></i>
-        <span>05</span>
+        <span class="slide-progress__total">06</span>
       </div>
       <button class="slide-arrow" type="button" data-direction="1" aria-label="Следующий слайд">
         <span aria-hidden="true">↓</span>
       </button>
-      <p class="sr-only" aria-live="polite" data-slide-status>Слайд 1 из 5</p>
+      <p class="sr-only" aria-live="polite" data-slide-status>Слайд 1 из 6</p>
     </nav>
   </body>
 </html>
