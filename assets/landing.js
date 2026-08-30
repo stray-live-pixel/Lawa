@@ -73,26 +73,58 @@
   const canvas = document.querySelector(".lava-canvas");
   if (!canvas) return;
   const context = canvas.getContext("2d", { alpha: true });
+  if (!context) return;
   const hero = document.querySelector(".slide--hero");
-  const pointer = { x: 0.72, y: 0.5, active: false };
-  let blobs = [];
+  const pointer = {
+    x: 0.78,
+    y: 0.5,
+    targetX: 0.78,
+    targetY: 0.5,
+    influence: 0,
+    active: false,
+  };
+  const waves = [
+    {
+      base: 0.14,
+      thickness: 0.12,
+      amplitude: 0.035,
+      frequency: 1.35,
+      speed: 0.00026,
+      phase: 0.4,
+      colors: ["rgba(255, 61, 0, 0)", "rgba(255, 78, 0, 0.68)", "rgba(255, 166, 0, 0.86)"],
+    },
+    {
+      base: 0.4,
+      thickness: 0.16,
+      amplitude: 0.048,
+      frequency: 1.12,
+      speed: -0.0002,
+      phase: 2.1,
+      colors: ["rgba(255, 61, 0, 0)", "rgba(255, 90, 0, 0.74)", "rgba(255, 184, 0, 0.94)"],
+    },
+    {
+      base: 0.69,
+      thickness: 0.2,
+      amplitude: 0.058,
+      frequency: 0.92,
+      speed: 0.00017,
+      phase: 4.4,
+      colors: ["rgba(143, 28, 0, 0)", "rgba(255, 61, 0, 0.66)", "rgba(255, 119, 0, 0.88)"],
+    },
+    {
+      base: 0.94,
+      thickness: 0.24,
+      amplitude: 0.045,
+      frequency: 0.74,
+      speed: -0.00013,
+      phase: 5.7,
+      colors: ["rgba(111, 17, 0, 0)", "rgba(211, 47, 0, 0.52)", "rgba(255, 90, 0, 0.76)"],
+    },
+  ];
   let width = 0;
   let height = 0;
   let animationFrame = 0;
-  let previousTime = 0;
   let canvasVisible = true;
-  /** Создаёт устойчивый набор потоков: позиции нормализованы и переживают resize. */
-  function createBlobs() {
-    const count = width < 640 ? 6 : 10;
-    blobs = Array.from({ length: count }, (_, index) => ({
-      x: 0.52 + Math.random() * 0.56,
-      y: 0.08 + Math.random() * 0.84,
-      radius: 0.075 + Math.random() * 0.1,
-      vx: (Math.random() - 0.5) * 0.022,
-      vy: (Math.random() - 0.5) * 0.018,
-      phase: index * 0.74 + Math.random(),
-    }));
-  }
 
   function resizeCanvas() {
     const ratio = Math.min(window.devicePixelRatio || 1, 1.5);
@@ -101,96 +133,102 @@
     canvas.width = Math.round(width * ratio);
     canvas.height = Math.round(height * ratio);
     context.setTransform(ratio, 0, 0, ratio, 0, 0);
-    if (!blobs.length) createBlobs();
   }
 
-  function updateBlob(blob, delta, time) {
-    blob.x += blob.vx * delta;
-    blob.y += blob.vy * delta + Math.sin(time * 0.00035 + blob.phase) * 0.00012 * delta;
-    if (pointer.active) {
-      const dx = pointer.x - blob.x;
-      const dy = pointer.y - blob.y;
-      const distance = Math.max(Math.hypot(dx, dy), 0.08);
-      if (distance < 0.3) {
-        blob.x -= (dx / distance) * 0.00045 * delta;
-        blob.y -= (dy / distance) * 0.00045 * delta;
-      }
+  /**
+   * Возвращает вертикальную координату поверхности волны.
+   *
+   * Две синусоиды создают живое течение без повторяющегося «эквалайзера».
+   * Курсор не тянет отдельную точку: он локально отталкивает весь слой и запускает
+   * затухающую рябь. Поэтому эффект остаётся непрерывной жидкостью.
+   */
+  function getWaveY(wave, x, time, edge) {
+    const startX = width < 640 ? width * 0.38 : width * 0.42;
+    const span = Math.max(width - startX, 1);
+    const progress = (x - startX) / span;
+    const flow = Math.sin(progress * Math.PI * 2 * wave.frequency + time * wave.speed + wave.phase);
+    const detail = Math.sin(progress * Math.PI * 5.2 - time * wave.speed * 0.72 + wave.phase * 1.7);
+    const naturalY =
+      wave.base * height +
+      flow * wave.amplitude * height +
+      detail * wave.amplitude * height * 0.24;
+    const pointerX = pointer.x * width;
+    const pointerY = pointer.y * height;
+    const radius = Math.max(Math.min(width, height) * 0.28, 180);
+    const horizontalDistance = (x - pointerX) / radius;
+    const proximity = Math.exp(-horizontalDistance * horizontalDistance * 2.7) * pointer.influence;
+    const repulsion = (naturalY - pointerY) * proximity * 0.48;
+    const ripple =
+      Math.sin(Math.abs(horizontalDistance) * 8.5 - time * 0.004) *
+      height *
+      0.013 *
+      proximity;
+    const breathing = 1 + Math.sin(progress * Math.PI * 2.4 + wave.phase) * 0.12;
+    const halfThickness = wave.thickness * height * breathing * (0.5 + proximity * 0.12);
+    return naturalY + repulsion + ripple + halfThickness * edge;
+  }
+
+  function traceWaveEdge(wave, time, edge, reverse = false) {
+    const startX = width < 640 ? width * 0.34 : width * 0.38;
+    const step = Math.max(8, width / 140);
+    const points = [];
+    for (let x = startX; x <= width + step; x += step) {
+      points.push([x, getWaveY(wave, x, time, edge)]);
     }
-    if (blob.x < 0.45 || blob.x > 1.12) blob.vx *= -1;
-    if (blob.y < -0.08 || blob.y > 1.08) blob.vy *= -1;
-    blob.x = Math.max(0.43, Math.min(1.14, blob.x));
-    blob.y = Math.max(-0.1, Math.min(1.1, blob.y));
-  }
-
-  /** Рисует вязкие перемычки между близкими каплями, превращая круги в один поток. */
-  function drawConnections(points) {
-    points.forEach((first, firstIndex) => {
-      points.slice(firstIndex + 1).forEach((second) => {
-        const distance = Math.hypot(first.x - second.x, first.y - second.y);
-        const limit = (first.radius + second.radius) * 1.32;
-        if (distance >= limit) return;
-        const intensity = 1 - distance / limit;
-        const gradient = context.createLinearGradient(first.x, first.y, second.x, second.y);
-        gradient.addColorStop(0, `rgba(255, 74, 0, ${0.24 * intensity})`);
-        gradient.addColorStop(0.5, `rgba(255, 122, 0, ${0.52 * intensity})`);
-        gradient.addColorStop(1, `rgba(255, 184, 0, ${0.22 * intensity})`);
-        context.strokeStyle = gradient;
-        context.lineWidth = Math.min(first.radius, second.radius) * intensity * 0.95;
-        context.lineCap = "round";
-        context.beginPath();
-        context.moveTo(first.x, first.y);
-        context.lineTo(second.x, second.y);
-        context.stroke();
-      });
+    if (reverse) points.reverse();
+    points.forEach(([x, y], index) => {
+      if (index === 0 && !reverse) context.moveTo(x, y);
+      else context.lineTo(x, y);
     });
   }
 
-  function drawBlob(blob) {
-    const x = blob.x * width;
-    const y = blob.y * height;
-    const radius = blob.radius * Math.min(width, height);
-    const glow = context.createRadialGradient(
-      x - radius * 0.22,
-      y - radius * 0.28,
-      radius * 0.03,
-      x,
-      y,
-      radius,
-    );
-    glow.addColorStop(0, "rgba(255, 231, 137, 0.95)");
-    glow.addColorStop(0.16, "rgba(255, 184, 0, 0.92)");
-    glow.addColorStop(0.48, "rgba(255, 90, 0, 0.72)");
-    glow.addColorStop(0.76, "rgba(130, 25, 0, 0.26)");
-    glow.addColorStop(1, "rgba(45, 8, 0, 0)");
-    context.fillStyle = glow;
+  /** Рисует цельную ленту и внутренний блик, подчёркивающий вязкость материала. */
+  function drawWave(wave, time, index) {
+    const startX = width < 640 ? width * 0.34 : width * 0.38;
+    const fill = context.createLinearGradient(startX, 0, width, 0);
+    fill.addColorStop(0, wave.colors[0]);
+    fill.addColorStop(0.38, wave.colors[1]);
+    fill.addColorStop(1, wave.colors[2]);
+    context.save();
+    context.shadowColor = index === 1 ? "rgba(255, 111, 0, 0.42)" : "rgba(255, 61, 0, 0.24)";
+    context.shadowBlur = index === 1 ? 38 : 26;
+    context.fillStyle = fill;
     context.beginPath();
-    context.arc(x, y, radius, 0, Math.PI * 2);
+    traceWaveEdge(wave, time, -1);
+    traceWaveEdge(wave, time, 1, true);
+    context.closePath();
     context.fill();
+    context.restore();
+
+    const highlight = context.createLinearGradient(startX, 0, width, 0);
+    highlight.addColorStop(0, "rgba(255, 207, 128, 0)");
+    highlight.addColorStop(0.5, "rgba(255, 214, 136, 0.2)");
+    highlight.addColorStop(1, "rgba(255, 239, 185, 0.62)");
+    context.strokeStyle = highlight;
+    context.lineWidth = Math.max(1, height * 0.003);
+    context.beginPath();
+    traceWaveEdge(wave, time, -0.58);
+    context.stroke();
   }
 
   function renderCanvas(time) {
     if (!canvasVisible) return;
-    const delta = Math.min((time - previousTime) / 16.67 || 1, 2.2);
-    previousTime = time;
+    const animationTime = reducedMotion ? 0 : time;
+    pointer.x += (pointer.targetX - pointer.x) * 0.085;
+    pointer.y += (pointer.targetY - pointer.y) * 0.085;
+    pointer.influence += ((pointer.active && !reducedMotion ? 1 : 0) - pointer.influence) * 0.07;
     context.clearRect(0, 0, width, height);
     context.save();
     context.globalCompositeOperation = "screen";
-    blobs.forEach((blob) => updateBlob(blob, reducedMotion ? 0 : delta, time));
-    const points = blobs.map((blob) => ({
-      x: blob.x * width,
-      y: blob.y * height,
-      radius: blob.radius * Math.min(width, height),
-    }));
-    drawConnections(points);
-    blobs.forEach(drawBlob);
+    waves.forEach((wave, index) => drawWave(wave, animationTime, index));
     context.restore();
     animationFrame = window.requestAnimationFrame(renderCanvas);
   }
 
   canvas.addEventListener("pointermove", (event) => {
     const bounds = canvas.getBoundingClientRect();
-    pointer.x = (event.clientX - bounds.left) / bounds.width;
-    pointer.y = (event.clientY - bounds.top) / bounds.height;
+    pointer.targetX = (event.clientX - bounds.left) / bounds.width;
+    pointer.targetY = (event.clientY - bounds.top) / bounds.height;
     pointer.active = true;
   });
 
@@ -199,7 +237,6 @@
   new IntersectionObserver(([entry]) => {
     canvasVisible = entry.isIntersecting;
     if (canvasVisible && !animationFrame) {
-      previousTime = 0;
       animationFrame = window.requestAnimationFrame(renderCanvas);
     } else if (!canvasVisible && animationFrame) {
       window.cancelAnimationFrame(animationFrame);
