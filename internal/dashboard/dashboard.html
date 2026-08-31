@@ -74,7 +74,7 @@
     <ul class="children">
       {{range .Steps}}<li class="step">
         <span class="dot tone-{{.Tone}}" role="img" aria-label="Статус: {{.State}}" title="{{.State}}"></span>
-        <span class="step-main"><span class="name">{{.ID}}</span><span class="meta">{{.State}}{{if .Runtime}} · {{.Runtime}}{{end}}{{if .Message}} · {{.Message}}{{end}}</span></span>
+        <span class="step-main"><span class="name">{{.ID}}</span><span class="meta">{{.State}}{{if .Runtime}} · {{.Runtime}}{{end}}{{if .Action}} · действие: {{.Action}}{{end}}{{if .Message}} · {{.Message}}{{end}}</span></span>
         <span class="actions">
           <a class="action" href="{{.EventsURL}}" title="Показать события этого кубика">События</a>
           {{if .HasMemory}}<a class="action" href="{{.MemoryURL}}">Память</a>{{else}}<span class="action disabled" title="Память пока пуста">Память</span>{{end}}

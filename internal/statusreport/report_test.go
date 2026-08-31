@@ -36,7 +36,7 @@ func TestDetailedReportLinksStatesAndEscaping(t *testing.T) {
 		scheduler.Unknown,
 		scheduler.State("future_state"),
 	}
-	status := coordinator.Status{WorkflowID: "review\nworkflow"}
+	status := coordinator.Status{WorkflowID: "review\nworkflow", WaitingForCapacity: []string{"step-a"}}
 	for index, state := range states {
 		status.Steps = append(status.Steps, coordinator.StepStatus{
 			ID:    "step-" + string(rune('a'+index)),
@@ -58,6 +58,9 @@ func TestDetailedReportLinksStatesAndEscaping(t *testing.T) {
 	}
 	if strings.Count(message, "\n- ") != len(states) {
 		t.Fatalf("список статуса содержит не каждый кубик ровно один раз: %q", message)
+	}
+	if !strings.Contains(message, "step-a — pending (чат ещё не создан) (ждёт свободный слот общего лимита)") {
+		t.Fatalf("причина ожидания общего слота не показана: %q", message)
 	}
 	if !strings.Contains(message, "vscode://file/") || !strings.Contains(message, "run%20%D1%81%20%D0%BF%D1%80%D0%BE%D0%B1%D0%B5%D0%BB%D0%BE%D0%BC") {
 		t.Fatalf("путь run не закодирован как VS Code deeplink: %q", message)
@@ -89,9 +92,11 @@ func TestSummaryUsesCompactUserCategories(t *testing.T) {
 	for index := range 4 {
 		status.Steps = append(status.Steps, coordinator.StepStatus{ID: fmt.Sprintf("waiting-%d", index), State: scheduler.Pending})
 	}
+	status.WaitingForCapacity = []string{"waiting-0", "waiting-1"}
 
 	summary := Summary(status, t.TempDir(), nil)
-	if !strings.Contains(summary, "Всего: 15, готово: 5, работает: 6, ожидают: 4.") || !strings.Contains(summary, "vscode://file/") {
+	if !strings.Contains(summary, "Всего: 15, готово: 5, работает: 6, ожидают: 4.") ||
+		!strings.Contains(summary, "Свободный слот общего лимита ждут: 2.") || !strings.Contains(summary, "vscode://file/") {
 		t.Fatalf("неверная краткая статистика: %q", summary)
 	}
 	for _, forbidden := range []string{"ready-0", "codex://threads/", "workflow-status.png", "PlantUML"} {

@@ -2,6 +2,7 @@ package coordinator
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/stray-live-pixel/Lawa/internal/codex"
@@ -23,9 +24,10 @@ func TestCodexEventPrivacyBoundary(t *testing.T) {
 	for _, input := range []codex.Event{
 		event("item/reasoning/delta", `{"delta":"private reasoning"}`),
 		event("future/unknown", `{not valid json`),
-		event("item/completed", `{"item":{"type":"reasoning","text":"private reasoning summary"}}`),
-		event("item/completed", `{"item":{"type":"commandExecution","command":"secret --token abc","aggregatedOutput":"private output"}}`),
-		event("item/completed", `{"item":{"type":"agentMessage","text":"готово\nпубличный итог"}}`),
+		event("item/completed", `{"item":{"id":"reasoning-1","type":"reasoning","text":"private reasoning summary"}}`),
+		event("item/started", `{"item":{"id":"command-1","type":"commandExecution","command":"secret --token abc"}}`),
+		event("item/completed", `{"item":{"id":"command-1","type":"commandExecution","command":"secret --token abc","aggregatedOutput":"private output"}}`),
+		event("item/completed", `{"item":{"id":"message-1","type":"agentMessage","text":"готово\nпубличный итог"}}`),
 		event("thread/tokenUsage/updated", `{"tokenUsage":{"inputTokens":12,"outputTokens":3,"secret":"never store"}}`),
 		event("thread/status/changed", `{"thread":{"status":{"type":"active"}}}`),
 	} {
@@ -34,14 +36,19 @@ func TestCodexEventPrivacyBoundary(t *testing.T) {
 		}
 	}
 	events, err := runstore.ReadEvents(root, runID)
-	if err != nil || len(events) != 4 {
+	if err != nil || len(events) != 5 {
 		t.Fatalf("неверный нормализованный журнал: %+v, %v", events, err)
 	}
-	if events[0].ItemType != "commandExecution" || events[0].Message != "" ||
-		events[1].ItemType != "agentMessage" || events[1].Message != "готово публичный итог" ||
-		events[2].Usage["tokenUsage.inputTokens"] != 12 || events[2].Usage["tokenUsage.outputTokens"] != 3 ||
-		events[3].State != "active" {
+	if events[0].Kind != "item_started" || events[0].ItemID != "command-1" || events[0].ItemType != "commandExecution" || events[0].Message != "" ||
+		events[1].Kind != "item_completed" || events[1].ItemID != "command-1" || events[1].Message != "" ||
+		events[2].ItemID != "message-1" || events[2].ItemType != "agentMessage" || events[2].Message != "готово публичный итог" ||
+		events[3].Usage["tokenUsage.inputTokens"] != 12 || events[3].Usage["tokenUsage.outputTokens"] != 3 ||
+		events[4].State != "active" {
 		t.Fatalf("граница приватности нарушена: %+v", events)
+	}
+	stored, err := json.Marshal(events)
+	if err != nil || strings.Contains(string(stored), "secret") || strings.Contains(string(stored), "private output") {
+		t.Fatalf("журнал сохранил command payload: %s, %v", stored, err)
 	}
 }
 

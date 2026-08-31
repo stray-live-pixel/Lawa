@@ -102,6 +102,9 @@ TRACKER_CONTEXT_END`)
 		t.Fatal(err)
 	}
 	if err = childRun.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "process_started", PID: 4321, Message: "безопасное событие"}); err == nil {
+		err = childRun.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "item_started", ItemID: "mcp-1", ItemType: "mcpToolCall"})
+	}
+	if err == nil {
 		err = childRun.Close()
 	}
 	if err != nil {
@@ -133,7 +136,7 @@ TRACKER_CONTEXT_END`)
 		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "vscode://file/",
 		"failed-workflow", "succeeded-workflow", "В работе", "Сломавшиеся", "Успешные",
 		"Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
-		"События", "Папка", "/events/" + child.Meta.RunID,
+		"События", "Папка", "/events/" + child.Meta.RunID, "действие: mcpToolCall",
 		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
 		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",
 		"Flow, кубик, тикет, run/thread ID, текст задачи…",

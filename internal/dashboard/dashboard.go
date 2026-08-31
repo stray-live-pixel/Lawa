@@ -69,9 +69,9 @@ type runNode struct {
 
 // stepNode описывает лист дерева и доступность его сохранённой памяти.
 type stepNode struct {
-	ID, State, Tone, Runtime, Message string
-	EventsURL, MemoryURL              template.URL
-	HasMemory                         bool
+	ID, State, Tone, Runtime, Message, Action string
+	EventsURL, MemoryURL                      template.URL
+	HasMemory                                 bool
 }
 
 // Handler возвращает полностью автономный HTTP-интерфейс для абсолютного root.
@@ -296,9 +296,10 @@ func makeRunNode(root string, snapshot runstore.Snapshot) (*runNode, error) {
 			}
 			runtime += summary.LastActivity.Local().Format("15:04:05")
 		}
-		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State), string(memory), summary.Message)
+		action := strings.Join(summary.ActiveItemTypes, ", ")
+		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State), string(memory), summary.Message, action)
 		node.Steps = append(node.Steps, stepNode{
-			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)), Runtime: runtime, Message: summary.Message,
+			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)), Runtime: runtime, Message: summary.Message, Action: action,
 			EventsURL: template.URL("/events/" + runID + "?step=" + url.QueryEscape(step.ID)),
 			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID), HasMemory: err == nil && len(memory) > 0,
 		})
@@ -480,12 +481,16 @@ func IsLoopbackAddress(address string) bool {
 func previewPage(params viewParams, now time.Time) page {
 	action := template.URL("#preview")
 	step := func(id, state string, memory bool) stepNode {
-		return stepNode{ID: id, State: state, Tone: tone(state), Runtime: "pid 4201 · turn turn-preview · 18:42:10", EventsURL: action, MemoryURL: action, HasMemory: memory}
+		currentAction := ""
+		if state == "running" {
+			currentAction = "commandExecution"
+		}
+		return stepNode{ID: id, State: state, Tone: tone(state), Runtime: "pid 4201 · turn turn-preview · 18:42:10", Action: currentAction, EventsURL: action, MemoryURL: action, HasMemory: memory}
 	}
 	run := func(id, name, state string, age time.Duration, steps ...stepNode) *runNode {
 		search := []string{id, name, state}
 		for _, item := range steps {
-			search = append(search, item.ID, item.State)
+			search = append(search, item.ID, item.State, item.Action)
 		}
 		return &runNode{
 			ID: id, Name: name, State: state, Tone: tone(state), Updated: "2026-08-31 18:42:10",

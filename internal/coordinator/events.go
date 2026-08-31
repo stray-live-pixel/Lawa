@@ -22,9 +22,9 @@ func appendProcessEvent(run *runstore.LockedRun, stepID, threadID, turnID string
 }
 
 // appendCodexEvent является границей приватности observability. В журнал попадают
-// только известные lifecycle-события и финальный текст agentMessage. Reasoning,
-// commandExecution, fileChange, MCP payload и неизвестные расширения протокола
-// не сериализуются даже частично.
+// только известный lifecycle, непрозрачные ID и типы item и финальный текст
+// agentMessage. Reasoning, содержимое commandExecution, fileChange, MCP payload
+// и неизвестные расширения протокола не сериализуются даже частично.
 func appendCodexEvent(run *runstore.LockedRun, stepID, threadID, turnID string, event codex.Event) error {
 	if strings.Contains(strings.ToLower(event.Method), "reasoning") {
 		return nil
@@ -55,10 +55,14 @@ func appendCodexEvent(run *runstore.LockedRun, stepID, threadID, turnID string, 
 		normalized.State = firstString(params, "thread.status.type", "status.type", "status")
 	case "item/started", "item/completed":
 		normalized.Kind = strings.ReplaceAll(event.Method, "/", "_")
+		normalized.ItemID = firstString(params, "item.id")
 		normalized.ItemType = firstString(params, "item.type", "type")
 		if strings.Contains(strings.ToLower(normalized.ItemType), "reasoning") {
 			return nil
 		}
+		// Непрозрачный ID нужен только для сопоставления item/started с
+		// item/completed. Status и dashboard не показывают его и никогда не
+		// получают command, arguments или result из исходного item.
 		// Только финальный ответ агента нужен пользователю и зависимостям. Сырые
 		// выводы команд и инструментов могут содержать секреты и не копируются.
 		if event.Method == "item/completed" && normalized.ItemType == "agentMessage" {

@@ -33,7 +33,9 @@ func statusCommand(args []string, out io.Writer, deps dependencies) error {
 	if snapshot.HistoricalAppNative {
 		runtime = "app-native (исторический, только чтение)"
 	}
-	if _, err = fmt.Fprintf(out, "runId: %s\nworkflow: %s\nruntime: %s\ncwd: %s\n", runID, snapshot.Workflow.ID, runtime, snapshot.Meta.CWD); err != nil {
+	if _, err = fmt.Fprintf(out, "runId: %s\nworkflow: %s\nruntime: %s\ncwd: %s\n",
+		runstore.SafeTerminalText(runID), runstore.SafeTerminalText(snapshot.Workflow.ID),
+		runstore.SafeTerminalText(runtime), runstore.SafeTerminalText(snapshot.Meta.CWD)); err != nil {
 		return err
 	}
 	for _, step := range snapshot.Meta.Steps {
@@ -59,11 +61,19 @@ func statusCommand(args []string, out io.Writer, deps dependencies) error {
 		} else if summary.Signal != "" {
 			process = "завершён, signal " + summary.Signal
 		}
-		if _, err = fmt.Fprintf(out, "\n%s: %s\n  thread: %s\n  turn: %s\n  процесс: %s\n  активность: %s\n", step.ID, step.State, threadID, turnID, process, activity); err != nil {
+		if _, err = fmt.Fprintf(out, "\n%s: %s\n  thread: %s\n  turn: %s\n  процесс: %s\n  активность: %s\n",
+			runstore.SafeTerminalText(step.ID), runstore.SafeTerminalText(string(step.State)),
+			runstore.SafeTerminalText(threadID), runstore.SafeTerminalText(turnID),
+			runstore.SafeTerminalText(process), runstore.SafeTerminalText(activity)); err != nil {
 			return err
 		}
 		if summary.Message != "" {
-			if _, err = fmt.Fprintf(out, "  сообщение: %s\n", summary.Message); err != nil {
+			if _, err = fmt.Fprintf(out, "  сообщение: %s\n", runstore.SafeTerminalText(summary.Message)); err != nil {
+				return err
+			}
+		}
+		if len(summary.ActiveItemTypes) != 0 {
+			if _, err = fmt.Fprintf(out, "  действие: %s\n", runstore.SafeTerminalText(strings.Join(summary.ActiveItemTypes, ", "))); err != nil {
 				return err
 			}
 		}
@@ -74,8 +84,10 @@ func statusCommand(args []string, out io.Writer, deps dependencies) error {
 	return err
 }
 
-// logsCommand печатает только нормализованные события Lawa. `--follow` перечитывает
-// журнал коротким polling без открытия App Server и завершается после терминала.
+// logsCommand печатает только нормализованные события Lawa. `--follow` читает
+// новые полные строки с сохранённой byte-позиции и не открывает App Server.
+// Терминальный meta.json сам по себе недостаточен для выхода: coordinator пишет
+// его раньше финального step_state, который иначе мог бы потеряться для оператора.
 func logsCommand(ctx context.Context, args []string, out io.Writer, deps dependencies) error {
 	runID, stepID, root, follow, err := parseLogsArguments(args, deps)
 	if err != nil {
@@ -94,14 +106,27 @@ func logsCommand(ctx context.Context, args []string, out io.Writer, deps depende
 			return fmt.Errorf("run %q не содержит шаг %q", runID, stepID)
 		}
 	}
-	printed := 0
+	offset := int64(0)
+	finalStates := make(map[string]eventState)
+	pollInterval := deps.logsPollInterval
+	if pollInterval <= 0 {
+		pollInterval = time.Second
+	}
 	for {
-		events, readErr := runstore.ReadEvents(root, runID)
+		var events []runstore.RuntimeEvent
+		var readErr error
+		if follow {
+			events, offset, readErr = runstore.ReadEventsAfter(root, runID, offset)
+		} else {
+			events, readErr = runstore.ReadEvents(root, runID)
+		}
 		if readErr != nil {
 			return fmt.Errorf("прочитать события run %q: %w", runID, readErr)
 		}
-		for ; printed < len(events); printed++ {
-			event := events[printed]
+		for _, event := range events {
+			if event.Kind == "step_state" || event.Kind == "thread_reconciled" {
+				finalStates[event.StepID] = eventState{State: event.State, TurnID: event.TurnID}
+			}
 			if stepID != "" && event.StepID != stepID {
 				continue
 			}
@@ -116,10 +141,15 @@ func logsCommand(ctx context.Context, args []string, out io.Writer, deps depende
 		if loadErr != nil {
 			return fmt.Errorf("прочитать run %q: %w", runID, loadErr)
 		}
-		if runTerminal(snapshot) || snapshot.HistoricalAppNative {
+		if snapshot.HistoricalAppNative || runTerminal(snapshot) && terminalEventsRecorded(snapshot, finalStates) {
 			return nil
 		}
-		timer := time.NewTimer(time.Second)
+		// Пока накопившийся batch не исчерпан, продолжаем сразу. Polling нужен
+		// только на настоящем EOF или неполной последней JSONL-строке.
+		if len(events) != 0 {
+			continue
+		}
+		timer := time.NewTimer(pollInterval)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
@@ -127,6 +157,26 @@ func logsCommand(ctx context.Context, args []string, out io.Writer, deps depende
 		case <-timer.C:
 		}
 	}
+}
+
+type eventState struct{ State, TurnID string }
+
+// terminalEventsRecorded подтверждает, что журнал дошёл до состояния и turn из
+// meta.json каждого кубика. Сравнение turn не даёт старому succeeded-событию
+// преждевременно завершить follow после ручного продолжения того же thread.
+func terminalEventsRecorded(snapshot runstore.Snapshot, states map[string]eventState) bool {
+	// В старых форматах обязательного events.jsonl ещё не было. Их сохранённый
+	// терминал остаётся читаемым и не превращает `--follow` в вечное ожидание.
+	if snapshot.Meta.Version < 3 {
+		return true
+	}
+	for _, step := range snapshot.Meta.Steps {
+		event, ok := states[step.ID]
+		if !ok || event.State != string(step.State) || event.TurnID != step.TurnID {
+			return false
+		}
+	}
+	return true
 }
 
 func parseReadRunArguments(command string, args []string, deps dependencies) (string, string, error) {

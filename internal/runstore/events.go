@@ -4,17 +4,25 @@ package runstore
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
 const eventsFilename = "events.jsonl"
+
+// eventReadBatchSize ограничивает память одного прохода `logs --follow`.
+// Нормализованное событие значительно меньше мегабайта; отсутствие перевода
+// строки во всём batch поэтому означает повреждённую или неподдерживаемую запись.
+const eventReadBatchSize = 1024 * 1024
 
 // RuntimeEvent — нормализованное и безопасное для оператора событие Lawa.
 // Оно намеренно не повторяет сырой протокол App Server: reasoning, аргументы
@@ -28,6 +36,7 @@ type RuntimeEvent struct {
 	TurnID   string           `json:"turnId,omitempty"`
 	Kind     string           `json:"kind"`
 	State    string           `json:"state,omitempty"`
+	ItemID   string           `json:"itemId,omitempty"`
 	ItemType string           `json:"itemType,omitempty"`
 	Message  string           `json:"message,omitempty"`
 	PID      int              `json:"pid,omitempty"`
@@ -45,6 +54,7 @@ type EventSummary struct {
 	PID                                            int
 	ExitCode                                       *int
 	Signal                                         string
+	ActiveItemTypes                                []string
 }
 
 // AppendEvent дописывает одну строку под той же блокировкой, что и meta.json.
@@ -149,14 +159,9 @@ func ReadEvents(root, runID string) ([]RuntimeEvent, error) {
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	var events []RuntimeEvent
 	for line := 1; scanner.Scan(); line++ {
-		var event RuntimeEvent
-		if err = json.Unmarshal(scanner.Bytes(), &event); err != nil {
-			return nil, fmt.Errorf("%s, строка %d: %w", eventsFilename, line, err)
-		}
-		if event.RunID != runID {
-			return nil, fmt.Errorf("%s, строка %d: неверный runId", eventsFilename, line)
-		}
-		if err = normalizeRuntimeEvent(&event); err != nil {
+		event, parseErr := parseRuntimeEvent(scanner.Bytes(), runID)
+		if parseErr != nil {
+			err = parseErr
 			return nil, fmt.Errorf("%s, строка %d: %w", eventsFilename, line, err)
 		}
 		events = append(events, event)
@@ -167,10 +172,85 @@ func ReadEvents(root, runID string) ([]RuntimeEvent, error) {
 	return events, nil
 }
 
+// ReadEventsAfter читает только полные JSONL-записи после byte offset и
+// возвращает позицию сразу после последней из них. Неполный хвост не считается
+// повреждением: writer мог находиться внутри единственного append, поэтому
+// следующий polling повторит чтение с прежней границы строки.
+func ReadEventsAfter(root, runID string, offset int64) ([]RuntimeEvent, int64, error) {
+	if offset < 0 {
+		return nil, offset, errors.New("позиция журнала не может быть отрицательной")
+	}
+	dir, err := openRun(root, runID)
+	if err != nil {
+		return nil, offset, err
+	}
+	defer dir.Close()
+	if _, err = loadForDashboard(dir, runID); err != nil {
+		return nil, offset, err
+	}
+	info, err := dir.Lstat(eventsFilename)
+	if errors.Is(err, os.ErrNotExist) && offset == 0 {
+		return nil, 0, nil
+	}
+	if err != nil {
+		return nil, offset, err
+	}
+	if !info.Mode().IsRegular() || info.Size() < offset {
+		return nil, offset, fmt.Errorf("%s был заменён или усечён", eventsFilename)
+	}
+	f, err := dir.Open(eventsFilename)
+	if err != nil {
+		return nil, offset, err
+	}
+	defer f.Close()
+	if _, err = f.Seek(offset, io.SeekStart); err != nil {
+		return nil, offset, err
+	}
+	data, readErr := io.ReadAll(io.LimitReader(f, eventReadBatchSize))
+	if readErr != nil {
+		return nil, offset, readErr
+	}
+	lastNewline := bytes.LastIndexByte(data, '\n')
+	if lastNewline < 0 {
+		if len(data) == eventReadBatchSize {
+			return nil, offset, fmt.Errorf("%s содержит запись больше %d байт", eventsFilename, eventReadBatchSize)
+		}
+		return nil, offset, nil
+	}
+	complete := data[:lastNewline]
+	events := make([]RuntimeEvent, 0, bytes.Count(complete, []byte{'\n'})+1)
+	for _, line := range bytes.Split(complete, []byte{'\n'}) {
+		event, parseErr := parseRuntimeEvent(line, runID)
+		if parseErr != nil {
+			return nil, offset, fmt.Errorf("%s после байта %d: %w", eventsFilename, offset, parseErr)
+		}
+		events = append(events, event)
+	}
+	return events, offset + int64(lastNewline+1), nil
+}
+
+func parseRuntimeEvent(data []byte, runID string) (RuntimeEvent, error) {
+	var event RuntimeEvent
+	if err := json.Unmarshal(data, &event); err != nil {
+		return RuntimeEvent{}, err
+	}
+	if event.RunID != runID {
+		return RuntimeEvent{}, errors.New("неверный runId")
+	}
+	if err := normalizeRuntimeEvent(&event); err != nil {
+		return RuntimeEvent{}, err
+	}
+	return event, nil
+}
+
 // SummarizeEvents возвращает по одному последнему снимку на кубик. PID остаётся
 // активным только между process_started и process_exited этого же процесса.
+// Текущие действия сопоставляются по непрозрачному itemId, но наружу сводка
+// отдаёт только уникальные типы: команда, аргументы и результат не нужны для
+// понимания прогресса и не должны попадать в status или dashboard.
 func SummarizeEvents(events []RuntimeEvent) map[string]EventSummary {
 	summaries := make(map[string]EventSummary)
+	activeItems := make(map[string]map[string]string)
 	for _, event := range events {
 		if event.StepID == "" {
 			continue
@@ -193,10 +273,54 @@ func SummarizeEvents(events []RuntimeEvent) map[string]EventSummary {
 		switch event.Kind {
 		case "process_started":
 			summary.PID, summary.ExitCode, summary.Signal = event.PID, nil, ""
+			// Новый дочерний процесс не может продолжать незавершённые item
+			// предыдущего процесса. Очистка защищает UI от вечного действия,
+			// если прежний App Server завершился без process_exited в журнале.
+			delete(activeItems, event.StepID)
 		case "process_exited":
 			summary.PID, summary.ExitCode, summary.Signal = 0, event.ExitCode, event.Signal
+			delete(activeItems, event.StepID)
+		case "turn_started":
+			// Item принадлежит одному turn. На границе turn старые элементы
+			// больше не считаются активными даже после неполного журнала.
+			delete(activeItems, event.StepID)
+		case "turn_completed":
+			delete(activeItems, event.StepID)
+		case "item_started":
+			if event.ItemID != "" && event.ItemType != "" {
+				items := activeItems[event.StepID]
+				if items == nil {
+					items = make(map[string]string)
+					activeItems[event.StepID] = items
+				}
+				items[event.ItemID] = event.ItemType
+			}
+		case "item_completed":
+			if items := activeItems[event.StepID]; items != nil && event.ItemID != "" {
+				delete(items, event.ItemID)
+				if len(items) == 0 {
+					delete(activeItems, event.StepID)
+				}
+			}
 		}
 		summaries[event.StepID] = summary
+	}
+	for stepID, items := range activeItems {
+		// Несколько параллельных item одного типа должны выглядеть как одно
+		// понятное действие. При этом map по ID выше не снимает тип, пока не
+		// завершится последний item этого типа.
+		uniqueTypes := make(map[string]struct{}, len(items))
+		for _, itemType := range items {
+			uniqueTypes[itemType] = struct{}{}
+		}
+		types := make([]string, 0, len(uniqueTypes))
+		for itemType := range uniqueTypes {
+			types = append(types, itemType)
+		}
+		sort.Strings(types)
+		summary := summaries[stepID]
+		summary.ActiveItemTypes = types
+		summaries[stepID] = summary
 	}
 	return summaries
 }
@@ -243,20 +367,39 @@ func FormatEvent(event RuntimeEvent) string {
 	if event.Message != "" {
 		line += " — " + event.Message
 	}
-	return line
+	return SafeTerminalText(line)
+}
+
+// SafeTerminalText сохраняет читаемые Unicode-символы, а управляющие C0/C1
+// показывает как обычный текст. В частности, ESC больше не может начать ANSI
+// или OSC-команду, которая очистит экран, изменит заголовок либо подменит
+// видимую диагностику. Экранирование выполняется только при выводе: точные ID и
+// сообщения остаются в хранилище пригодными для протокола и расследования.
+func SafeTerminalText(value string) string {
+	var result strings.Builder
+	result.Grow(len(value))
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			fmt.Fprintf(&result, `\u%04X`, character)
+			continue
+		}
+		result.WriteRune(character)
+	}
+	return result.String()
 }
 
 func normalizeRuntimeEvent(event *RuntimeEvent) error {
 	if event.Time.IsZero() || !validText(event.RunID) || !validText(event.Kind) {
 		return errors.New("событие требует time, runId и kind")
 	}
-	for _, value := range []string{event.StepID, event.ThreadID, event.TurnID, event.State, event.ItemType, event.Message, event.Signal} {
+	for _, value := range []string{event.StepID, event.ThreadID, event.TurnID, event.State, event.ItemID, event.ItemType, event.Message, event.Signal} {
 		if !utf8.ValidString(value) {
 			return errors.New("поля события должны быть UTF-8")
 		}
 	}
 	event.Message = compactEventText(event.Message, 4000)
 	event.State = compactEventText(event.State, 200)
+	event.ItemID = compactEventText(event.ItemID, 500)
 	event.ItemType = compactEventText(event.ItemType, 200)
 	event.Signal = compactEventText(event.Signal, 100)
 	if len(event.Usage) > 64 {

@@ -4,11 +4,13 @@
 package coordinator
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/stray-live-pixel/Lawa/internal/capacity"
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
@@ -21,15 +23,17 @@ import (
 type Launch struct {
 	StepID  string
 	Command codex.Command
+	lease   *capacity.Lease
 }
 
 // Preparation описывает решение по одному целостному снимку. Waiting показывает
 // ещё не запущенные зависимости, Complete — уже завершённый workflow. Launches
 // содержит только шаги, которые Prepare успел сохранить как Starting.
 type Preparation struct {
-	Launches []Launch
-	Waiting  []string
-	Complete bool
+	Launches           []Launch
+	Waiting            []string
+	WaitingForCapacity []string
+	Complete           bool
 }
 
 // Continuation описывает один новый turn в уже существующем чате. Он создаётся
@@ -40,21 +44,23 @@ type Continuation struct {
 }
 
 // Prepare выбирает готовые Pending-шаги и атомарно сохраняет намерение создать
-// всю готовую волну до возврата команд вызывающему коду. Благодаря этому ни
-// повторный Prepare, ни перезапуск процесса не создаст второй чат вслепую.
+// доступную часть волны до возврата команд вызывающему коду. Публичный вариант
+// не ограничивает волну; CLI передаёт в private prepare общий root-level Pool.
+// Благодаря резервированию ни повторный Prepare, ни перезапуск процесса не
+// создаст второй чат вслепую.
 //
 // Если запись не удалась, функция не возвращает список для запуска. Атомарный
 // meta.json не публикует частичную волну; LockedRun после ошибки Sync всё равно
 // запрещает операции, потому что результат публикации мог стать неопределённым.
 func Prepare(run *runstore.LockedRun, root string) (Preparation, error) {
-	return prepare(run, root)
+	return prepare(run, root, capacity.Unlimited())
 }
 
 // prepare проверяет сохранённый снимок и строит команды единственного runtime —
-// Codex App Server. Lawa напрямую владеет stdio-сессиями и резервирует всю
-// готовую волну атомарно, поэтому независимые кубики запускаются параллельно без
-// управляющего агента-посредника и без команд второго протокола.
-func prepare(run *runstore.LockedRun, root string) (Preparation, error) {
+// Codex App Server. Lawa напрямую владеет stdio-сессиями, получает общие слоты и
+// одним Sync резервирует только поместившуюся часть готовой волны. Остальные
+// Pending-шаги остаются доступными следующему циклу после освобождения слота.
+func prepare(run *runstore.LockedRun, root string, pool *capacity.Pool) (Preparation, error) {
 	if run == nil {
 		return Preparation{}, fmt.Errorf("координатор: нужен открытый запуск")
 	}
@@ -92,11 +98,28 @@ func prepare(run *runstore.LockedRun, root string) (Preparation, error) {
 		return Preparation{}, fmt.Errorf("координатор: %w", err)
 	}
 	prepared := Preparation{Waiting: plan.Waiting, Complete: plan.Complete}
-	ready := plan.Ready
+	if pool == nil {
+		pool = capacity.Unlimited()
+	}
+	ready := make([]string, 0, len(plan.Ready))
+	leases := make([]*capacity.Lease, 0, len(plan.Ready))
+	for index, stepID := range plan.Ready {
+		lease, available, acquireErr := pool.TryAcquire()
+		if acquireErr != nil {
+			return Preparation{}, errors.Join(fmt.Errorf("координатор: получить слот параллельности: %w", acquireErr), releaseLeases(leases))
+		}
+		if !available {
+			prepared.WaitingForCapacity = append(prepared.WaitingForCapacity, plan.Ready[index:]...)
+			break
+		}
+		ready = append(ready, stepID)
+		leases = append(leases, lease)
+	}
 	if err := run.Reserve(ready); err != nil {
+		err = errors.Join(err, releaseLeases(leases))
 		return Preparation{}, fmt.Errorf("координатор: зарезервировать готовые шаги: %w", err)
 	}
-	for _, stepID := range ready {
+	for index, stepID := range ready {
 		saved := savedSteps[stepID]
 		workflowStep := steps[stepID]
 		runDir := filepath.Join(root, snapshot.Meta.RunID)
@@ -111,9 +134,18 @@ func prepare(run *runstore.LockedRun, root string) (Preparation, error) {
 		prepared.Launches = append(prepared.Launches, Launch{
 			StepID:  stepID,
 			Command: command,
+			lease:   leases[index],
 		})
 	}
 	return prepared, nil
+}
+
+func releaseLeases(leases []*capacity.Lease) error {
+	var err error
+	for _, lease := range leases {
+		err = errors.Join(err, lease.Release())
+	}
+	return err
 }
 
 func validateMemories(snapshot runstore.Snapshot, root string) error {

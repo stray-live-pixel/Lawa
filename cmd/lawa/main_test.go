@@ -284,8 +284,13 @@ func TestSkillInstruction(t *testing.T) {
 		"задержку, стоимость",
 		"Codex Desktop не меняет runtime",
 		"command -v",
+		"codex login status",
+		"codex login --device-auth",
+		"codex login --with-api-key",
+		"Не проси присылать API key",
 		"lawa validate <workflow.json>",
 		"lawa run workflow.json",
+		"--max-parallel",
 		"Не добавляй `--mode`",
 		"lawa status <run-id>",
 		"lawa logs <run-id>",
@@ -396,14 +401,15 @@ func (o *cliFakeObserver) Close() error { return nil }
 
 func cliTestDependencies(client coordinator.Client, check func(context.Context, codex.Connection) error) dependencies {
 	return dependencies{
-		check:           check,
-		client:          func(string, io.Writer) coordinator.Client { return client },
-		pollInterval:    time.Millisecond,
-		refreshInterval: coordinator.DefaultRefreshInterval,
-		chatInterval:    defaultChatInterval,
-		now:             time.Now,
-		waitUntil:       series.WaitUntil,
-		renderer:        successfulCLIRenderer(),
+		check:            check,
+		client:           func(string, io.Writer) coordinator.Client { return client },
+		pollInterval:     time.Millisecond,
+		logsPollInterval: time.Millisecond,
+		refreshInterval:  coordinator.DefaultRefreshInterval,
+		chatInterval:     defaultChatInterval,
+		now:              time.Now,
+		waitUntil:        series.WaitUntil,
+		renderer:         successfulCLIRenderer(),
 		userHomeDir: func() (string, error) {
 			return "", errors.New("home не должен использоваться при --root")
 		},
@@ -684,6 +690,33 @@ func TestRunCommand(t *testing.T) {
 	}
 	owner, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
 	if err == nil {
+		err = owner.AppendEvent(runstore.RuntimeEvent{StepID: "step", Kind: "process_started", PID: 123})
+	}
+	if err == nil {
+		err = owner.AppendEvent(runstore.RuntimeEvent{
+			StepID: "step", Kind: "item_started", ItemID: "command-1", ItemType: "commandExecution", Message: "внимание \x1b[2J",
+		})
+	}
+	if owner != nil {
+		err = errors.Join(err, owner.Close())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusOutput.Reset()
+	if err = executeContext(t.Context(), []string{"status", snapshot.Meta.RunID, "--root", root}, &statusOutput, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusOutput.String(), "действие: commandExecution") ||
+		!strings.Contains(statusOutput.String(), `сообщение: внимание \u001B[2J`) || strings.Contains(statusOutput.String(), "\x1b") {
+		t.Fatalf("status не показал действие или передал управляющий символ: %q", statusOutput.String())
+	}
+
+	owner, err = runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err == nil {
+		err = owner.AppendEvent(runstore.RuntimeEvent{StepID: "step", Kind: "item_completed", ItemID: "command-1", ItemType: "commandExecution"})
+	}
+	if err == nil {
 		err = owner.AppendEvent(runstore.RuntimeEvent{StepID: "step", Kind: "process_exited", PID: 123, Signal: "terminated"})
 	}
 	if owner != nil {
@@ -696,8 +729,73 @@ func TestRunCommand(t *testing.T) {
 	if err = executeContext(t.Context(), []string{"status", snapshot.Meta.RunID, "--root", root}, &statusOutput, io.Discard, deps); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(statusOutput.String(), "завершён, signal terminated") {
-		t.Fatalf("status потерял завершение процесса по сигналу: %q", statusOutput.String())
+	if !strings.Contains(statusOutput.String(), "завершён, signal terminated") || strings.Contains(statusOutput.String(), "действие:") {
+		t.Fatalf("status потерял завершение процесса или оставил завершённое действие: %q", statusOutput.String())
+	}
+}
+
+// TestLogsFollowDrainsTerminalEvent воспроизводит порядок coordinator: сначала
+// terminal сохраняется в meta.json, затем в журнал дописывается step_state.
+// Follow обязан дождаться этой записи и не печатать старые события повторно.
+func TestLogsFollowDrainsTerminalEvent(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	snapshot, err := runstore.Create(root, runstore.Input{
+		WorkflowJSON: []byte(`{"id":"follow","steps":[{"id":"step","type":"agent","prompt":"work","dependsOn":[]}]}`),
+		Task:         "Проверить follow", CWD: cwd,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err == nil {
+		err = owner.Reserve([]string{"step"})
+	}
+	if err == nil {
+		err = owner.Update("step", scheduler.Unknown, "thread-1")
+	}
+	if err == nil {
+		err = owner.SetTurn("step", "turn-1")
+	}
+	if err == nil {
+		err = owner.AppendEvent(runstore.RuntimeEvent{StepID: "step", ThreadID: "thread-1", TurnID: "turn-1", Kind: "turn_bound"})
+	}
+	if err == nil {
+		err = owner.Update("step", scheduler.Succeeded, "thread-1")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- logsCommand(ctx, []string{snapshot.Meta.RunID, "--root", root, "--follow"}, &output, dependencies{logsPollInterval: time.Millisecond})
+	}()
+	select {
+	case followErr := <-done:
+		t.Fatalf("follow завершился до финального события: %v", followErr)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err = owner.AppendEvent(runstore.RuntimeEvent{
+		StepID: "step", ThreadID: "thread-1", TurnID: "turn-1", Kind: "step_state", State: string(scheduler.Succeeded),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case followErr := <-done:
+		if followErr != nil {
+			t.Fatal(followErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follow не завершился после финального события")
+	}
+	text := output.String()
+	if strings.Count(text, "turn_bound") != 1 || !strings.Contains(text, "step_state") {
+		t.Fatalf("follow повторил старое или потерял финальное событие: %q", text)
 	}
 }
 
@@ -805,14 +903,25 @@ func TestArgumentParsingAndExitCodes(t *testing.T) {
 		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--repeat="},
 		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--repeat", "after", "--repeat-delay="},
 		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--max-runs", "2"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--max-parallel="},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--max-parallel", "0"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--max-parallel", "many"},
 		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--parent-run="},
 	} {
 		if _, err := parseRunArguments(args); err == nil {
 			t.Errorf("приняты неверные аргументы: %v", args)
 		}
 	}
-	if parsed, err := parseRunArguments([]string{"--task=x", "workflow.json", "--cwd=/tmp", "--parent-run=parent"}); err != nil || parsed.workflow != "workflow.json" || parsed.parentRun != "parent" {
+	if parsed, err := parseRunArguments([]string{"--task=x", "workflow.json", "--cwd=/tmp", "--parent-run=parent", "--max-parallel=7"}); err != nil || parsed.workflow != "workflow.json" || parsed.parentRun != "parent" || parsed.maxParallel != "7" {
 		t.Fatalf("не приняты флаги до пути или --name=value: %+v, %v", parsed, err)
+	}
+	if parsed, err := parseResumeArguments([]string{"run-1", "--max-parallel", "3"}); err != nil || parsed.maxParallel != "3" {
+		t.Fatalf("resume не принял общий лимит: %+v, %v", parsed, err)
+	}
+	for _, args := range [][]string{{"run-1", "--max-parallel="}, {"run-1", "--max-parallel", "-1"}} {
+		if _, err := parseResumeArguments(args); err == nil {
+			t.Errorf("resume принял неверный общий лимит: %v", args)
+		}
 	}
 	if exitCode(nil, 0) != 0 || exitCode(errors.New("x"), 0) != 2 || exitCode(context.Canceled, 2) != 130 || exitCode(context.Canceled, 15) != 143 {
 		t.Fatal("неверные коды завершения")
@@ -902,5 +1011,19 @@ func TestReportExitDistinguishesCancellationFromStorageFailure(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReportExitEscapesTerminalControls не позволяет внешней диагностике Codex
+// очистить экран или нарисовать поддельную строку результата через ANSI escape.
+func TestReportExitEscapesTerminalControls(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := reportExit(&stderr, errors.New("Codex: \x1b[2J\nподдельный успех"), 0); code != 2 {
+		t.Fatalf("неверный код выхода: %d", code)
+	}
+	got := stderr.String()
+	if strings.Contains(got, "\x1b") || strings.Contains(got, "\nподдельный") ||
+		!strings.Contains(got, `\u001B[2J\u000Aподдельный успех`) {
+		t.Fatalf("ошибка передала управляющий символ в терминал: %q", got)
 	}
 }

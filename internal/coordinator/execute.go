@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/stray-live-pixel/Lawa/internal/capacity"
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
@@ -102,10 +103,11 @@ type StepStatus struct {
 // Status — целостный снимок для терминала или другого интерфейса. Waiting
 // содержит только ещё не запущенные шаги, заблокированные зависимостями.
 type Status struct {
-	RunID, WorkflowID string
-	Steps             []StepStatus
-	Waiting           []string
-	Complete          bool
+	RunID, WorkflowID  string
+	Steps              []StepStatus
+	Waiting            []string
+	WaitingForCapacity []string
+	Complete           bool
 }
 
 // Ticker скрывает реальное время за минимальной границей. Production использует
@@ -142,6 +144,9 @@ type Options struct {
 	// прежнее ожидание ручного продолжения.
 	ReturnOnFailure bool
 	NewTicker       func(time.Duration) Ticker
+	// Capacity ограничивает суммарные активные turn для общего root. Nil сохраняет
+	// прежнее поведение внутренних вызовов без настроенного --max-parallel.
+	Capacity *capacity.Pool
 }
 
 // ErrRunUnsuccessful отличает терминальный failed/interrupted от сбоя самого
@@ -172,13 +177,14 @@ type activeExecution struct {
 	cancel           context.CancelFunc
 	interrupt        func(context.Context) error
 	threadID, turnID string
+	lease            *capacity.Lease
 	ready            chan struct{}
 	readyOnce        sync.Once
 	done             bool
 }
 
-func newActiveExecution(cancel context.CancelFunc, threadID string) *activeExecution {
-	return &activeExecution{cancel: cancel, threadID: threadID, ready: make(chan struct{})}
+func newActiveExecution(cancel context.CancelFunc, threadID string, lease *capacity.Lease) *activeExecution {
+	return &activeExecution{cancel: cancel, threadID: threadID, lease: lease, ready: make(chan struct{})}
 }
 
 func (a *activeExecution) setThread(id string) {
@@ -249,6 +255,9 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 		options.NewTicker = func(interval time.Duration) Ticker {
 			return realTicker{ticker: time.NewTicker(interval)}
 		}
+	}
+	if options.Capacity == nil {
+		options.Capacity = capacity.Unlimited()
 	}
 	initial, err := run.Load()
 	if err != nil {
@@ -325,20 +334,31 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 		if err != nil {
 			return outcome, err
 		}
-		prepared, err := Prepare(run, options.Root)
-		if err != nil {
-			return outcome, err
-		}
-		for _, continuation := range continuations {
+		waitingForCapacity := make([]string, 0)
+		for index, continuation := range continuations {
+			lease, available, acquireErr := options.Capacity.TryAcquire()
+			if acquireErr != nil {
+				return outcome, fmt.Errorf("координатор: получить слот продолжения: %w", acquireErr)
+			}
+			if !available {
+				for _, waiting := range continuations[index:] {
+					waitingForCapacity = append(waitingForCapacity, waiting.StepID)
+				}
+				break
+			}
 			continued[continuation.StepID] = true
 			turnCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-			execution := newActiveExecution(cancel, continuation.ThreadID)
+			execution := newActiveExecution(cancel, continuation.ThreadID, lease)
 			active[continuation.StepID] = execution
 			startContinuation(run, options.Client, turnCtx, continuation, execution, results)
 		}
+		prepared, err := prepare(run, options.Root, options.Capacity)
+		if err != nil {
+			return outcome, err
+		}
 		for _, launch := range prepared.Launches {
 			turnCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
-			execution := newActiveExecution(cancel, "")
+			execution := newActiveExecution(cancel, "", launch.lease)
 			active[launch.StepID] = execution
 			startLaunch(run, options.Client, turnCtx, launch, execution, results)
 		}
@@ -346,6 +366,8 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 		if err != nil {
 			return outcome, err
 		}
+		status.WaitingForCapacity = append(waitingForCapacity, prepared.WaitingForCapacity...)
+		signature += ";capacity=" + strings.Join(status.WaitingForCapacity, ",")
 		if len(active) == 0 {
 			// Терминал фиксируем до Notify: канал пользовательского вывода может
 			// отказать на финальной сводке, когда сам run уже надёжно завершён.
@@ -371,7 +393,9 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 		case <-ctx.Done():
 			return outcome, ctx.Err()
 		case completed := <-results:
-			finishExecution(active, completed.stepID)
+			if releaseErr := finishExecution(active, completed.stepID); releaseErr != nil {
+				return outcome, fmt.Errorf("координатор: освободить слот шага %q: %w", completed.stepID, releaseErr)
+			}
 			if err = saveLaunchResult(run, completed); err != nil {
 				return outcome, err
 			}
@@ -412,7 +436,7 @@ func hasTerminalFailure(status Status) bool {
 func drainActive(cause error, run *runstore.LockedRun, active map[string]*activeExecution, results <-chan launchResult) error {
 	for len(active) != 0 {
 		completed := <-results
-		finishExecution(active, completed.stepID)
+		cause = errors.Join(cause, finishExecution(active, completed.stepID))
 		if err := saveLaunchResult(run, completed); err != nil {
 			cause = errors.Join(cause, err)
 		}
@@ -459,7 +483,7 @@ func interruptActive(cause error, run *runstore.LockedRun, active map[string]*ac
 	for len(active) != 0 {
 		select {
 		case completed := <-results:
-			finishExecution(active, completed.stepID)
+			cause = errors.Join(cause, finishExecution(active, completed.stepID))
 			delete(interruptErrors, completed.stepID)
 			if err := saveLaunchResult(run, completed); err != nil {
 				cause = errors.Join(cause, err)
@@ -485,11 +509,13 @@ func interruptActive(cause error, run *runstore.LockedRun, active map[string]*ac
 	return cause
 }
 
-func finishExecution(active map[string]*activeExecution, stepID string) {
+func finishExecution(active map[string]*activeExecution, stepID string) error {
 	if execution := active[stepID]; execution != nil {
 		execution.cancel()
 		delete(active, stepID)
+		return execution.lease.Release()
 	}
+	return nil
 }
 
 // startLaunch сохраняет ID чата строго до title и turn/start. Состояние Running

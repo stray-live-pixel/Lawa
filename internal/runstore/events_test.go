@@ -68,6 +68,114 @@ func TestRuntimeEventsAndSummary(t *testing.T) {
 	}
 }
 
+// TestFormatEventEscapesTerminalControls защищает CLI от ANSI/OSC injection:
+// данные остаются различимыми, но ни один управляющий байт не достигает терминала.
+func TestFormatEventEscapesTerminalControls(t *testing.T) {
+	event := RuntimeEvent{
+		Time: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), Kind: "error\x1b[2J",
+		StepID: "step\x07", ThreadID: "thread\u009b", Message: "первая\nвторая",
+		Usage: map[string]int64{"tokens\x1b]52;c;secret\x07": 1},
+	}
+	formatted := FormatEvent(event)
+	for _, forbidden := range []string{"\x1b", "\x07", "\u009b", "\n"} {
+		if strings.Contains(formatted, forbidden) {
+			t.Fatalf("FormatEvent оставил управляющий символ %q: %q", forbidden, formatted)
+		}
+	}
+	for _, visible := range []string{`\u001B[2J`, `step\u0007`, `thread\u009B`, `первая\u000Aвторая`, `\u001B]52;c;secret\u0007`} {
+		if !strings.Contains(formatted, visible) {
+			t.Fatalf("FormatEvent потерял видимое экранирование %q: %q", visible, formatted)
+		}
+	}
+}
+
+// TestReadEventsAfterWaitsForCompleteLine проверяет границу concurrent append:
+// половина JSON не становится ошибкой и не двигает cursor, а после дописывания
+// той же строки событие возвращается ровно один раз.
+func TestReadEventsAfterWaitsForCompleteLine(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepID := snapshot.Meta.Steps[0].ID
+	run, err := OpenLocked(root, snapshot.Meta.RunID)
+	if err == nil {
+		err = run.AppendEvent(RuntimeEvent{StepID: stepID, Kind: "process_started", PID: 42})
+	}
+	if run != nil {
+		err = errors.Join(err, run.Close())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	initial, cursor, err := ReadEventsAfter(root, snapshot.Meta.RunID, 0)
+	if err != nil || len(initial) != 1 || cursor == 0 {
+		t.Fatalf("первый batch не прочитан: %+v, cursor=%d, err=%v", initial, cursor, err)
+	}
+
+	next := RuntimeEvent{Time: time.Now().UTC(), RunID: snapshot.Meta.RunID, StepID: stepID, Kind: "step_state", State: "succeeded"}
+	data, err := json.Marshal(next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendBytes := func(part []byte) {
+		t.Helper()
+		file, openErr := os.OpenFile(filepath.Join(root, snapshot.Meta.RunID, eventsFilename), os.O_APPEND|os.O_WRONLY, 0)
+		if openErr == nil {
+			_, openErr = file.Write(part)
+		}
+		if file != nil {
+			openErr = errors.Join(openErr, file.Close())
+		}
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+	}
+	middle := len(data) / 2
+	appendBytes(data[:middle])
+	partial, unchanged, err := ReadEventsAfter(root, snapshot.Meta.RunID, cursor)
+	if err != nil || len(partial) != 0 || unchanged != cursor {
+		t.Fatalf("неполная строка принята: %+v, cursor=%d, err=%v", partial, unchanged, err)
+	}
+	remainder := append(append([]byte{}, data[middle:]...), '\n')
+	appendBytes(remainder)
+	completed, advanced, err := ReadEventsAfter(root, snapshot.Meta.RunID, cursor)
+	if err != nil || len(completed) != 1 || completed[0].Kind != "step_state" || advanced <= cursor {
+		t.Fatalf("дописанная строка не прочитана: %+v, cursor=%d, err=%v", completed, advanced, err)
+	}
+}
+
+// TestSummarizeEventsTracksActiveItemTypes проверяет пользовательский смысл
+// lifecycle: started добавляет действие, completed снимает только совпавший ID,
+// а границы turn и процесса очищают незавершённые элементы после сбоя.
+func TestSummarizeEventsTracksActiveItemTypes(t *testing.T) {
+	base := []RuntimeEvent{
+		{StepID: "step", Kind: "turn_started"},
+		{StepID: "step", Kind: "item_started", ItemID: "command-1", ItemType: "commandExecution"},
+		{StepID: "step", Kind: "item_started", ItemID: "command-2", ItemType: "commandExecution"},
+		{StepID: "step", Kind: "item_started", ItemID: "mcp-1", ItemType: "mcpToolCall"},
+		{StepID: "step", Kind: "item_completed", ItemID: "command-1", ItemType: "commandExecution"},
+	}
+	assertTypes := func(name string, events []RuntimeEvent, want ...string) {
+		t.Helper()
+		got := SummarizeEvents(events)["step"].ActiveItemTypes
+		if strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("%s: текущие действия = %v, ожидались %v", name, got, want)
+		}
+	}
+
+	assertTypes("два типа", base, "commandExecution", "mcpToolCall")
+	assertTypes("последняя команда завершена", append(append([]RuntimeEvent{}, base...),
+		RuntimeEvent{StepID: "step", Kind: "item_completed", ItemID: "command-2", ItemType: "commandExecution"}), "mcpToolCall")
+	assertTypes("turn завершён", append(append([]RuntimeEvent{}, base...),
+		RuntimeEvent{StepID: "step", Kind: "turn_completed"}))
+	assertTypes("процесс перезапущен", append(append([]RuntimeEvent{}, base...),
+		RuntimeEvent{StepID: "step", Kind: "process_started", PID: 42}))
+	assertTypes("процесс завершён", append(append([]RuntimeEvent{}, base...),
+		RuntimeEvent{StepID: "step", Kind: "process_exited"}))
+}
+
 // TestHistoricalAppNativeRunIsReadOnly воспроизводит выпущенный формат v2 с
 // marker создания Desktop-задачи. Чтение остаётся доступно, writer запрещён.
 func TestHistoricalAppNativeRunIsReadOnly(t *testing.T) {
