@@ -96,16 +96,19 @@ func Prepare(run *runstore.LockedRun, root string) (Preparation, error) {
 	}
 	for _, stepID := range plan.Ready {
 		saved := savedSteps[stepID]
+		workflowStep := steps[stepID]
 		runDir := filepath.Join(root, snapshot.Meta.RunID)
 		ownMemory := filepath.Join(runDir, "memory", saved.ThreadID+".md")
+		command := codex.Command{
+			CWD:         snapshot.Meta.CWD,
+			Title:       fmt.Sprintf("Lawa: %s / %s [%s]", snapshot.Workflow.ID, stepID, snapshot.Meta.RunID),
+			Text:        buildPrompt(snapshot, workflowStep, saved, root),
+			Permissions: stepPermissions(runDir, ownMemory, saved.ThreadID),
+		}
+		applyRuntimeSettings(&command, snapshot.Workflow.Model, workflowStep)
 		prepared.Launches = append(prepared.Launches, Launch{
-			StepID: stepID,
-			Command: codex.Command{
-				CWD:         snapshot.Meta.CWD,
-				Title:       fmt.Sprintf("Lawa: %s / %s [%s]", snapshot.Workflow.ID, stepID, snapshot.Meta.RunID),
-				Text:        buildPrompt(snapshot, steps[stepID], saved, root),
-				Permissions: stepPermissions(runDir, ownMemory, saved.ThreadID),
-			},
+			StepID:  stepID,
+			Command: command,
 		})
 	}
 	return prepared, nil
@@ -124,6 +127,10 @@ func prepareContinuations(snapshot runstore.Snapshot, root string, enabled bool,
 		return nil, fmt.Errorf("координатор: определить root для продолжения: %w", err)
 	}
 	runDir := filepath.Join(root, snapshot.Meta.RunID)
+	workflowSteps := make(map[string]workflow.Step, len(snapshot.Workflow.Steps))
+	for _, step := range snapshot.Workflow.Steps {
+		workflowSteps[step.ID] = step
+	}
 	var continuations []Continuation
 	for _, step := range snapshot.Meta.Steps {
 		if step.State != scheduler.Cancelled || already[step.ID] {
@@ -137,15 +144,43 @@ func prepareContinuations(snapshot runstore.Snapshot, root string, enabled bool,
 			}
 			return nil, fmt.Errorf("координатор: проверить память шага %q перед продолжением: %w", step.ID, statErr)
 		}
+		command := codex.Command{
+			CWD: snapshot.Meta.CWD, Text: "continue",
+			Permissions: stepPermissions(runDir, memory, step.ThreadID),
+		}
+		applyRuntimeSettings(&command, snapshot.Workflow.Model, workflowSteps[step.ID])
 		continuations = append(continuations, Continuation{
 			StepID: step.ID, ThreadID: step.CodexThreadID,
-			Command: codex.Command{
-				CWD: snapshot.Meta.CWD, Text: "continue",
-				Permissions: stepPermissions(runDir, memory, step.ThreadID),
-			},
+			Command: command,
 		})
 	}
 	return continuations, nil
+}
+
+// applyRuntimeSettings переводит устойчивые пользовательские значения workflow
+// в текущие имена протокола Codex. Корневой model служит значением по умолчанию,
+// а model кубика имеет больший приоритет. Если оба отсутствуют, пустое поле Command
+// сохраняет модель из конфигурации Codex. Явный normal обязан отключить унаследованный
+// Fast mode, поэтому он передаётся как default; отсутствие speed не добавляет
+// serviceTier и сохраняет конфигурацию окружения пользователя.
+func applyRuntimeSettings(command *codex.Command, workflowModel *string, step workflow.Step) {
+	if workflowModel != nil {
+		command.Model = *workflowModel
+	}
+	if step.Model != nil {
+		command.Model = *step.Model
+	}
+	if step.Effort != nil {
+		command.Effort = *step.Effort
+	}
+	if step.Speed != nil {
+		switch *step.Speed {
+		case workflow.SpeedNormal:
+			command.ServiceTier = "default"
+		case workflow.SpeedFast:
+			command.ServiceTier = "fast"
+		}
+	}
 }
 
 func stepPermissions(runDir, ownMemory, threadID string) *codex.PermissionProfile {

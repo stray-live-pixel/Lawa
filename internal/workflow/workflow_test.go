@@ -32,6 +32,32 @@ func TestDecode(t *testing.T) {
 	}
 }
 
+// TestDecodeRuntimeSettings проверяет независимую опциональность настроек. Их
+// указатели сохраняют различие между наследованием Codex и явным override кубика.
+func TestDecodeRuntimeSettings(t *testing.T) {
+	input := `{"id":"runtime","model":"gpt-5.6-luna","steps":[` +
+		`{"id":"model","type":"agent","prompt":"Модель","dependsOn":[],"model":"gpt-5.6-sol"},` +
+		`{"id":"effort","type":"agent","prompt":"Рассуждение","dependsOn":[],"effort":"high"},` +
+		`{"id":"speed","type":"agent","prompt":"Скорость","dependsOn":[],"speed":"fast"},` +
+		`{"id":"inherited","type":"agent","prompt":"Обычная задача","dependsOn":[]}]}`
+	w, err := Decode(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.Model == nil || *w.Model != "gpt-5.6-luna" {
+		t.Fatalf("общая модель workflow потеряна: %+v", w.Model)
+	}
+	model, effort, speed, inherited := w.Steps[0], w.Steps[1], w.Steps[2], w.Steps[3]
+	if model.Model == nil || *model.Model != "gpt-5.6-sol" || model.Effort != nil || model.Speed != nil ||
+		effort.Model != nil || effort.Effort == nil || *effort.Effort != "high" || effort.Speed != nil ||
+		speed.Model != nil || speed.Effort != nil || speed.Speed == nil || *speed.Speed != SpeedFast {
+		t.Fatalf("независимые настройки изменены или потеряны: model=%+v effort=%+v speed=%+v", model, effort, speed)
+	}
+	if inherited.Model != nil || inherited.Effort != nil || inherited.Speed != nil {
+		t.Fatalf("отсутствующие настройки перестали наследоваться: %+v", inherited)
+	}
+}
+
 // TestDecodeRejectsInvalidInput проверяет отклонение всей схемы, включая попытки
 // скрыть ошибку повторным ключом, другим регистром или вторым JSON-документом.
 func TestDecodeRejectsInvalidInput(t *testing.T) {
@@ -43,22 +69,32 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 		"числовой id": strings.Replace(valid, `"flow"`, `42`, 1),
 		"нет steps":   `{"id":"flow"}`, "пустые steps": `{"id":"flow","steps":[]}`,
 		"null steps": `{"id":"flow","steps":null}`, "тип steps": `{"id":"flow","steps":{}}`,
-		"null шага":            `{"id":"flow","steps":[null]}`,
-		"пустой id шага":       strings.Replace(valid, `"id":"a"`, `"id":" "`, 1),
-		"нет id шага":          strings.Replace(valid, `"id":"a",`, "", 1),
-		"нет type":             strings.Replace(valid, `"type":"agent",`, "", 1),
-		"неверный type":        strings.Replace(valid, `"agent"`, `"shell"`, 1),
-		"нет prompt":           strings.Replace(valid, `"prompt":"  задача\n",`, "", 1),
-		"пустой prompt":        strings.Replace(valid, `"  задача\n"`, `" \n"`, 1),
-		"null prompt":          strings.Replace(valid, `"  задача\n"`, `null`, 1),
-		"нет dependsOn":        strings.Replace(valid, `,"dependsOn":[]`, "", 1),
-		"null dependsOn":       strings.Replace(valid, `"dependsOn":[]`, `"dependsOn":null`, 1),
-		"тип dependsOn":        strings.Replace(valid, `"dependsOn":[]`, `"dependsOn":"a"`, 1),
-		"тип ссылки":           strings.Replace(valid, `"dependsOn":[]`, `"dependsOn":[42]`, 1),
-		"неизвестное поле":     strings.Replace(valid, `"id":"flow"`, `"other":1,"id":"flow"`, 1),
-		"регистр поля":         strings.Replace(valid, `"dependsOn"`, `"DependsOn"`, 1),
-		"повтор поля workflow": strings.Replace(valid, `"id":"flow"`, `"id":"flow","id":"other"`, 1),
-		"повтор поля шага":     strings.Replace(valid, `"id":"a"`, `"id":"a","\u0069d":"b"`, 1),
+		"null шага":                 `{"id":"flow","steps":[null]}`,
+		"пустой id шага":            strings.Replace(valid, `"id":"a"`, `"id":" "`, 1),
+		"нет id шага":               strings.Replace(valid, `"id":"a",`, "", 1),
+		"нет type":                  strings.Replace(valid, `"type":"agent",`, "", 1),
+		"неверный type":             strings.Replace(valid, `"agent"`, `"shell"`, 1),
+		"нет prompt":                strings.Replace(valid, `"prompt":"  задача\n",`, "", 1),
+		"пустой prompt":             strings.Replace(valid, `"  задача\n"`, `" \n"`, 1),
+		"null prompt":               strings.Replace(valid, `"  задача\n"`, `null`, 1),
+		"нет dependsOn":             strings.Replace(valid, `,"dependsOn":[]`, "", 1),
+		"null dependsOn":            strings.Replace(valid, `"dependsOn":[]`, `"dependsOn":null`, 1),
+		"тип dependsOn":             strings.Replace(valid, `"dependsOn":[]`, `"dependsOn":"a"`, 1),
+		"тип ссылки":                strings.Replace(valid, `"dependsOn":[]`, `"dependsOn":[42]`, 1),
+		"неизвестное поле":          strings.Replace(valid, `"id":"flow"`, `"other":1,"id":"flow"`, 1),
+		"регистр поля":              strings.Replace(valid, `"dependsOn"`, `"DependsOn"`, 1),
+		"повтор поля workflow":      strings.Replace(valid, `"id":"flow"`, `"id":"flow","id":"other"`, 1),
+		"повтор поля шага":          strings.Replace(valid, `"id":"a"`, `"id":"a","\u0069d":"b"`, 1),
+		"пустая model workflow":     strings.Replace(valid, `"id":"flow"`, `"id":"flow","model":""`, 1),
+		"model workflow с пробелом": strings.Replace(valid, `"id":"flow"`, `"id":"flow","model":"bad model"`, 1),
+		"числовая model workflow":   strings.Replace(valid, `"id":"flow"`, `"id":"flow","model":42`, 1),
+		"пустая model":              strings.Replace(valid, `"prompt":`, `"model":"","prompt":`, 1),
+		"model с пробелом":          strings.Replace(valid, `"prompt":`, `"model":"bad model","prompt":`, 1),
+		"числовая model":            strings.Replace(valid, `"prompt":`, `"model":42,"prompt":`, 1),
+		"пустой effort":             strings.Replace(valid, `"prompt":`, `"effort":"","prompt":`, 1),
+		"effort с пробелом":         strings.Replace(valid, `"prompt":`, `"effort":"very high","prompt":`, 1),
+		"неверный speed":            strings.Replace(valid, `"prompt":`, `"speed":"turbo","prompt":`, 1),
+		"числовой speed":            strings.Replace(valid, `"prompt":`, `"speed":2,"prompt":`, 1),
 		// Разные непарные суррогаты не должны превращаться в один ID через замену на U+FFFD.
 		"искажённая ссылка": `{"id":"flow","steps":[{"id":"\ud800","type":"agent","prompt":"x","dependsOn":[]},{"id":"b","type":"agent","prompt":"x","dependsOn":["\ud801"]}]}`,
 	}
@@ -67,6 +103,27 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 			w, err := Decode(strings.NewReader(input))
 			if err == nil || !reflect.DeepEqual(w, Workflow{}) {
 				t.Fatalf("ожидались ошибка и пустой результат: %+v, %v", w, err)
+			}
+		})
+	}
+}
+
+// TestDecodeRejectsNullRuntimeSettings защищает разницу между отсутствующим
+// полем и явным null. Отсутствие наследует Codex, а null является неверным
+// значением и должен назвать конкретное поле до создания run.
+func TestDecodeRejectsNullRuntimeSettings(t *testing.T) {
+	cases := map[string]string{
+		"workflow.model": strings.Replace(valid, `"id":"flow"`, `"id":"flow","model":null`, 1),
+		"step.model":     strings.Replace(valid, `"prompt":`, `"model":null,"prompt":`, 1),
+		"step.effort":    strings.Replace(valid, `"prompt":`, `"effort":null,"prompt":`, 1),
+		"step.speed":     strings.Replace(valid, `"prompt":`, `"speed":null,"prompt":`, 1),
+	}
+	for name, input := range cases {
+		t.Run(name, func(t *testing.T) {
+			field := name[strings.LastIndex(name, ".")+1:]
+			w, err := Decode(strings.NewReader(input))
+			if err == nil || !reflect.DeepEqual(w, Workflow{}) || !strings.Contains(err.Error(), field) || !strings.Contains(err.Error(), "null") {
+				t.Fatalf("явный null для %s принят или потерял понятную диагностику: %+v, %v", name, w, err)
 			}
 		})
 	}

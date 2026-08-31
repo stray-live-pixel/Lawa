@@ -18,6 +18,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 	"unicode/utf8"
 )
 
@@ -44,8 +45,10 @@ type Event struct {
 }
 
 // Command описывает один новый запуск. Пустой Executable означает codex из PATH;
-// shell не используется. Модель и права наследуются из Codex; непустой Sandbox
-// явно передаётся серверу, который проверяет его против managed restrictions.
+// shell не используется. Пустые Model, Effort и ServiceTier наследуются из Codex;
+// непустые значения являются явными override одного кубика и повторяются при
+// Continue, чтобы новый процесс app-server не изменил сохранённый контракт run.
+// Непустой Sandbox явно передаётся серверу, который проверяет его против managed restrictions.
 // Кубик автономен внутри sandbox. on-request + auto_review поручает оценку
 // дополнительных прав самому Codex, не выдавая их автоматически из Lawa.
 // Permissions создаёт одноразовый :workspace-профиль с точечными путями и
@@ -65,6 +68,7 @@ type Event struct {
 // делает это для любого такого запроса, не отправляя молчаливое согласие.
 type Command struct {
 	Executable, CWD, Text, Title, Sandbox string
+	Model, Effort, ServiceTier            string
 	Skill                                 *Skill
 	Permissions                           *PermissionProfile
 	Stderr                                io.Writer
@@ -172,6 +176,7 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 	// поддерживает создание и resume через thread/read, тогда как paginated доступен не во
 	// всех версиях app-server и пока не гарантирует полный жизненный цикл чата.
 	params := map[string]any{"cwd": command.CWD, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
+	addRuntimeOverrides(params, command, false)
 	if command.Permissions != nil {
 		params["permissions"] = command.Permissions.Name
 	} else if command.Sandbox != "" {
@@ -246,6 +251,13 @@ func prepareTurn(command Command) ([]map[string]any, error) {
 			return nil, errors.New("параметры Codex должны быть в UTF-8")
 		}
 	}
+	for _, setting := range []struct{ name, value string }{
+		{"model", command.Model}, {"effort", command.Effort}, {"service tier", command.ServiceTier},
+	} {
+		if setting.value != "" && (!utf8.ValidString(setting.value) || strings.IndexFunc(setting.value, unicode.IsSpace) >= 0) {
+			return nil, fmt.Errorf("%s Codex должен быть непустым значением UTF-8 без пробельных символов", setting.name)
+		}
+	}
 	if command.Permissions != nil {
 		if command.Sandbox != "" {
 			return nil, errors.New("именованный профиль permissions нельзя сочетать с sandbox")
@@ -281,6 +293,7 @@ func resumeThread(c *client, command Command, threadID string) error {
 		"threadId": threadID, "cwd": command.CWD,
 		"approvalPolicy": "on-request", "approvalsReviewer": "auto_review",
 	}
+	addRuntimeOverrides(params, command, false)
 	if command.Permissions != nil {
 		params["permissions"] = command.Permissions.Name
 	} else if command.Sandbox != "" {
@@ -310,7 +323,9 @@ func startAndWait(c *client, command Command, inputs []map[string]any, result *R
 	result.TurnAttempted = true
 	// На 0.150.0-alpha.12.2 одного thread/start оказалось недостаточно: turn
 	// сохранил прежнюю политику. Передаём явный override; sandbox не меняем.
-	if err := c.call("turn/start", map[string]any{"threadId": result.ThreadID, "input": inputs, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}, &started); err != nil {
+	params := map[string]any{"threadId": result.ThreadID, "input": inputs, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
+	addRuntimeOverrides(params, command, true)
+	if err := c.call("turn/start", params, &started); err != nil {
 		return err
 	}
 	result.TurnID = started.Turn.ID
@@ -344,6 +359,22 @@ func startAndWait(c *client, command Command, inputs []map[string]any, result *R
 	completion := c.completed[result.TurnID]
 	result.Status, result.TurnError = completion.Status, completion.Error
 	return nil
+}
+
+// addRuntimeOverrides передаёт только явно заданные значения. Model и
+// serviceTier поддерживаются на уровне thread/start и thread/resume; effort есть
+// только у turn/start. Повтор всех трёх в turn/start делает первый и продолженный
+// turn одинаковыми и оставляет проверку совместимости авторитетному app-server.
+func addRuntimeOverrides(params map[string]any, command Command, includeEffort bool) {
+	if command.Model != "" {
+		params["model"] = command.Model
+	}
+	if includeEffort && command.Effort != "" {
+		params["effort"] = command.Effort
+	}
+	if command.ServiceTier != "" {
+		params["serviceTier"] = command.ServiceTier
+	}
 }
 
 // send проверяет отмену перед каждой записью, включая ответы на встречные запросы.
