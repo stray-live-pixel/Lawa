@@ -699,3 +699,12 @@ func currentStatus(run *runstore.LockedRun) (Status, string, error) {
 	fmt.Fprintf(&signature, "waiting=%s;complete=%t", strings.Join(plan.Waiting, ","), plan.Complete)
 	return status, signature.String(), nil
 }
+
+// CurrentStatus возвращает тот же целостный снимок, который длительный stdio-
+// координатор передаёт statusreport. Короткие app-native команды используют его
+// после каждой устойчивой мутации, чтобы dashboard, Markdown и UML не зависели
+// от того, какой транспорт владеет задачами Codex.
+func CurrentStatus(run *runstore.LockedRun) (Status, error) {
+	status, _, err := currentStatus(run)
+	return status, err
+}

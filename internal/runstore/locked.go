@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sync"
 	"syscall"
+	"unicode/utf8"
 
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 )
@@ -219,6 +221,41 @@ func (r *LockedRun) ReleaseUnattempted(stepID string) error {
 	return nil
 }
 
+// WriteMemory атомарно заменяет память одного известного кубика. App-native
+// координатор вызывает метод до сохранения Succeeded: зависимый кубик не должен
+// стартовать, пока финальный ответ предшественника ещё не сохранён. Повтор с тем
+// же текстом безопасен после потери ответа CLI. Произвольный путь не принимается,
+// имя выводится только из уже проверенного внутреннего ThreadID.
+func (r *LockedRun) WriteMemory(stepID string, data []byte) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.check(); err != nil {
+		return err
+	}
+	if !utf8.Valid(data) {
+		return fmt.Errorf("память шага %q должна быть текстом UTF-8", stepID)
+	}
+	s, err := load(r.dir, r.runID)
+	if err != nil {
+		return err
+	}
+	threadID := ""
+	for _, step := range s.Meta.Steps {
+		if step.ID == stepID {
+			threadID = step.ThreadID
+			break
+		}
+	}
+	if threadID == "" {
+		return fmt.Errorf("нет шага %q", stepID)
+	}
+	if err = saveRunFile(r.dir, filepath.Join("memory", threadID+".md"), data, (*os.File).Sync); err != nil {
+		r.failed = fmt.Errorf("сохранение памяти запуска %q: %w; остановите новые запросы и восстановите состояние после повторного открытия", r.runID, err)
+		return r.failed
+	}
+	return nil
+}
+
 // update принимает Sync явно для проверки отказов до и после публикации meta
 // без глобальных подмен или повреждения диска; обычные вызовы используют File.Sync.
 func (r *LockedRun) update(stepID string, state scheduler.State, chat string, syncFile func(*os.File) error) error {
@@ -269,7 +306,16 @@ func saveMetadata(dir *os.Root, meta Metadata, syncFile func(*os.File) error) (e
 	if err != nil {
 		return err
 	}
-	name := ".meta-" + newID() + ".tmp"
+	return saveRunFile(dir, "meta.json", data, syncFile)
+}
+
+// saveRunFile публикует обычный файл через временный соседний inode. Временное
+// имя размещается в том же каталоге, поэтому Rename остаётся атомарным и для
+// meta.json, и для памяти. После переименования сохраняется запись именно
+// родительского каталога целевого файла.
+func saveRunFile(dir *os.Root, target string, data []byte, syncFile func(*os.File) error) (err error) {
+	parent := filepath.Dir(target)
+	name := filepath.Join(parent, ".lawa-"+newID()+".tmp")
 	f, err := dir.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
@@ -286,10 +332,10 @@ func saveMetadata(dir *os.Root, meta Metadata, syncFile func(*os.File) error) (e
 	if err = errors.Join(err, f.Close()); err != nil {
 		return err
 	}
-	if err = dir.Rename(name, "meta.json"); err != nil {
+	if err = dir.Rename(name, target); err != nil {
 		return err
 	}
-	f, err = dir.Open(".")
+	f, err = dir.Open(parent)
 	if err != nil {
 		return err
 	}
