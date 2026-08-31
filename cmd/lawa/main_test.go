@@ -695,6 +695,39 @@ func TestRunCommand(t *testing.T) {
 	}
 }
 
+// TestRunCommandParent проходит публичный CLI-контракт и проверяет, что связь
+// сохраняется именно в новом run, не меняя существующего родителя.
+func TestRunCommandParent(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	workflowJSON := []byte(`{"id":"child","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`)
+	parent, err := runstore.Create(root, runstore.Input{
+		WorkflowJSON: workflowJSON, Task: "Родитель", CWD: cwd, InitiatorThreadID: "parent-chat",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflowPath := filepath.Join(t.TempDir(), "workflow.json")
+	if err = os.WriteFile(workflowPath, workflowJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
+	var out bytes.Buffer
+	if err = executeContext(t.Context(), []string{
+		"run", workflowPath, "--cwd", cwd, "--task", "Ребёнок", "--initiator-thread-id", "child-chat",
+		"--parent-run", parent.Meta.RunID, "--root", root,
+	}, &out, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(out.String())
+	if len(fields) < 2 {
+		t.Fatalf("не напечатан runId ребёнка: %q", out.String())
+	}
+	child, err := runstore.Load(root, fields[1])
+	if err != nil || child.Meta.ParentRunID != parent.Meta.RunID {
+		t.Fatalf("CLI потерял родителя: %+v, %v", child.Meta, err)
+	}
+}
+
 // TestRunPreflightFailureLeavesNoRun защищает порядок побочных эффектов: при
 // недоступном app-server пользователь может повторить run без мусора и дублей.
 func TestRunPreflightFailureLeavesNoRun(t *testing.T) {
@@ -766,16 +799,33 @@ func TestArgumentParsingAndExitCodes(t *testing.T) {
 		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--repeat="},
 		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--repeat", "after", "--repeat-delay="},
 		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--max-runs", "2"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--parent-run="},
 	} {
 		if _, err := parseRunArguments(args); err == nil {
 			t.Errorf("приняты неверные аргументы: %v", args)
 		}
 	}
-	if parsed, err := parseRunArguments([]string{"--task=x", "workflow.json", "--initiator-thread-id=i", "--cwd=/tmp"}); err != nil || parsed.workflow != "workflow.json" {
+	if parsed, err := parseRunArguments([]string{"--task=x", "workflow.json", "--initiator-thread-id=i", "--cwd=/tmp", "--parent-run=parent"}); err != nil || parsed.workflow != "workflow.json" || parsed.parentRun != "parent" {
 		t.Fatalf("не приняты флаги до пути или --name=value: %+v, %v", parsed, err)
 	}
 	if exitCode(nil, 0) != 0 || exitCode(errors.New("x"), 0) != 2 || exitCode(context.Canceled, 2) != 130 || exitCode(context.Canceled, 15) != 143 {
 		t.Fatal("неверные коды завершения")
+	}
+}
+
+func TestParseServeArguments(t *testing.T) {
+	parsed, err := parseServeArguments(nil)
+	if err != nil || parsed.address != "127.0.0.1:60800" || parsed.root != "" {
+		t.Fatalf("неверные параметры serve по умолчанию: %+v, %v", parsed, err)
+	}
+	parsed, err = parseServeArguments([]string{"--root", "/tmp/runs", "--listen=localhost:61000"})
+	if err != nil || parsed.root != "/tmp/runs" || parsed.address != "localhost:61000" {
+		t.Fatalf("явные параметры serve потеряны: %+v, %v", parsed, err)
+	}
+	for _, args := range [][]string{{"extra"}, {"--listen="}, {"--unknown", "x"}, {"--root", "a", "--root", "b"}} {
+		if _, err := parseServeArguments(args); err == nil {
+			t.Errorf("приняты неверные параметры serve: %v", args)
+		}
 	}
 }
 

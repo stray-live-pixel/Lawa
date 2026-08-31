@@ -21,6 +21,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/buildinfo"
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
+	"github.com/stray-live-pixel/Lawa/internal/dashboard"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/series"
 	"github.com/stray-live-pixel/Lawa/internal/statusreport"
@@ -34,6 +35,8 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
       Создать run, запустить готовые кубики и наблюдать до общего успеха.
   lawa resume <run-id>
       Продолжить сохранённый run и учесть ручную работу в прежних чатах.
+  lawa serve [--root <путь>] [--listen <адрес>]
+      Показать дерево workflow; по умолчанию http://127.0.0.1:60800.
   lawa series-status <series-id>
       Показать режим, прогресс, текущий run и время следующего запуска.
   lawa series-stop <series-id>
@@ -56,6 +59,7 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
   --comment <текст>            Комментарий пользователя; может быть пустым.
   --comment-file <путь>        Альтернатива --comment.
   --initiator-thread-id <id>   ID чата, из которого вызван /lawa; обязательно.
+  --parent-run <run-id>        Необязательный родитель для дерева связанных workflow.
   --root <путь>                Хранилище run; по умолчанию ~/.light-ai-workflows.
   --codex <путь>               Исполняемый файл Codex; по умолчанию codex из PATH.
   --repeat <режим>             immediate, after или cron.
@@ -68,13 +72,17 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
   --root <путь>                То же хранилище run.
   --codex <путь>               Исполняемый файл Codex.
 
+Параметры serve:
+  --root <путь>                То же хранилище run.
+  --listen <host:port>         Адрес сервера; по умолчанию 127.0.0.1:60800.
+
 Параметры update:
   --yes                        Не ждать подтверждения файлов Lawa и PATH.
   --install-plantuml           Отдельно разрешить системную установку PlantUML;
                                требует --yes.
   --codex-home <путь>          Корень скиллов; по умолчанию $CODEX_HOME или ~/.codex.
 
-validate, skill, version, update и help не запускают агентов и не требуют подключения к Codex.
+serve, validate, skill, version, update и help не запускают агентов и не требуют подключения к Codex.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
@@ -245,6 +253,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return runCommand(ctx, args[1:], out, stderr, deps)
 	case "resume":
 		return resumeCommand(ctx, args[1:], out, stderr, deps)
+	case "serve":
+		return serveCommand(ctx, args[1:], out, stderr, deps)
 	case "series-status":
 		return seriesStatusCommand(args[1:], out, deps)
 	case "series-stop":
@@ -277,12 +287,15 @@ func validateCommand(args []string, out io.Writer) error {
 
 // runArguments хранит уже разобранные, но ещё не нормализованные параметры run.
 type runArguments struct {
-	workflow, cwd, task, taskFile, comment, commentFile, initiator, root, executable string
-	repeat, repeatDelay, cron, timezone, maxRuns                                     string
+	workflow, cwd, task, taskFile, comment, commentFile, initiator, parentRun, root, executable string
+	repeat, repeatDelay, cron, timezone, maxRuns                                                string
 }
 
 // resumeArguments не содержит cwd: продолжение обязано использовать сохранённый.
 type resumeArguments struct{ runID, root, executable string }
+
+// serveArguments хранит независимые от Codex параметры локального HTTP-сервера.
+type serveArguments struct{ root, address string }
 
 // runCommand валидирует весь ввод и подключение до создания нового run. После
 // публикации runId дальнейшая ошибка оставляет его пригодным для resume.
@@ -332,7 +345,8 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 	}
 	input := runstore.Input{
 		WorkflowJSON: workflowJSON,
-		Task:         parsed.task, Comment: parsed.comment, CWD: parsed.cwd, InitiatorThreadID: parsed.initiator,
+		Task:         parsed.task, Comment: parsed.comment, CWD: parsed.cwd,
+		InitiatorThreadID: parsed.initiator, ParentRunID: parsed.parentRun,
 	}
 	if parsed.repeat != "" {
 		return runSeries(ctx, parsed.root, parsed.executable, input, config, schedule, out, stderr, deps)
@@ -357,6 +371,27 @@ func resumeCommand(ctx context.Context, args []string, out, stderr io.Writer, de
 		return err
 	}
 	return coordinate(ctx, parsed.root, parsed.runID, parsed.executable, out, stderr, deps, true, false)
+}
+
+// serveCommand не открывает Codex и не создаёт хранилище. Loopback безопасен по
+// умолчанию; явная публикация на другом интерфейсе остаётся возможной, но видимой.
+func serveCommand(ctx context.Context, args []string, out, stderr io.Writer, deps dependencies) error {
+	parsed, err := parseServeArguments(args)
+	if err != nil {
+		return err
+	}
+	if parsed.root, err = resolveRoot(parsed.root, deps.userHomeDir); err != nil {
+		return err
+	}
+	if !dashboard.IsLoopbackAddress(parsed.address) {
+		if _, err = fmt.Fprintf(stderr, "lawa: предупреждение: dashboard доступен не только с этого компьютера: %s\n", parsed.address); err != nil {
+			return err
+		}
+	}
+	if _, err = fmt.Fprintf(out, "Dashboard: http://%s\nPreview: http://%s/preview\n", parsed.address, parsed.address); err != nil {
+		return err
+	}
+	return dashboard.Serve(ctx, parsed.root, parsed.address)
 }
 
 // runSeries последовательно создаёт обычные run. Блокирующий coordinate служит
@@ -521,7 +556,7 @@ func parseRunArguments(args []string) (runArguments, error) {
 	var parsed runArguments
 	positionals, values, err := parseOptions(args, map[string]bool{
 		"cwd": true, "task": true, "task-file": true, "comment": true, "comment-file": true,
-		"initiator-thread-id": true, "root": true, "codex": true, "repeat": true,
+		"initiator-thread-id": true, "parent-run": true, "root": true, "codex": true, "repeat": true,
 		"repeat-delay": true, "cron": true, "timezone": true, "max-runs": true,
 	})
 	if err != nil || len(positionals) != 1 {
@@ -533,7 +568,7 @@ func parseRunArguments(args []string) (runArguments, error) {
 	parsed.workflow, parsed.cwd, parsed.task = positionals[0], values["cwd"], values["task"]
 	parsed.taskFile, parsed.comment = values["task-file"], values["comment"]
 	parsed.commentFile, parsed.initiator = values["comment-file"], values["initiator-thread-id"]
-	parsed.root, parsed.executable = values["root"], values["codex"]
+	parsed.parentRun, parsed.root, parsed.executable = values["parent-run"], values["root"], values["codex"]
 	parsed.repeat, parsed.repeatDelay, parsed.cron = values["repeat"], values["repeat-delay"], values["cron"]
 	parsed.timezone, parsed.maxRuns = values["timezone"], values["max-runs"]
 	_, hasTask := values["task"]
@@ -549,6 +584,9 @@ func parseRunArguments(args []string) (runArguments, error) {
 	}
 	if hasRepeat && strings.TrimSpace(parsed.repeat) == "" {
 		return runArguments{}, errors.New("--repeat требует режим immediate, after или cron")
+	}
+	if value, present := values["parent-run"]; present && strings.TrimSpace(value) == "" {
+		return runArguments{}, errors.New("--parent-run требует непустой run-id")
 	}
 	for _, name := range []string{"repeat-delay", "cron", "timezone", "max-runs"} {
 		if value, present := values[name]; present && strings.TrimSpace(value) == "" {
@@ -575,6 +613,27 @@ func parseResumeArguments(args []string) (resumeArguments, error) {
 		return parsed, errors.New("использование: lawa resume <run-id> [--root <путь>] [--codex <путь>]")
 	}
 	parsed.runID, parsed.root, parsed.executable = positionals[0], values["root"], values["codex"]
+	return parsed, nil
+}
+
+// parseServeArguments сохраняет безопасный loopback default и не разрешает
+// позиционные значения, которые можно ошибочно принять за root или адрес.
+func parseServeArguments(args []string) (serveArguments, error) {
+	parsed := serveArguments{address: dashboard.DefaultAddress}
+	positionals, values, err := parseOptions(args, map[string]bool{"root": true, "listen": true})
+	if err != nil || len(positionals) != 0 {
+		if err != nil {
+			return serveArguments{}, err
+		}
+		return serveArguments{}, errors.New("использование: lawa serve [--root <путь>] [--listen <host:port>]")
+	}
+	parsed.root = values["root"]
+	if listen, exists := values["listen"]; exists {
+		if strings.TrimSpace(listen) == "" {
+			return serveArguments{}, errors.New("--listen требует непустой host:port")
+		}
+		parsed.address = listen
+	}
 	return parsed, nil
 }
 

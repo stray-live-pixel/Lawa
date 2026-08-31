@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
+	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 )
 
@@ -27,7 +28,7 @@ const (
 	// не увидит частично записанный Markdown, source или PNG.
 	ReportFilename = "workflow-status.md"
 	SourceFilename = "workflow-status.puml"
-	ImageFilename  = "workflow-status.png"
+	ImageFilename  = runstore.StatusImageFilename
 )
 
 // pngSignature отделяет готовое изображение от текстовой ошибки, которую

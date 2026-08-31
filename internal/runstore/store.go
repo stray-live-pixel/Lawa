@@ -18,6 +18,10 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
+// StatusImageFilename — принадлежащее layout run стабильное имя последней PNG-
+// схемы. Runstore использует его для безопасного чтения без произвольного пути.
+const StatusImageFilename = "workflow-status.png"
+
 // ErrInitiatorAsExecutor означает нарушение внутреннего инварианта: чат постановки
 // задачи не может быть чатом исполнителя. Ошибка распознаётся через errors.Is;
 // конкретные runId и ID шага добавляются в месте проверки для диагностики.
@@ -42,19 +46,23 @@ var ErrInitiatorAsExecutor = errors.New("в meta.json чат постановк�
 
 // Input — общий вход нового запуска. WorkflowJSON сохраняется побайтно; Task
 // и Comment записываются отдельными разделами task.md без обрезки пробелов.
+// ParentRunID необязателен, но обязан вести в существующий run того же root.
 // CWD должен указывать на существующую папку. Проверка подключения — вне пакета.
 type Input struct {
 	WorkflowJSON      []byte
 	Task, Comment     string
 	CWD               string
 	InitiatorThreadID string
+	ParentRunID       string
 }
 
-// Metadata — версия формата и постоянные связи запуска. State использует
+// Metadata — версия формата и постоянные связи запуска. ParentRunID появился в
+// v2; пустое значение у прежнего v1 означает корень дерева. State использует
 // внутренний словарь планировщика, а не статусы протокола Codex.
 type Metadata struct {
 	Version           int    `json:"version"`
 	RunID             string `json:"runId"`
+	ParentRunID       string `json:"parentRunId,omitempty"`
 	CWD               string `json:"cwd"`
 	InitiatorThreadID string `json:"initiatorThreadId"`
 	Steps             []Step `json:"steps"`
@@ -118,8 +126,21 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 	if !info.IsDir() {
 		return Snapshot{}, fmt.Errorf("cwd %q не является папкой", cwd)
 	}
+	// Root нормализуется до проверки родителя: одна и та же абсолютная папка
+	// определяет область связей и последующее место записи нового run.
+	if root == "" {
+		return Snapshot{}, fmt.Errorf("нужна папка хранения root")
+	}
+	if root, err = filepath.Abs(root); err != nil {
+		return Snapshot{}, err
+	}
+	if in.ParentRunID != "" {
+		if err = validateParentChain(root, in.ParentRunID); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	s := Snapshot{Workflow: w, Task: fmt.Sprintf("# Постановка задачи\n\n%s\n\n# Комментарий пользователя\n\n%s\n", in.Task, in.Comment)}
-	s.Meta = Metadata{Version: 1, RunID: newID(), CWD: cwd, InitiatorThreadID: in.InitiatorThreadID}
+	s.Meta = Metadata{Version: 2, RunID: newID(), ParentRunID: in.ParentRunID, CWD: cwd, InitiatorThreadID: in.InitiatorThreadID}
 	for _, step := range w.Steps {
 		s.Meta.Steps = append(s.Meta.Steps, Step{ID: step.ID, ThreadID: newID(), State: scheduler.Pending})
 	}
@@ -128,14 +149,6 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 	}
 	meta, err := json.Marshal(s.Meta)
 	if err != nil {
-		return Snapshot{}, err
-	}
-	// Абсолютный путь позволяет находить родителя и для root=".". Пустой путь
-	// по-прежнему недопустим: Abs иначе незаметно превратил бы его в текущую папку.
-	if root == "" {
-		return Snapshot{}, fmt.Errorf("нужна папка хранения root")
-	}
-	if root, err = filepath.Abs(root); err != nil {
 		return Snapshot{}, err
 	}
 	if err = mkdirAllSynced(root, syncDirectory); err != nil {
@@ -178,6 +191,25 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 	return s, nil
 }
 
+// validateParentChain проверяет всю уже сохранённую цепочку до создания ребёнка.
+// Новый run ещё не имеет ID и потому не может стать собственным предком штатным
+// API, однако ручное повреждение двух старых meta.json не должно расширять цикл.
+func validateParentChain(root, parentRunID string) error {
+	seen := make(map[string]bool)
+	for current := parentRunID; current != ""; {
+		if seen[current] {
+			return fmt.Errorf("родительские run образуют цикл на %q", current)
+		}
+		seen[current] = true
+		parent, err := Load(root, current)
+		if err != nil {
+			return fmt.Errorf("прочитать родительский run %q: %w", current, err)
+		}
+		current = parent.Meta.ParentRunID
+	}
+	return nil
+}
+
 // Load читает только сохранённые файлы: нет исходного workflow, автосоздания,
 // очистки памяти или подстановки Pending вместо потерянного статуса. os.Root
 // запрещает выход через симлинки; данные должны быть обычными файлами.
@@ -189,6 +221,43 @@ func Load(root, runID string) (Snapshot, error) {
 	}
 	defer dir.Close()
 	return load(dir, runID)
+}
+
+// ReadMemory возвращает память только существующего кубика из валидного run.
+// os.Root удерживает чтение внутри каталога даже при конкурентной подмене пути;
+// проверка обычного файла не позволяет использовать симлинк на чужие данные.
+func ReadMemory(root, runID, threadID string) ([]byte, error) {
+	dir, err := openRun(root, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	snapshot, err := load(dir, runID)
+	if err != nil {
+		return nil, err
+	}
+	found := false
+	for _, step := range snapshot.Meta.Steps {
+		found = found || step.ThreadID == threadID
+	}
+	if !found {
+		return nil, fmt.Errorf("неизвестный threadId памяти %q", threadID)
+	}
+	return readFile(dir, filepath.Join("memory", threadID+".md"))
+}
+
+// ReadStatusImage читает только стабильный PNG статуса. Отдельная функция вместо
+// произвольного относительного пути сохраняет узкую read-only границу dashboard.
+func ReadStatusImage(root, runID string) ([]byte, error) {
+	dir, err := openRun(root, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer dir.Close()
+	if _, err = load(dir, runID); err != nil {
+		return nil, err
+	}
+	return readFile(dir, StatusImageFilename)
 }
 
 // RemoveUnstarted удаляет только полностью созданный run, которому координатор
@@ -274,7 +343,9 @@ func load(dir *os.Root, runID string) (Snapshot, error) {
 // а не превращаем в новый Pending.
 func (s Snapshot) validate(runID string) error {
 	m := s.Meta
-	if m.Version != 1 || m.RunID != runID || !filepath.IsAbs(m.CWD) || !validText(m.CWD) || strings.ContainsRune(m.CWD, 0) ||
+	if (m.Version != 1 && m.Version != 2) || m.Version == 1 && m.ParentRunID != "" ||
+		m.RunID != runID || m.ParentRunID == m.RunID || m.ParentRunID != "" && !validID(m.ParentRunID) ||
+		!filepath.IsAbs(m.CWD) || !validText(m.CWD) || strings.ContainsRune(m.CWD, 0) ||
 		!validText(m.InitiatorThreadID) || len(m.Steps) != len(s.Workflow.Steps) {
 		return fmt.Errorf("повреждены входы, версия или состав meta.json")
 	}
