@@ -39,7 +39,7 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
   lawa status <run-id>
       Показать состояния, thread/turn, процесс и последнюю активность кубиков.
   lawa logs <run-id> [step-id] [--follow]
-      Показать безопасный журнал событий всего run или одного кубика.
+      Показать краткий журнал событий всего run или одного кубика.
   lawa serve [--root <путь>] [--listen <адрес>]
       Запустить read-only dashboard; по умолчанию http://127.0.0.1:60800.
   lawa series-status <series-id>
@@ -405,6 +405,8 @@ func resumeCommand(ctx context.Context, args []string, out, stderr io.Writer, de
 
 // serveCommand не открывает Codex и не создаёт хранилище. Loopback безопасен по
 // умолчанию; явная публикация на другом интерфейсе остаётся возможной, но видимой.
+// Предупреждение отдельно называет live-вывод, потому что read-only HTTP не делает
+// команды и ответы агента публично безопасными.
 func serveCommand(ctx context.Context, args []string, out, stderr io.Writer, deps dependencies) error {
 	parsed, err := parseServeArguments(args)
 	if err != nil {
@@ -414,7 +416,7 @@ func serveCommand(ctx context.Context, args []string, out, stderr io.Writer, dep
 		return err
 	}
 	if !dashboard.IsLoopbackAddress(parsed.address) {
-		if _, err = fmt.Fprintf(stderr, "lawa: предупреждение: dashboard доступен не только с этого компьютера: %s\n", parsed.address); err != nil {
+		if _, err = fmt.Fprintf(stderr, "lawa: предупреждение: dashboard доступен не только с этого компьютера; live-вывод может содержать секреты: %s\n", parsed.address); err != nil {
 			return err
 		}
 	}

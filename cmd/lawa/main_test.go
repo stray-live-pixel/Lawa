@@ -294,7 +294,7 @@ func TestSkillInstruction(t *testing.T) {
 		"Не добавляй `--mode`",
 		"lawa status <run-id>",
 		"lawa logs <run-id>",
-		"сырые rollout Codex туда не копируются",
+		"сырые rollout Codex",
 		"lawa resume <run-id>",
 		"Исторические app-native run",
 		"пишет только собственный файл памяти",

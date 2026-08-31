@@ -89,6 +89,25 @@ func TestFormatEventEscapesTerminalControls(t *testing.T) {
 	}
 }
 
+// TestTraceContentPreservesBrowserLayout проверяет новый приватный слой:
+// переносы stdout остаются читаемыми в боковой панели, terminal controls
+// удаляются, а обычный текстовый журнал по-прежнему Content не раскрывает.
+func TestTraceContentPreservesBrowserLayout(t *testing.T) {
+	event := RuntimeEvent{
+		Time: time.Now(), RunID: "run", Kind: "command_output_delta",
+		Content: "первая\r\n\tвторая\x1b[2J",
+	}
+	if err := normalizeRuntimeEvent(&event); err != nil {
+		t.Fatal(err)
+	}
+	if event.Content != "первая\n\tвторая[2J" {
+		t.Fatalf("layout live-вывода искажён: %q", event.Content)
+	}
+	if strings.Contains(FormatEvent(event), "первая") {
+		t.Fatalf("FormatEvent раскрыл приватный Content: %q", FormatEvent(event))
+	}
+}
+
 // TestReadEventsAfterWaitsForCompleteLine проверяет границу concurrent append:
 // половина JSON не становится ошибкой и не двигает cursor, а после дописывания
 // той же строки событие возвращается ровно один раз.

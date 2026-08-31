@@ -24,10 +24,13 @@ const eventsFilename = "events.jsonl"
 // строки во всём batch поэтому означает повреждённую или неподдерживаемую запись.
 const eventReadBatchSize = 1024 * 1024
 
-// RuntimeEvent — нормализованное и безопасное для оператора событие Lawa.
-// Оно намеренно не повторяет сырой протокол App Server: reasoning, аргументы
-// команд и инструментов, diff и произвольные payload могут содержать секреты.
-// Usage содержит только числовые счётчики токенов без исходного JSON.
+// RuntimeEvent — нормализованное событие Lawa. Message содержит короткую
+// диагностику для status и logs, а Content — выбранный подробный поток для
+// локальной боковой панели Dashboard. В Content могут попасть команда, её вывод
+// или сообщение агента, поэтому файл остаётся приватным 0600, а FormatEvent
+// намеренно это поле не печатает. Сырые reasoning, diff и произвольные payload
+// App Server по-прежнему не сохраняются. Usage содержит только числовые счётчики
+// без исходного JSON.
 type RuntimeEvent struct {
 	Time     time.Time        `json:"time"`
 	RunID    string           `json:"runId"`
@@ -39,6 +42,7 @@ type RuntimeEvent struct {
 	ItemID   string           `json:"itemId,omitempty"`
 	ItemType string           `json:"itemType,omitempty"`
 	Message  string           `json:"message,omitempty"`
+	Content  string           `json:"content,omitempty"`
 	PID      int              `json:"pid,omitempty"`
 	ExitCode *int             `json:"exitCode,omitempty"`
 	Signal   string           `json:"signal,omitempty"`
@@ -392,12 +396,13 @@ func normalizeRuntimeEvent(event *RuntimeEvent) error {
 	if event.Time.IsZero() || !validText(event.RunID) || !validText(event.Kind) {
 		return errors.New("событие требует time, runId и kind")
 	}
-	for _, value := range []string{event.StepID, event.ThreadID, event.TurnID, event.State, event.ItemID, event.ItemType, event.Message, event.Signal} {
+	for _, value := range []string{event.StepID, event.ThreadID, event.TurnID, event.State, event.ItemID, event.ItemType, event.Message, event.Content, event.Signal} {
 		if !utf8.ValidString(value) {
 			return errors.New("поля события должны быть UTF-8")
 		}
 	}
 	event.Message = compactEventText(event.Message, 4000)
+	event.Content = compactTraceText(event.Content, 16000)
 	event.State = compactEventText(event.State, 200)
 	event.ItemID = compactEventText(event.ItemID, 500)
 	event.ItemType = compactEventText(event.ItemType, 200)
@@ -411,6 +416,27 @@ func normalizeRuntimeEvent(event *RuntimeEvent) error {
 		}
 	}
 	return nil
+}
+
+// compactTraceText сохраняет переносы и табуляцию, необходимые для читаемого
+// stdout и сообщений в браузере. Остальные управляющие символы удаляются: JSON и
+// textContent и так не исполняют их, но невидимые terminal controls не должны
+// искажать сохранённое представление. Лимит относится к одному delta-событию и
+// защищает append от неожиданно большого сообщения новой версии App Server.
+func compactTraceText(value string, limit int) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	value = strings.ReplaceAll(value, "\r", "\n")
+	value = strings.Map(func(character rune) rune {
+		if character == '\n' || character == '\t' || !unicode.IsControl(character) {
+			return character
+		}
+		return -1
+	}, value)
+	runes := []rune(value)
+	if len(runes) > limit {
+		return string(runes[:limit]) + "…"
+	}
+	return value
 }
 
 func compactEventText(value string, limit int) string {

@@ -85,15 +85,32 @@ func TestSearchCoversTree(t *testing.T) {
 	}
 }
 
-// TestTreeStateKeepsRunningChildVisible не позволяет завершившемуся диспетчеру
-// скрыть живой дочерний workflow в свёрнутой секции успешных.
-func TestTreeStateKeepsRunningChildVisible(t *testing.T) {
+// TestTreeStateAndNewestChildOrder проверяет две агрегированные гарантии дерева:
+// живой ребёнок делает всё дерево активным, а самый свежий ребёнок идёт первым.
+func TestTreeStateAndNewestChildOrder(t *testing.T) {
 	now := time.Now()
-	root := testFilterNode("root", "succeeded", "root", now, testFilterNode("child", "running", "child", now))
+	old := testFilterNode("old", "succeeded", "old", now.Add(-time.Hour))
+	recent := testFilterNode("recent", "running", "recent", now)
+	root := testFilterNode("root", "succeeded", "root", now.Add(-2*time.Hour), old, recent)
 	finalizeTree(root)
-	groups := groupRuns([]*runNode{root})
-	if root.treeState != "running" || len(groups) != 1 || groups[0].ID != "active" {
-		t.Fatalf("работающий ребёнок не поднял дерево в «В работе»: state=%s groups=%+v", root.treeState, groups)
+	sortNodes([]*runNode{root})
+	if root.treeState != "running" || root.Children[0].ID != "recent" {
+		t.Fatalf("агрегат или сортировка дерева неверны: state=%s children=%s", root.treeState, nodeIDs(root.Children))
+	}
+}
+
+// TestSortStepsNewestFirst фиксирует порядок строк внутри раскрытого workflow:
+// сначала самая свежая работа, а при одинаковом времени — выполняющийся шаг.
+func TestSortStepsNewestFirst(t *testing.T) {
+	now := time.Now()
+	steps := []stepNode{
+		{ID: "old-active", Active: true, updatedAt: now.Add(-time.Minute)},
+		{ID: "finished", updatedAt: now},
+		{ID: "current", Active: true, updatedAt: now},
+	}
+	sortSteps(steps)
+	if got := steps[0].ID + "," + steps[1].ID + "," + steps[2].ID; got != "current,finished,old-active" {
+		t.Fatalf("шаги отсортированы не по текущей активности: %s", got)
 	}
 }
 
