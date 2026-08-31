@@ -433,9 +433,12 @@ func TestExecuteReturnsTerminalFailureForSeries(t *testing.T) {
 	client := newFakeClient()
 	client.runStatuses["one"] = []string{"failed"}
 	client.inspectStatuses["chat-one"] = []codex.WorkStatus{codex.WorkFailed}
-	err := Execute(t.Context(), run, Options{Root: root, PollInterval: time.Millisecond, Client: client, ReturnOnFailure: true})
+	outcome, err := ExecuteWithOutcome(t.Context(), run, Options{Root: root, PollInterval: time.Millisecond, Client: client, ReturnOnFailure: true})
 	if !errors.Is(err, ErrRunUnsuccessful) {
 		t.Fatalf("failed run не остановил серию: %v", err)
+	}
+	if !outcome.Terminal || outcome.Successful {
+		t.Fatalf("failed run получил неверный терминал: %+v", outcome)
 	}
 }
 
@@ -708,5 +711,33 @@ func TestExecuteErrorDrainsTurn(t *testing.T) {
 	snapshot, err := run.Load()
 	if err != nil || snapshot.Meta.Steps[0].State != scheduler.Succeeded {
 		t.Fatalf("терминальный статус не сохранён при ошибке вывода: %+v, %v", snapshot.Meta.Steps, err)
+	}
+}
+
+// TestExecuteWithOutcomeKeepsFinalSuccessOnNotifyError воспроизводит границу N1:
+// финальный снимок уже подтверждает успех run, хотя пользовательский канал не
+// смог его принять. Управляющий цикл получает и терминал, и исходную ошибку.
+func TestExecuteWithOutcomeKeepsFinalSuccessOnNotifyError(t *testing.T) {
+	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"one","type":"agent","prompt":"Один","dependsOn":[]}]}`)
+	client := newFakeClient()
+	failure := errors.New("финальный stdout недоступен")
+	outcome, err := ExecuteWithOutcome(t.Context(), run, Options{
+		Root: root, PollInterval: time.Millisecond, Client: client, ReturnOnFailure: true,
+		Notify: func(status Status) error {
+			if status.Complete {
+				return failure
+			}
+			return nil
+		},
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("ошибка финального вывода потеряна: %v", err)
+	}
+	if !outcome.Terminal || !outcome.Successful {
+		t.Fatalf("успешный терминал потерян из-за вывода: %+v", outcome)
+	}
+	snapshot, loadErr := run.Load()
+	if loadErr != nil || snapshot.Meta.Steps[0].State != scheduler.Succeeded {
+		t.Fatalf("run не сохранил успех: %+v, %v", snapshot.Meta.Steps, loadErr)
 	}
 }

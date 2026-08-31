@@ -2,6 +2,9 @@ package series
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
+	"slices"
 	"syscall"
 	"testing"
 	"time"
@@ -106,6 +109,104 @@ func TestSeriesLifecycleAndStopBarrier(t *testing.T) {
 	snapshot, err := Load(root, seriesID)
 	if err != nil || snapshot.State != Stopped || snapshot.RunsStarted != 1 || snapshot.RunsFinished != 1 || !snapshot.StopRequested {
 		t.Fatalf("неверный финальный снимок: %+v, %v", snapshot, err)
+	}
+}
+
+// TestSeriesParentSync проверяет протокол N2 на настоящих каталогах. Прежде чем
+// Create вернёт владельца, каждое имя от root до series/<id> должно быть сохранено
+// в родителе; относительный root обязан давать тот же абсолютный порядок.
+func TestSeriesParentSync(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		depth    int
+		relative bool
+	}{
+		{"существующий root", 0, false},
+		{"новый относительный root", 1, true},
+		{"вложенный root", 3, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := t.TempDir()
+			root := base
+			want := []string{filepath.Dir(base)}
+			for range tc.depth {
+				want = append(want, root)
+				root = filepath.Join(root, "nested")
+			}
+			inputRoot := root
+			if tc.relative {
+				cwd, err := os.Getwd()
+				if err != nil {
+					t.Fatal(err)
+				}
+				inputRoot, err = filepath.Rel(cwd, root)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			seriesBase := filepath.Join(root, "series")
+			want = append(want, root, seriesBase)
+			var synced []string
+			owner, err := create(inputRoot, Config{Mode: Immediate}, func(path string) error {
+				synced = append(synced, path)
+				return syncDirectory(path)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer owner.Close()
+			if !slices.Equal(synced, want) {
+				t.Fatalf("порядок Sync: %v; нужен: %v", synced, want)
+			}
+			if _, err = Load(root, owner.Snapshot().SeriesID); err != nil {
+				t.Fatalf("сохранённая серия не читается: %v", err)
+			}
+		})
+	}
+}
+
+// TestSeriesParentSyncFailure не разрешает успешно открыть серию, если имя root
+// или series/<id> не удалось закрепить в родителе. Повтор снова делает Sync даже
+// для оставшихся общих папок, а частный каталог не остаётся после ошибки.
+func TestSeriesParentSyncFailure(t *testing.T) {
+	for _, failAt := range []string{"root", "series"} {
+		t.Run(failAt, func(t *testing.T) {
+			base := t.TempDir()
+			root := filepath.Join(base, "nested", "runs")
+			seriesBase := filepath.Join(root, "series")
+			failedDir := base
+			if failAt == "series" {
+				failedDir = seriesBase
+			}
+			failure := errors.New("отказ Sync родителя")
+			attempts := 0
+			syncParent := func(path string) error {
+				if path == failedDir {
+					attempts++
+					return failure
+				}
+				return syncDirectory(path)
+			}
+			for range 2 {
+				owner, err := create(root, Config{Mode: Immediate}, syncParent)
+				if owner != nil || !errors.Is(err, failure) {
+					if owner != nil {
+						_ = owner.Close()
+					}
+					t.Fatalf("Create принял несохранённый каталог: owner=%v err=%v", owner != nil, err)
+				}
+				entries, readErr := os.ReadDir(seriesBase)
+				if readErr != nil && !errors.Is(readErr, os.ErrNotExist) {
+					t.Fatal(readErr)
+				}
+				if len(entries) != 0 {
+					t.Fatalf("после отказа остался частный каталог серии: %v", entries)
+				}
+			}
+			if attempts != 2 {
+				t.Fatalf("повтор обошёл несостоявшийся Sync: попыток %d", attempts)
+			}
+		})
 	}
 }
 

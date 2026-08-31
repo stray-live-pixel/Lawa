@@ -193,12 +193,24 @@ type LockedSeries struct {
 
 // Create создаёт приватный каталог серии, публикует начальное состояние и сразу
 // захватывает пожизненную блокировку владельца. Частично созданный каталог удаляется.
-func Create(root string, config Config) (_ *LockedSeries, err error) {
+func Create(root string, config Config) (*LockedSeries, error) {
+	return create(root, config, syncDirectory)
+}
+
+// create принимает синхронизацию каталогов явно, чтобы тесты могли проверить
+// порядок сохранения имён и отказ диска без глобальной подмены для других серий.
+func create(root string, config Config, syncParent func(string) error) (_ *LockedSeries, err error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("нужна папка хранения root")
 	}
+	// Абсолютный путь позволяет рекурсивно найти существующего предка и для
+	// относительного root. Иначе filepath.Dir("runs") вернул бы ".", а порядок
+	// Sync зависел бы от текущей директории и не описывал фактические каталоги.
+	if root, err = filepath.Abs(root); err != nil {
+		return nil, err
+	}
 	base := filepath.Join(root, "series")
-	if err = os.MkdirAll(base, 0o700); err != nil {
+	if err = mkdirAllSynced(base, syncParent); err != nil {
 		return nil, err
 	}
 	owner := &LockedSeries{meta: Metadata{Version: 1, SeriesID: newID(), Config: config, State: Waiting}}
@@ -211,6 +223,12 @@ func Create(root string, config Config) (_ *LockedSeries, err error) {
 			err = errors.Join(err, owner.Close(), os.RemoveAll(owner.dir))
 		}
 	}()
+	// Sync родителя закрепляет имя series/<id> до публикации series.json.
+	// Синхронизация самого owner.dir ниже сохраняет только его содержимое и не
+	// заменяет эту операцию: после сбоя мог бы остаться файл без каталога серии.
+	if err = syncParent(base); err != nil {
+		return nil, err
+	}
 	if err = owner.save(); err != nil {
 		return nil, err
 	}
@@ -330,10 +348,10 @@ func (s *LockedSeries) startRun(create func() (string, error), rollback func(str
 	return false, fmt.Errorf("не удалось связать run %q с серией; откат нового run: %w", runID, errors.Join(saveErr, cleanupErr))
 }
 
-// FinishRun фиксирует подтверждённый терминал обычного run. При ошибке самого
-// workflow серия больше не планируется: это явная политика stop-on-failure для
-// failed и interrupted. Ошибки управляющего процесса сюда передавать нельзя:
-// они не доказывают терминальность run и должны сохраняться через FailRunControl.
+// FinishRun фиксирует отдельно подтверждённый терминал обычного run. runErr —
+// причина остановки серии после этого терминала: failed/interrupted самого
+// workflow либо последующий отказ управляющего канала. Во втором случае run уже
+// учитывается завершённым, но серия остаётся Failed и хранит исходную диагностику.
 func (s *LockedSeries) FinishRun(runErr error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -439,6 +457,27 @@ func syncDirectory(path string) error {
 		return err
 	}
 	return errors.Join(dir.Sync(), dir.Close())
+}
+
+// mkdirAllSynced создаёт path с приватными правами и сохраняет каждое новое имя
+// в родительском каталоге. Существующий путь тоже синхронизируется через родителя:
+// он мог остаться после предыдущего Create, которому Sync вернул ошибку.
+func mkdirAllSynced(path string, syncParent func(string) error) error {
+	parent := filepath.Dir(path)
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) && parent != path {
+		if err := mkdirAllSynced(parent, syncParent); err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(path, 0o700); err != nil {
+		return err
+	}
+	if parent == path {
+		return nil
+	}
+	return syncParent(parent)
 }
 
 func seriesDir(root, seriesID string) (string, error) {

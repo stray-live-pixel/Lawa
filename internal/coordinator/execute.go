@@ -148,6 +148,15 @@ type Options struct {
 // координатора. В обоих случаях серия останавливается, но причина остаётся явной.
 var ErrRunUnsuccessful = errors.New("run завершён неуспешно; серия остановлена по политике stop-on-failure")
 
+// Outcome сообщает управляющему циклу, достиг ли сохранённый run терминала.
+// Ошибка ExecuteWithOutcome описывает причину остановки координатора, но сама по
+// себе не отвечает на этот вопрос: например, stdout может сломаться уже после
+// успешного сохранения всех шагов. Successful имеет смысл только при Terminal.
+type Outcome struct {
+	Terminal   bool
+	Successful bool
+}
+
 type launchResult struct {
 	stepID string
 	result codex.Result
@@ -212,15 +221,24 @@ func (a *activeExecution) snapshot() (threadID, turnID string, interrupt func(co
 // status=interrupted и сохраняют Cancelled. Следующий resume запускает ровно один
 // turn с текстом continue только для такого состояния; failed и succeeded не
 // повторяются автоматически.
-func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err error) {
+func Execute(ctx context.Context, run *runstore.LockedRun, options Options) error {
+	_, err := ExecuteWithOutcome(ctx, run, options)
+	return err
+}
+
+// ExecuteWithOutcome выполняет тот же цикл, что Execute, и отдельно возвращает
+// подтверждённый терминал сохранённого run. Outcome не подменяет ошибку: при
+// успешном терминале и последующем отказе вывода вызывающий получает одновременно
+// Terminal=true, Successful=true и ошибку канала управления.
+func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Options) (outcome Outcome, err error) {
 	if run == nil || options.Client == nil {
-		return errors.New("координатор: нужны открытый запуск и клиент Codex")
+		return Outcome{}, errors.New("координатор: нужны открытый запуск и клиент Codex")
 	}
 	if strings.TrimSpace(options.Root) == "" {
-		return errors.New("координатор: нужна папка хранения root")
+		return Outcome{}, errors.New("координатор: нужна папка хранения root")
 	}
 	if options.PollInterval <= 0 {
-		return errors.New("координатор: интервал опроса должен быть положительным")
+		return Outcome{}, errors.New("координатор: интервал опроса должен быть положительным")
 	}
 	if options.RefreshInterval <= 0 {
 		// Внутренние вызовы до появления периодического отчёта не задавали это
@@ -234,7 +252,7 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 	}
 	initial, err := run.Load()
 	if err != nil {
-		return fmt.Errorf("координатор: прочитать запуск: %w", err)
+		return Outcome{}, fmt.Errorf("координатор: прочитать запуск: %w", err)
 	}
 	observer := &sharedObserver{ctx: ctx, client: options.Client, cwd: initial.Meta.CWD}
 	// Закрытие наблюдения регистрируется до defer активных turn ниже. На Ctrl+C
@@ -258,20 +276,27 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 				err = drainActive(err, run, active, results)
 			}
 		}
-		if !options.ReturnOnFailure || errors.Is(err, ErrRunUnsuccessful) {
+		if !options.ReturnOnFailure {
+			return
+		}
+		if outcome.Terminal {
+			if !outcome.Successful && !errors.Is(err, ErrRunUnsuccessful) {
+				err = errors.Join(err, ErrRunUnsuccessful)
+			}
 			return
 		}
 		// Ctrl+C обнаруживается раньше, чем interruptActive успевает сохранить
-		// Cancelled. После остановки активных turn повторно читаем состояние и
-		// добавляем типизированный терминал только при фактически сохранённой
-		// неуспешности. Ошибка чтения остаётся инфраструктурной: вызывающий код не
-		// имеет права потерять CurrentRunID без доказательства терминальности.
+		// Cancelled, а ошибка вывода может прийти до сохранения результата turn.
+		// После остановки активных turn повторно читаем состояние: это отличает
+		// подтверждённый терминал от run, которому всё ещё нужен resume. Ошибка
+		// чтения остаётся инфраструктурной, поэтому Outcome остаётся нетерминальным.
 		status, _, statusErr := currentStatus(run)
 		if statusErr != nil {
 			err = errors.Join(err, fmt.Errorf("координатор: подтвердить терминальное состояние: %w", statusErr))
 			return
 		}
-		if hasTerminalFailure(status) {
+		outcome = terminalOutcome(status, options.ReturnOnFailure)
+		if outcome.Terminal && !outcome.Successful && !errors.Is(err, ErrRunUnsuccessful) {
 			err = errors.Join(err, ErrRunUnsuccessful)
 		}
 	}()
@@ -284,25 +309,25 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 
 	for {
 		if err := ctx.Err(); err != nil {
-			return err
+			return outcome, err
 		}
 		if err := reconcile(run, observer, active); err != nil {
-			return err
+			return outcome, err
 		}
 		snapshot, err := run.Load()
 		if err != nil {
-			return fmt.Errorf("координатор: прочитать запуск: %w", err)
+			return outcome, fmt.Errorf("координатор: прочитать запуск: %w", err)
 		}
 		if err = rejectAmbiguous(snapshot, active); err != nil {
-			return err
+			return outcome, err
 		}
 		continuations, err := prepareContinuations(snapshot, options.Root, options.ContinueInterrupted, continued)
 		if err != nil {
-			return err
+			return outcome, err
 		}
 		prepared, err := Prepare(run, options.Root)
 		if err != nil {
-			return err
+			return outcome, err
 		}
 		for _, continuation := range continuations {
 			continued[continuation.StepID] = true
@@ -319,37 +344,55 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 		}
 		status, signature, err := currentStatus(run)
 		if err != nil {
-			return err
+			return outcome, err
+		}
+		if len(active) == 0 {
+			// Терминал фиксируем до Notify: канал пользовательского вывода может
+			// отказать на финальной сводке, когда сам run уже надёжно завершён.
+			outcome = terminalOutcome(status, options.ReturnOnFailure)
 		}
 		if signature != lastSnapshot || periodicRefreshDue {
 			if options.Notify != nil {
 				if err = options.Notify(status); err != nil {
-					return fmt.Errorf("координатор: сообщить статус: %w", err)
+					return outcome, fmt.Errorf("координатор: сообщить статус: %w", err)
 				}
 			}
 			lastSnapshot = signature
 			periodicRefreshDue = false
 		}
-		if status.Complete && len(active) == 0 {
-			return nil
+		if outcome.Terminal && outcome.Successful {
+			return outcome, nil
 		}
-		if options.ReturnOnFailure && len(active) == 0 && hasTerminalFailure(status) {
-			return ErrRunUnsuccessful
+		if outcome.Terminal {
+			return outcome, ErrRunUnsuccessful
 		}
 
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return outcome, ctx.Err()
 		case completed := <-results:
 			finishExecution(active, completed.stepID)
 			if err = saveLaunchResult(run, completed); err != nil {
-				return err
+				return outcome, err
 			}
 		case <-pollTicker.C():
 		case <-refreshTicker.C():
 			periodicRefreshDue = true
 		}
 	}
+}
+
+// terminalOutcome применяет политику текущего Execute к уже сохранённому снимку.
+// Неуспешный шаг является терминалом только для автоматической серии; обычный
+// run оставляет тот же чат доступным для ручного продолжения.
+func terminalOutcome(status Status, returnOnFailure bool) Outcome {
+	if status.Complete {
+		return Outcome{Terminal: true, Successful: true}
+	}
+	if returnOnFailure && hasTerminalFailure(status) {
+		return Outcome{Terminal: true}
+	}
+	return Outcome{}
 }
 
 // hasTerminalFailure не считает ожидание подтверждения ошибкой: пользователь

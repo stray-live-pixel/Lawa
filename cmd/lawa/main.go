@@ -408,11 +408,11 @@ func runSeries(ctx context.Context, root, executable string, input runstore.Inpu
 		if _, err = fmt.Fprintf(out, "runId: %s\n", snapshot.Meta.RunID); err != nil {
 			return errors.Join(err, owner.FailRunControl(err))
 		}
-		runErr := coordinate(ctx, root, snapshot.Meta.RunID, executable, out, stderr, deps, false, true)
-		// Только nil и типизированная ошибка workflow подтверждают, что обычный
-		// run достиг терминала. Ошибка вывода, хранения или интеграции останавливает
-		// управляющий цикл, но оставляет CurrentRunID для диагностики и resume.
-		if runErr == nil || errors.Is(runErr, coordinator.ErrRunUnsuccessful) {
+		outcome, runErr := coordinateWithOutcome(ctx, root, snapshot.Meta.RunID, executable, out, stderr, deps, false, true)
+		// Терминальность берём из сохранённого состояния, а не выводим из ошибки.
+		// Поэтому отказ финальной сводки останавливает серию и остаётся видимым,
+		// но уже успешный run всё равно учитывается и больше не предлагается resume.
+		if outcome.Terminal {
 			if finishErr := owner.FinishRun(runErr); finishErr != nil {
 				return errors.Join(runErr, fmt.Errorf("сохранить завершение run серии: %w", finishErr))
 			}
@@ -481,25 +481,33 @@ func parseSeriesArguments(args []string, deps dependencies) (string, string, err
 // resume отличает явное продолжение от первого run: только resume имеет право
 // автоматически отправлять continue в interrupted-чаты.
 func coordinate(ctx context.Context, root, runID, executable string, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (err error) {
+	_, err = coordinateWithOutcome(ctx, root, runID, executable, out, stderr, deps, resume, returnOnFailure)
+	return err
+}
+
+// coordinateWithOutcome сохраняет результат Execute отдельно от ошибок открытия,
+// вывода и закрытия хранилища. Терминальный Outcome остаётся действительным, если
+// ошибка управления произошла уже после надёжного сохранения состояния run.
+func coordinateWithOutcome(ctx context.Context, root, runID, executable string, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (outcome coordinator.Outcome, err error) {
 	run, err := runstore.OpenLocked(root, runID)
 	if err != nil {
-		return fmt.Errorf("открыть запуск %q: %w", runID, err)
+		return coordinator.Outcome{}, fmt.Errorf("открыть запуск %q: %w", runID, err)
 	}
 	defer func() { err = errors.Join(err, run.Close()) }()
 	snapshot, err := run.Load()
 	if err != nil {
-		return fmt.Errorf("прочитать запуск %q: %w", runID, err)
+		return coordinator.Outcome{}, fmt.Errorf("прочитать запуск %q: %w", runID, err)
 	}
 	if resume {
 		if err = deps.check(ctx, codex.Connection{Executable: executable, CWD: snapshot.Meta.CWD, Stderr: stderr}); err != nil {
-			return fmt.Errorf("проверить подключение Codex: %w", err)
+			return coordinator.Outcome{}, fmt.Errorf("проверить подключение Codex: %w", err)
 		}
 	}
 	if _, err = fmt.Fprintf(out, "Наблюдение за run %s.\n", runID); err != nil {
-		return err
+		return coordinator.Outcome{}, err
 	}
 	publisher := newStatusPublisher(ctx, out, filepath.Join(root, runID), deps.renderer, deps.chatInterval, deps.now)
-	return coordinator.Execute(ctx, run, coordinator.Options{
+	return coordinator.ExecuteWithOutcome(ctx, run, coordinator.Options{
 		Root: root, PollInterval: deps.pollInterval, RefreshInterval: deps.refreshInterval,
 		Client: deps.client(executable, stderr), ContinueInterrupted: resume,
 		ReturnOnFailure: returnOnFailure,
