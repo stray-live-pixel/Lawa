@@ -10,25 +10,31 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/stray-live-pixel/Lawa/internal/appdriver"
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/series"
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // appRunCommand создаёт только устойчивое состояние run. Жизненным циклом задач
-// владеет вызывающий чат Codex App через app-next/app-claim/app-reset-claim/app-bind/app-update; поэтому
-// здесь нет проверки и запуска отдельного app-server. Повторяющиеся серии пока
-// остаются у legacy run: их фоновый процесс не имеет app-инструментов Desktop.
+// владеет вызывающий чат Codex App через app-next, creation/continuation claims,
+// app-bind и app-update; поэтому
+// здесь нет проверки и запуска отдельного app-server. Для повторяющейся серии
+// команда дополнительно сохраняет неизменяемый шаблон и возвращает первый
+// app-series action; дальнейшие heartbeat-вызовы app-series-next не зависят от
+// времени жизни terminal-сеанса исходной задачи.
 func appRunCommand(ctx context.Context, args []string, out io.Writer, deps dependencies) error {
 	parsed, err := parseRunArguments(args)
 	if err != nil {
 		return err
 	}
-	if parsed.executable != "" || parsed.repeat != "" {
-		return errors.New("app-run не поддерживает --codex и --repeat; этими режимами владеет отдельный legacy app-server")
+	if parsed.executable != "" {
+		return errors.New("app-run не поддерживает --codex: задачами владеет Codex App")
 	}
 	if parsed.root, err = resolveRoot(parsed.root, deps.userHomeDir); err != nil {
 		return err
@@ -64,10 +70,33 @@ func appRunCommand(ctx context.Context, args []string, out io.Writer, deps depen
 	if !utf8.ValidString(parsed.task+parsed.comment+parsed.initiator) || strings.TrimSpace(parsed.task) == "" || strings.TrimSpace(parsed.initiator) == "" {
 		return errors.New("постановка и ID чата должны быть непустым текстом UTF-8; комментарий также должен быть UTF-8")
 	}
-	snapshot, err := runstore.Create(parsed.root, runstore.Input{
+	input := runstore.Input{
 		WorkflowJSON: workflowJSON, Task: parsed.task, Comment: parsed.comment, CWD: parsed.cwd,
 		InitiatorThreadID: parsed.initiator, ParentRunID: parsed.parentRun,
-	})
+	}
+	if parsed.repeat != "" {
+		config, schedule, parseErr := series.ParseConfig(parsed.repeat, parsed.repeatDelay, parsed.cron, parsed.timezone, parsed.maxRuns)
+		if parseErr != nil {
+			return parseErr
+		}
+		owner, createErr := series.CreateApp(parsed.root, config, appTemplate(input))
+		if createErr != nil {
+			return fmt.Errorf("создать app-native серию: %w", createErr)
+		}
+		defer owner.Close()
+		seriesID := owner.Snapshot().SeriesID
+		action, advanceErr := advanceAppSeries(owner, parsed.root, input, schedule, deps.now())
+		if advanceErr != nil {
+			return fmt.Errorf("продвинуть app-native серию %s: %w", seriesID, advanceErr)
+		}
+		if action.RunID != "" {
+			if advanceErr = refreshAppArtifacts(ctx, parsed.root, action.RunID, deps); advanceErr != nil {
+				return fmt.Errorf("app-native серия %s, run %s: %w", seriesID, action.RunID, advanceErr)
+			}
+		}
+		return writeJSON(out, action)
+	}
+	snapshot, err := runstore.Create(parsed.root, input)
 	if err != nil {
 		return fmt.Errorf("создать app-native запуск: %w", err)
 	}
@@ -77,6 +106,202 @@ func appRunCommand(ctx context.Context, args []string, out io.Writer, deps depen
 	return writeJSON(out, struct {
 		RunID string `json:"runId"`
 	}{snapshot.Meta.RunID})
+}
+
+// appSeriesAction — устойчивое решение одного короткого прохода серии. run
+// означает, что управляющий turn должен продолжить ровно сохранённый runId через
+// app-next. wait содержит абсолютную следующую точку и разрешает turn завершиться:
+// heartbeat позже вызовет app-series-next. complete/stopped терминальны.
+type appSeriesAction struct {
+	Kind      string       `json:"kind"`
+	SeriesID  string       `json:"seriesId"`
+	RunID     string       `json:"runId,omitempty"`
+	NextRunAt *time.Time   `json:"nextRunAt,omitempty"`
+	State     series.State `json:"state"`
+}
+
+func appSeriesNextCommand(ctx context.Context, args []string, out io.Writer, deps dependencies) error {
+	seriesID, root, err := parseAppRunReference("app-series-next", args, deps)
+	if err != nil {
+		return err
+	}
+	template, err := series.LoadAppTemplate(root, seriesID)
+	if err != nil {
+		return fmt.Errorf("прочитать app-native серию: %w", err)
+	}
+	owner, err := series.Open(root, seriesID)
+	if err != nil {
+		return fmt.Errorf("открыть app-native серию: %w", err)
+	}
+	defer owner.Close()
+	config := owner.Snapshot().Config
+	maxRuns := ""
+	if config.MaxRuns != 0 {
+		maxRuns = strconv.Itoa(config.MaxRuns)
+	}
+	_, schedule, err := series.ParseConfig(string(config.Mode), config.Delay, config.Cron, config.TimeZone, maxRuns)
+	if err != nil {
+		return fmt.Errorf("прочитать расписание app-native серии: %w", err)
+	}
+	action, err := advanceAppSeries(owner, root, appInput(template), schedule, deps.now())
+	if err != nil {
+		return err
+	}
+	if action.RunID != "" {
+		if err = refreshAppArtifacts(ctx, root, action.RunID, deps); err != nil {
+			return err
+		}
+	}
+	return writeJSON(out, action)
+}
+
+// appSeriesFailCommand фиксирует terminal failure только по точной паре
+// seriesId/runId, которую управляющий чат только что наблюдал. Отдельная команда
+// не позволяет app-series-next угадать, является ли interrupted следствием
+// явной остановки пользователя или требует продолжения той же задачи.
+func appSeriesFailCommand(args []string, out io.Writer, deps dependencies) error {
+	positionals, values, err := parseOptions(args, map[string]bool{"root": true, "run": true, "reason-file": true})
+	if err != nil || len(positionals) != 1 || strings.TrimSpace(positionals[0]) == "" || strings.TrimSpace(values["run"]) == "" || strings.TrimSpace(values["reason-file"]) == "" {
+		if err != nil {
+			return err
+		}
+		return errors.New("использование: lawa app-series-fail <series-id> --run <run-id> --reason-file <путь> [--root <путь>]")
+	}
+	root, err := resolveRoot(values["root"], deps.userHomeDir)
+	if err != nil {
+		return err
+	}
+	reason, err := readTextArgument(values["reason-file"], "причину остановки серии")
+	if err != nil || strings.TrimSpace(reason) == "" {
+		if err == nil {
+			err = errors.New("причина остановки серии должна быть непустым текстом UTF-8")
+		}
+		return err
+	}
+	owner, err := series.Open(root, positionals[0])
+	if err != nil {
+		return err
+	}
+	defer owner.Close()
+	meta := owner.Snapshot()
+	if meta.Driver != series.AppDriver || meta.CurrentRunID != values["run"] {
+		return fmt.Errorf("app-series-fail: текущий run серии %q равен %q, а не %q", meta.SeriesID, meta.CurrentRunID, values["run"])
+	}
+	run, err := runstore.Load(root, meta.CurrentRunID)
+	if err != nil {
+		return fmt.Errorf("app-series-fail: прочитать текущий run: %w", err)
+	}
+	terminalFailure := false
+	for _, step := range run.Meta.Steps {
+		terminalFailure = terminalFailure || step.State == scheduler.Failed || step.State == scheduler.Cancelled
+	}
+	if !terminalFailure {
+		return errors.New("app-series-fail: текущий run не содержит failed или interrupted кубика")
+	}
+	if err = owner.FinishRun(errors.New(reason)); err != nil {
+		return err
+	}
+	return writeJSON(out, appSeriesAction{Kind: "failed", SeriesID: meta.SeriesID, State: series.Failed})
+}
+
+// advanceAppSeries сводит повторный heartbeat к одной атомарной операции. Уже
+// существующий незавершённый run всегда возвращается как есть. Только полностью
+// успешный run освобождает слот; следующий создаётся не раньше сохранённой точки,
+// поэтому конкурентные или запоздавшие heartbeat не порождают дубликаты.
+func advanceAppSeries(owner *series.LockedSeries, root string, input runstore.Input, schedule series.Schedule, now time.Time) (appSeriesAction, error) {
+	if owner == nil || schedule == nil {
+		return appSeriesAction{}, errors.New("app-native серия требует владельца и проверенное расписание")
+	}
+	meta := owner.Snapshot()
+	base := appSeriesAction{SeriesID: meta.SeriesID, State: meta.State}
+	if meta.Driver != series.AppDriver {
+		return base, errors.New("серия не принадлежит app-native driver")
+	}
+	if meta.State == series.Completed || meta.State == series.Stopped || meta.State == series.Failed {
+		base.Kind = string(meta.State)
+		if meta.State == series.Completed {
+			base.Kind = "complete"
+		}
+		return base, nil
+	}
+	if meta.CurrentRunID != "" {
+		run, err := runstore.Load(root, meta.CurrentRunID)
+		if err != nil {
+			return base, fmt.Errorf("прочитать текущий run серии %q: %w", meta.SeriesID, err)
+		}
+		complete := len(run.Meta.Steps) != 0
+		for _, step := range run.Meta.Steps {
+			complete = complete && step.State == scheduler.Succeeded
+		}
+		if !complete {
+			base.Kind, base.RunID, base.State = "run", meta.CurrentRunID, series.Running
+			return base, nil
+		}
+		if err = owner.FinishRun(nil); err != nil {
+			return base, fmt.Errorf("завершить успешный run app-серии: %w", err)
+		}
+		meta = owner.Snapshot()
+	}
+	stopped, err := owner.StopRequested()
+	if err != nil {
+		return base, err
+	}
+	if stopped {
+		if err = owner.FinishSeries(series.Stopped); err != nil {
+			return base, err
+		}
+		return appSeriesAction{Kind: "stopped", SeriesID: meta.SeriesID, State: series.Stopped}, nil
+	}
+	if meta.Config.MaxRuns != 0 && meta.RunsStarted >= meta.Config.MaxRuns {
+		if err = owner.FinishSeries(series.Completed); err != nil {
+			return base, err
+		}
+		return appSeriesAction{Kind: "complete", SeriesID: meta.SeriesID, State: series.Completed}, nil
+	}
+	if meta.NextRunAt == nil {
+		next := schedule.Next(now, meta.RunsStarted)
+		if err = owner.SetNext(next); err != nil {
+			return base, fmt.Errorf("сохранить следующую точку app-серии: %w", err)
+		}
+		meta = owner.Snapshot()
+	}
+	if now.Before(*meta.NextRunAt) {
+		return appSeriesAction{Kind: "wait", SeriesID: meta.SeriesID, NextRunAt: meta.NextRunAt, State: series.Waiting}, nil
+	}
+	var runID string
+	started, err := owner.StartRun(func() (string, error) {
+		snapshot, createErr := runstore.Create(root, input)
+		if createErr == nil {
+			runID = snapshot.Meta.RunID
+		}
+		return runID, createErr
+	}, func(created string) error {
+		return runstore.RemoveUnstarted(root, created)
+	})
+	if err != nil {
+		return base, fmt.Errorf("создать run app-серии: %w", err)
+	}
+	if !started {
+		if err = owner.FinishSeries(series.Stopped); err != nil {
+			return base, err
+		}
+		return appSeriesAction{Kind: "stopped", SeriesID: meta.SeriesID, State: series.Stopped}, nil
+	}
+	return appSeriesAction{Kind: "run", SeriesID: meta.SeriesID, RunID: runID, State: series.Running}, nil
+}
+
+func appTemplate(input runstore.Input) series.AppTemplate {
+	return series.AppTemplate{
+		WorkflowJSON: string(input.WorkflowJSON), Task: input.Task, Comment: input.Comment, CWD: input.CWD,
+		InitiatorThreadID: input.InitiatorThreadID, ParentRunID: input.ParentRunID,
+	}
+}
+
+func appInput(template series.AppTemplate) runstore.Input {
+	return runstore.Input{
+		WorkflowJSON: []byte(template.WorkflowJSON), Task: template.Task, Comment: template.Comment, CWD: template.CWD,
+		InitiatorThreadID: template.InitiatorThreadID, ParentRunID: template.ParentRunID,
+	}
 }
 
 func appNextCommand(ctx context.Context, args []string, out io.Writer, deps dependencies) error {
@@ -108,6 +333,23 @@ func appClaimCommand(args []string, out io.Writer, deps dependencies) error {
 	}
 	return writeJSON(out, struct {
 		MayCreate bool `json:"mayCreate"`
+	}{claimed})
+}
+
+func appContinueClaimCommand(args []string, out io.Writer, deps dependencies) error {
+	runID, root, values, err := parseAppMutation("app-continue-claim", args, deps, map[string]bool{"step": true, "turn-id": true})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(values["step"]) == "" || strings.TrimSpace(values["turn-id"]) == "" {
+		return errors.New("app-continue-claim требует --step и --turn-id interrupted turn")
+	}
+	claimed, err := appdriver.ClaimContinuation(root, runID, values["step"], values["turn-id"])
+	if err != nil {
+		return err
+	}
+	return writeJSON(out, struct {
+		MayContinue bool `json:"mayContinue"`
 	}{claimed})
 }
 

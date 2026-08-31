@@ -6,21 +6,30 @@
   {{if .Refresh}}<meta http-equiv="refresh" content="{{.Refresh}}">{{end}}
   <title>{{.Title}}</title>
   <style>
-    :root{color-scheme:dark;--bg:#080808;--surface:#111;--line:#292929;--text:#f5f5f5;--muted:#888;--link:#58a6ff;--red:#f85149;--green:#3fb950}
+    :root{color-scheme:dark;--bg:#080808;--surface:#111;--button:#181818;--button-hover:#222;--line:#292929;--text:#f5f5f5;--muted:#777;--link:#58a6ff;--red:#f85149;--green:#3fb950}
     *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
-    main{max-width:1120px;margin:0 auto;padding:28px 22px 60px} h1{font:600 19px/1.3 system-ui,sans-serif;margin:0 0 6px}.subtitle{color:var(--muted);margin:0 0 24px}
-    a{color:var(--link);text-decoration:none}a:hover{text-decoration:underline}.tree,.children{list-style:none;margin:0;padding:0}.children{margin-left:17px;padding-left:14px;border-left:1px solid var(--line)}
-    details{margin:4px 0}summary{display:flex;align-items:center;gap:8px;min-height:30px;cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}summary:before{content:'›';color:var(--muted);width:9px;transition:transform .12s}details[open]>summary:before{transform:rotate(90deg)}
-    .node{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.name{font-weight:600}.id,.updated,.state{color:var(--muted);font-size:12px}.actions{display:flex;gap:10px;margin-left:auto;padding-left:12px;white-space:nowrap}.disabled{color:#555;cursor:not-allowed}
+    main{max-width:1280px;margin:0 auto;padding:28px 22px 60px} h1{font:600 19px/1.3 system-ui,sans-serif;margin:0 0 6px}.subtitle{color:var(--muted);margin:0 0 24px}
+    a{color:var(--link);text-decoration:none}.tree,.children{list-style:none;margin:0;padding:0}.children{margin-left:17px;padding-left:14px;border-left:1px solid var(--line)}
+    details{margin:5px 0}summary{display:grid;grid-template-columns:9px 8px minmax(0,1fr) auto;align-items:center;gap:8px;min-height:38px;cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}summary:before{content:'›';color:var(--muted);width:9px;transition:transform .12s}details[open]>summary:before{transform:rotate(90deg)}
+    .run-main,.step-main{min-width:0}.primary{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}.name{font-weight:600}.ticket-title{display:block;color:#aaa;font:12px/1.35 system-ui,sans-serif;margin-top:2px;white-space:normal}.meta{display:block;color:var(--muted);font-size:10px;line-height:1.35;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .actions{display:flex;gap:6px;margin-left:auto;padding-left:12px;white-space:nowrap}.action{display:inline-flex;align-items:center;min-height:24px;border:1px solid #30363d;border-radius:6px;background:var(--button);color:var(--link);padding:2px 8px;font-size:11px;line-height:1;text-decoration:none}.action:hover{background:var(--button-hover);border-color:#484f58;text-decoration:none}.action-ticket{border-color:#285783;background:#0c2033}.action.disabled{color:#555;border-color:#252525;background:#111;cursor:not-allowed}
     .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto}.tone-running{background:var(--link)}.tone-failed{background:var(--red)}.tone-succeeded{background:var(--green)}
     .groups{display:grid;gap:12px}.status-group{margin:0;border:1px solid var(--line);border-radius:8px;background:var(--surface)}.status-group>summary{min-height:42px;padding:5px 12px}.status-group>.tree{padding:0 12px 10px 28px}.group-title{font:600 14px/1.3 system-ui,sans-serif}
-    .step{display:flex;align-items:center;gap:8px;min-height:28px;padding-left:17px}.step .actions{font-size:12px}.problem{border:1px solid #532423;background:#1b0d0d;padding:10px 12px;margin:8px 0;color:#ffb4ae}.empty{border:1px dashed var(--line);color:var(--muted);padding:24px;text-align:center}.badge{color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}
-    @media(max-width:720px){main{padding:20px 12px}.updated,.id{display:none}.actions{gap:7px}.children{margin-left:8px;padding-left:8px}}
+    .step{display:grid;grid-template-columns:8px minmax(0,1fr) auto;align-items:center;gap:8px;min-height:36px;padding-left:17px}.step .actions{font-size:11px}.problem{border:1px solid #532423;background:#1b0d0d;padding:10px 12px;margin:8px 0;color:#ffb4ae}.empty{border:1px dashed var(--line);color:var(--muted);padding:24px;text-align:center}.badge{color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}
+    .filters{display:grid;grid-template-columns:minmax(220px,1fr) minmax(190px,260px) auto auto;gap:8px;margin:0 0 8px}.control{width:100%;min-height:34px;border:1px solid #30363d;border-radius:7px;background:var(--surface);color:var(--text);padding:6px 9px;font:12px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}.control:focus{border-color:var(--link);outline:1px solid var(--link)}.filters .action{min-height:34px;font:12px/1 system-ui,sans-serif;cursor:pointer}.action-primary{border-color:#285783;background:#0c2033}.result-summary{color:var(--muted);font-size:11px;margin:0 0 16px}.pagination{display:flex;align-items:center;justify-content:center;gap:6px;margin:18px 0}.pagination .action{min-width:28px;justify-content:center}.pagination .current{border-color:var(--link);background:#0c2033;color:var(--text)}.pagination .ellipsis{min-width:22px;color:var(--muted);text-align:center}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    @media(max-width:720px){main{padding:20px 12px}.filters{grid-template-columns:1fr 1fr}.filters .search{grid-column:1/-1}.children{margin-left:8px;padding-left:8px}.status-group>.tree{padding-left:16px}details:not(.status-group)>summary{grid-template-columns:9px 8px minmax(0,1fr)}details:not(.status-group)>summary>.actions{grid-column:3;margin:2px 0 5px;padding:0;flex-wrap:wrap}.step{grid-template-columns:8px minmax(0,1fr);padding-left:8px}.step>.actions{grid-column:2;margin:0 0 5px;padding:0;flex-wrap:wrap}.meta{white-space:normal}.pagination{flex-wrap:wrap}}
   </style>
 </head>
 <body><main>
   <h1>{{.Title}} {{if .Preview}}<span class="badge">fake data</span>{{end}}</h1>
   <p class="subtitle">Связанные workflow и память кубиков{{if .Refresh}} · обновление каждые {{.Refresh}} сек.{{end}}</p>
+  <form class="filters" method="get">
+    <label class="search"><span class="sr-only">Поиск</span><input class="control" type="search" name="q" value="{{.Filter.Query}}" placeholder="Flow, кубик, тикет, run/thread ID, текст задачи…" maxlength="300"></label>
+    <label><span class="sr-only">Период</span><select class="control" name="period" aria-label="Период">{{range .Filter.Periods}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+    <button class="action action-primary" type="submit">Применить</button>
+    <a class="action" href="?period=24h">Сбросить</a>
+  </form>
+  <p class="result-summary">{{.Filter.WindowLabel}} · в окне {{.Filter.Matched}}{{if .Filter.HasActiveQuery}} · по поиску во всей истории {{.Filter.SearchMatched}}{{end}} · всего {{.Filter.Total}}</p>
   {{range .Problems}}<div class="problem"><strong>{{.Name}}</strong> — {{.Message}}</div>{{end}}
   {{if .Groups}}<div class="groups">{{range .Groups}}
     <details class="status-group" data-group="{{.ID}}" {{if .Open}}open{{end}}>
@@ -31,17 +40,19 @@
       </summary>
       <ul class="tree">{{range .Roots}}{{template "run" .}}{{end}}</ul>
     </details>
-  {{end}}</div>{{else}}<div class="empty">Запусков пока нет. Создайте workflow командой <code>lawa run</code>.</div>{{end}}
+  {{end}}</div>{{else}}<div class="empty">{{.EmptyMessage}}</div>{{end}}
+  {{template "pagination" .Pagination}}
 </main>
 <script>
   const key='lawa-dashboard-open:';
+  const searchActive={{.Filter.HasActiveQuery}};
   const remember=(node,id)=>{
     const saved=localStorage.getItem(key+id);
     if(saved!==null) node.open=saved==='1';
     node.addEventListener('toggle',()=>localStorage.setItem(key+id,node.open?'1':'0'));
   };
-  document.querySelectorAll('details[data-node]').forEach(node=>remember(node,node.dataset.node));
-  document.querySelectorAll('details[data-group]').forEach(node=>remember(node,'group:'+node.dataset.group));
+  document.querySelectorAll('details[data-node]').forEach(node=>searchActive?node.open=true:remember(node,node.dataset.node));
+  document.querySelectorAll('details[data-group]').forEach(node=>searchActive?node.open=true:remember(node,'group:'+node.dataset.group));
   if(location.pathname==='/preview') document.querySelectorAll('a[href="#preview"]').forEach(a=>a.addEventListener('click',e=>e.preventDefault()));
 </script></body></html>{{end}}
 
@@ -49,21 +60,35 @@
   <details data-node="{{.ID}}" {{if .Open}}open{{end}}>
     <summary>
       <span class="dot tone-{{.Tone}}" role="img" aria-label="Статус: {{.State}}" title="{{.State}}"></span>
-      <span class="node"><span class="name">{{.Name}}</span> <span class="state">{{.State}}</span> <span class="id">{{.ID}}</span></span>
-      <span class="updated">{{.Updated}}</span>
+      <span class="run-main">
+        <span class="primary"><span class="name">{{.Name}}</span>{{if .TicketID}} {{if .TicketURL}}<a class="action action-ticket" href="{{.TicketURL}}" target="_blank" rel="noreferrer" title="Открыть тикет">Тикет · {{.TicketID}}</a>{{else}}<span class="action action-ticket disabled" title="URL тикета не сохранён">Тикет · {{.TicketID}}</span>{{end}}{{end}}</span>
+        {{if .TicketTitle}}<span class="ticket-title">{{.TicketTitle}}</span>{{end}}
+        <span class="meta">{{.State}} · run {{.ID}}{{if .Updated}} · {{.Updated}}{{end}}</span>
+      </span>
       <span class="actions">
-        {{if .CodexURL}}<a href="{{.CodexURL}}">Codex</a>{{else}}<span class="disabled" title="Чат ещё не создан">Codex</span>{{end}}
-        <a href="{{.VSCodeURL}}">VS Code</a>
-        {{if .HasUML}}<a href="{{.UMLURL}}">UML</a>{{else}}<span class="disabled" title="PNG ещё не создан">UML</span>{{end}}
+        {{if .CodexURL}}<a class="action" href="{{.CodexURL}}" title="Открыть задачу в Codex">Codex</a>{{else}}<span class="action disabled" title="Задача ещё не создана">Codex</span>{{end}}
+        {{if .ThreadLogURL}}<a class="action" href="{{.ThreadLogURL}}" title="Открыть полный сырой rollout Codex в VS Code">Тред JSONL</a>{{else}}<span class="action disabled" title="Локальный rollout Codex не найден">Тред JSONL</span>{{end}}
+        <a class="action" href="{{.VSCodeURL}}" title="Открыть папку run в VS Code">Папка</a>
+        {{if .HasUML}}<a class="action" href="{{.UMLURL}}" title="Открыть схему workflow">UML</a>{{else}}<span class="action disabled" title="PNG ещё не создан">UML</span>{{end}}
       </span>
     </summary>
     <ul class="children">
       {{range .Steps}}<li class="step">
         <span class="dot tone-{{.Tone}}" role="img" aria-label="Статус: {{.State}}" title="{{.State}}"></span>
-        <span class="node">{{if .CodexURL}}<a href="{{.CodexURL}}">{{.ID}}</a>{{else}}{{.ID}}{{end}} <span class="state">{{.State}}</span></span>
-        <span class="actions">{{if .HasMemory}}<a href="{{.MemoryURL}}">Память</a>{{else}}<span class="disabled" title="Память пока пуста">Память</span>{{end}}</span>
+        <span class="step-main"><span class="name">{{.ID}}</span><span class="meta">{{.State}}</span></span>
+        <span class="actions">
+          {{if .CodexURL}}<a class="action" href="{{.CodexURL}}" title="Открыть задачу в Codex">Codex</a>{{else}}<span class="action disabled" title="Задача ещё не создана">Codex</span>{{end}}
+          {{if .ThreadLogURL}}<a class="action" href="{{.ThreadLogURL}}" title="Открыть полный сырой rollout Codex в VS Code">Тред JSONL</a>{{else}}<span class="action disabled" title="Локальный rollout Codex не найден">Тред JSONL</span>{{end}}
+          {{if .HasMemory}}<a class="action" href="{{.MemoryURL}}">Память</a>{{else}}<span class="action disabled" title="Память пока пуста">Память</span>{{end}}
+        </span>
       </li>{{end}}
       {{range .Children}}{{template "run" .}}{{end}}
     </ul>
   </details>
 </li>{{end}}
+
+{{define "pagination"}}{{if .Visible}}<nav class="pagination" aria-label="Страницы">
+  {{if .PreviousURL}}<a class="action" href="{{.PreviousURL}}">← Новее</a>{{else}}<span class="action disabled" aria-hidden="true">← Новее</span>{{end}}
+  {{range .Items}}{{if .Current}}<span class="action current" aria-current="page">{{.Label}}</span>{{else if .URL}}<a class="action" href="{{.URL}}">{{.Label}}</a>{{else}}<span class="ellipsis">{{.Label}}</span>{{end}}{{end}}
+  {{if .NextURL}}<a class="action" href="{{.NextURL}}">Раньше →</a>{{else}}<span class="action disabled" aria-hidden="true">Раньше →</span>{{end}}
+</nav>{{end}}{{end}}

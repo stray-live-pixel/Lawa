@@ -33,10 +33,12 @@ var pageTemplate = template.Must(template.New("dashboard").Parse(pageHTML))
 
 // page — единая модель live и preview; Refresh пуст только у статичного макета.
 type page struct {
-	Title, Refresh string
-	Preview        bool
-	Groups         []runGroup
-	Problems       []problem
+	Title, Refresh, EmptyMessage string
+	Preview                      bool
+	Filter                       filterView
+	Pagination                   paginationView
+	Groups                       []runGroup
+	Problems                     []problem
 }
 
 // problem — безопасная короткая диагностика одного каталога, не скрывающая дерево.
@@ -54,25 +56,29 @@ type runGroup struct {
 // runNode — готовая к HTML структура одного workflow и его потомков. Все URL
 // строит сервер из проверенных ID, поэтому template.URL не содержит сырого ввода.
 type runNode struct {
-	ID, ParentID, Name, State, Tone, Updated string
-	CodexURL, VSCodeURL, UMLURL              template.URL
-	HasUML, Open                             bool
-	Steps                                    []stepNode
-	Children                                 []*runNode
+	ID, ParentID, Name, State, Tone, Updated  string
+	TicketID, TicketTitle                     string
+	CodexURL, ThreadLogURL, VSCodeURL, UMLURL template.URL
+	TicketURL                                 template.URL
+	HasUML, Open                              bool
+	Steps                                     []stepNode
+	Children                                  []*runNode
+	updatedAt, activityAt                     time.Time
+	searchText, treeState                     string
 }
 
 // stepNode описывает лист дерева и доступность его сохранённой памяти.
 type stepNode struct {
-	ID, State, Tone     string
-	CodexURL, MemoryURL template.URL
-	HasMemory           bool
+	ID, State, Tone                   string
+	CodexURL, ThreadLogURL, MemoryURL template.URL
+	HasMemory                         bool
 }
 
 // Handler возвращает полностью автономный HTTP-интерфейс для абсолютного root.
 // Маршруты памяти и PNG сначала загружают runstore snapshot и используют только
 // проверенные ID из него. Пользовательский URL поэтому не становится путём файла.
 func Handler(root string) http.Handler {
-	h := handler{root: root}
+	h := handler{root: root, codexHome: resolveCodexHome()}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", h.live)
 	mux.HandleFunc("GET /preview", h.preview)
@@ -89,20 +95,28 @@ func Handler(root string) http.Handler {
 	})
 }
 
-// handler хранит единственную область чтения для всех HTTP-маршрутов.
-type handler struct{ root string }
+// handler хранит области чтения Lawa и Codex. codexHome нужен только для
+// построения локальных vscode://-ссылок: dashboard не отдаёт содержимое сырых
+// журналов по HTTP и не позволяет запросу выбрать произвольный файл.
+type handler struct{ root, codexHome string }
 
 // live перечитывает хранилище на каждый polling-запрос.
-func (h handler) live(w http.ResponseWriter, _ *http.Request) {
+func (h handler) live(w http.ResponseWriter, r *http.Request) {
 	view := page{Title: "Lawa workflows", Refresh: "3"}
-	roots, problems := loadTree(h.root)
-	view.Groups, view.Problems = groupRuns(roots), problems
+	roots, problems := loadTree(h.root, indexThreadLogs(h.codexHome))
+	visible, filter, pagination := applyDashboardView(roots, parseViewParams(r.URL.Query()), time.Now())
+	view.Groups, view.Problems, view.Filter, view.Pagination = groupRuns(visible), problems, filter, pagination
+	if len(roots) == 0 {
+		view.EmptyMessage = "Запусков пока нет. Создайте workflow командой lawa app-run."
+	} else {
+		view.EmptyMessage = "Ничего не найдено. Измените период или строку поиска."
+	}
 	render(w, view)
 }
 
 // preview использует тот же шаблон, но никогда не обращается к runstore.
-func (h handler) preview(w http.ResponseWriter, _ *http.Request) {
-	render(w, previewPage())
+func (h handler) preview(w http.ResponseWriter, r *http.Request) {
+	render(w, previewPage(parseViewParams(r.URL.Query()), time.Now()))
 }
 
 // render полагается на html/template для экранирования всех видимых данных.
@@ -144,7 +158,7 @@ func (h handler) uml(w http.ResponseWriter, r *http.Request) {
 // loadTree изолирует повреждение одного каталога. Сначала все корректные run
 // собираются в map, затем связи проверяются на потерянных родителей и циклы.
 // Только после этого создаётся рекурсивная структура для безопасного шаблона.
-func loadTree(root string) ([]*runNode, []problem) {
+func loadTree(root string, threadLogs threadLogIndex) ([]*runNode, []problem) {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -163,7 +177,7 @@ func loadTree(root string) ([]*runNode, []problem) {
 			problems = append(problems, problem{Name: entry.Name(), Message: diagnostic(loadErr)})
 			continue
 		}
-		nodes[entry.Name()] = makeRunNode(root, snapshot)
+		nodes[entry.Name()] = makeRunNode(root, snapshot, threadLogs)
 	}
 	for _, node := range nodes {
 		if parentCycle(node, nodes) {
@@ -186,34 +200,62 @@ func loadTree(root string) ([]*runNode, []problem) {
 		parent.Children = append(parent.Children, node)
 	}
 	sortNodes(roots)
+	for _, root := range roots {
+		finalizeTree(root)
+	}
 	return roots, problems
 }
 
 // makeRunNode добавляет только существующие память и PNG; отсутствие артефакта
 // превращается в неактивное действие, а не в ссылку на несуществующий файл.
-func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
+func makeRunNode(root string, snapshot runstore.Snapshot, threadLogs threadLogIndex) *runNode {
 	runID := snapshot.Meta.RunID
+	ticket := ticketFromTask(snapshot.Task)
 	node := &runNode{
 		ID: runID, ParentID: snapshot.Meta.ParentRunID, Name: snapshot.Workflow.ID,
-		State: workflowState(snapshot), Open: true,
-		CodexURL:  codexURL(snapshot.Meta.InitiatorThreadID),
-		VSCodeURL: template.URL((&url.URL{Scheme: "vscode", Host: "file", Path: filepath.ToSlash(filepath.Join(root, runID))}).String()),
+		State: workflowState(snapshot), Open: true, TicketID: ticket.ID, TicketTitle: ticket.Title, TicketURL: ticket.URL,
+		CodexURL: codexURL(snapshot.Meta.InitiatorThreadID), ThreadLogURL: threadLogs[snapshot.Meta.InitiatorThreadID],
+		VSCodeURL: vscodeFileURL(filepath.Join(root, runID)),
 	}
 	node.Tone = tone(node.State)
+	search := []string{
+		snapshot.Workflow.ID, runID, snapshot.Meta.ParentRunID, snapshot.Meta.CWD,
+		snapshot.Meta.InitiatorThreadID, snapshot.Task, node.State,
+		ticket.ID, ticket.Title, string(ticket.URL),
+	}
+	if snapshot.Workflow.Model != nil {
+		search = append(search, *snapshot.Workflow.Model)
+	}
+	for _, definition := range snapshot.Workflow.Steps {
+		search = append(search, definition.ID, definition.Type, definition.Prompt, strings.Join(definition.DependsOn, " "))
+		if definition.Model != nil {
+			search = append(search, *definition.Model)
+		}
+		if definition.Effort != nil {
+			search = append(search, *definition.Effort)
+		}
+		if definition.Speed != nil {
+			search = append(search, string(*definition.Speed))
+		}
+	}
 	if info, err := os.Stat(filepath.Join(root, runID, "meta.json")); err == nil {
-		node.Updated = info.ModTime().Format("2006-01-02 15:04:05")
+		node.updatedAt = info.ModTime()
+		node.Updated = node.updatedAt.Format("2006-01-02 15:04:05")
 	}
 	if _, err := runstore.ReadStatusImage(root, runID); err == nil {
 		node.HasUML, node.UMLURL = true, template.URL("/uml/"+runID)
 	}
 	for _, step := range snapshot.Meta.Steps {
 		memory, err := runstore.ReadMemory(root, runID, step.ThreadID)
+		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, string(step.State), string(memory), string(threadLogs[step.CodexThreadID]))
 		node.Steps = append(node.Steps, stepNode{
 			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
-			CodexURL: codexURL(step.CodexThreadID), MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID),
+			CodexURL: codexURL(step.CodexThreadID), ThreadLogURL: threadLogs[step.CodexThreadID],
+			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID),
 			HasMemory: err == nil && len(memory) > 0,
 		})
 	}
+	node.searchText = strings.Join(search, "\n")
 	return node
 }
 
@@ -271,10 +313,10 @@ func sortNodes(nodes []*runNode) {
 	}
 }
 
-// groupRuns сохраняет порядок корней внутри каждой секции после sortNodes.
+// groupRuns сохраняет порядок корней после фильтрации и пагинации.
 // Pending относится к работе: workflow ещё не завершён, даже если ни один шаг
-// пока не стартовал. Пустые секции не показываем, чтобы dashboard не занимал
-// место заголовками без запусков.
+// пока не стартовал. treeState учитывает дочерние workflow, поэтому завершившийся
+// диспетчер с работающим ребёнком остаётся в секции «В работе».
 func groupRuns(roots []*runNode) []runGroup {
 	groups := []runGroup{
 		{ID: "active", Title: "В работе", Tone: "running", Open: true},
@@ -283,7 +325,11 @@ func groupRuns(roots []*runNode) []runGroup {
 	}
 	for _, root := range roots {
 		group := 0
-		switch root.State {
+		state := root.treeState
+		if state == "" {
+			state = normalizeTreeState(root.State)
+		}
+		switch state {
 		case "failed":
 			group = 1
 		case "succeeded":
@@ -320,6 +366,13 @@ func codexURL(threadID string) template.URL {
 		return ""
 	}
 	return template.URL((&url.URL{Scheme: "codex", Host: "threads", Path: "/" + threadID}).String())
+}
+
+// vscodeFileURL строит ссылку только из локального пути, выбранного Lawa. url.URL
+// экранирует пробелы и другие специальные символы; ручная конкатенация здесь
+// могла бы получить иной host или оборвать путь на первом `#`.
+func vscodeFileURL(path string) template.URL {
+	return template.URL((&url.URL{Scheme: "vscode", Host: "file", Path: filepath.ToSlash(path)}).String())
 }
 
 // diagnostic убирает управляющие переносы и ограничивает размер ошибки одного run.
@@ -384,25 +437,43 @@ func IsLoopbackAddress(address string) bool {
 
 // previewPage намеренно содержит все основные статусы, длинное имя, два корня и
 // три уровня вложенности. Фейковые ссылки визуальны и не покидают страницу.
-func previewPage() page {
+func previewPage(params viewParams, now time.Time) page {
 	action := template.URL("#preview")
 	step := func(id, state string, memory bool) stepNode {
-		return stepNode{ID: id, State: state, Tone: tone(state), CodexURL: action, MemoryURL: action, HasMemory: memory}
+		return stepNode{ID: id, State: state, Tone: tone(state), CodexURL: action, ThreadLogURL: action, MemoryURL: action, HasMemory: memory}
 	}
-	run := func(id, name, state string, steps ...stepNode) *runNode {
-		return &runNode{ID: id, Name: name, State: state, Tone: tone(state), Updated: "2026-08-31 18:42:10", CodexURL: action, VSCodeURL: action, UMLURL: action, HasUML: true, Open: true, Steps: steps}
+	run := func(id, name, state string, age time.Duration, steps ...stepNode) *runNode {
+		search := []string{id, name, state}
+		for _, item := range steps {
+			search = append(search, item.ID, item.State)
+		}
+		return &runNode{
+			ID: id, Name: name, State: state, Tone: tone(state), Updated: "2026-08-31 18:42:10",
+			CodexURL: action, ThreadLogURL: action, VSCodeURL: action, UMLURL: action, HasUML: true, Open: true, Steps: steps,
+			updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
+		}
 	}
-	release := run("preview-release", "release-v0.3.0", "running",
+	release := run("preview-release", "release-v0.3.0", "running", 15*time.Minute,
 		step("prepare-release-notes-with-a-deliberately-long-name", "succeeded", true), step("build-all-platforms", "running", true))
-	verification := run("preview-verify", "verify-related-artifacts", "failed",
+	release.TicketID, release.TicketTitle, release.TicketURL = "THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", action
+	release.searchText += " THINKTWICE-592 [СП] Проблемы с модалкой на уровнях prepare-release-notes-with-a-deliberately-long-name build-all-platforms"
+	verification := run("preview-verify", "verify-related-artifacts", "failed", 2*time.Hour,
 		step("linux-amd64", "succeeded", true), step("macos-arm64", "failed", true), step("windows-amd64", "pending", false), step("not-selected-branch", "skipped", false))
-	verification.Children = []*runNode{run("preview-repair", "repair-failed-macos-build", "running",
+	verification.Children = []*runNode{run("preview-repair", "repair-failed-macos-build", "running", 30*time.Minute,
 		step("diagnose", "succeeded", true), step("fix-and-rebuild", "waiting_for_approval", true), step("publish", "pending", false))}
-	release.Children = []*runNode{verification, run("preview-docs", "publish-documentation", "succeeded", step("deploy", "succeeded", true))}
-	maintenance := run("preview-maintenance", "nightly-maintenance", "pending",
+	release.Children = []*runNode{verification, run("preview-docs", "publish-documentation", "succeeded", 3*time.Hour, step("deploy", "succeeded", true))}
+	maintenance := run("preview-maintenance", "nightly-maintenance", "pending", 26*time.Hour,
 		step("collect", "pending", false), step("cleanup-skipped-artifacts", "cancelled", false))
 	maintenance.Open = false
-	failed := run("preview-failed", "failed-nightly-cleanup", "failed", step("cleanup", "failed", true))
-	succeeded := run("preview-succeeded", "previous-release", "succeeded", step("publish", "succeeded", true))
-	return page{Title: "Lawa workflows — preview", Preview: true, Groups: groupRuns([]*runNode{release, maintenance, failed, succeeded})}
+	failed := run("preview-failed", "failed-nightly-cleanup", "failed", 4*time.Hour, step("cleanup", "failed", true))
+	succeeded := run("preview-succeeded", "previous-release", "succeeded", 48*time.Hour, step("publish", "succeeded", true))
+	roots := []*runNode{release, maintenance, failed, succeeded}
+	for _, root := range roots {
+		finalizeTree(root)
+	}
+	visible, filter, pagination := applyDashboardView(roots, params, now)
+	return page{
+		Title: "Lawa workflows — preview", Preview: true, Groups: groupRuns(visible), Filter: filter, Pagination: pagination,
+		EmptyMessage: "Ничего не найдено. Измените период или строку поиска.",
+	}
 }

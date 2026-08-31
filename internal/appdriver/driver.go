@@ -15,6 +15,11 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 )
 
+// CodexTasksSection — стабильный sectionId верхнеуровневого списка Tasks в
+// Codex App. Driver возвращает его в каждом launch, чтобы управляющий клиент не
+// считал наличие задачи внутри проекта достаточной пользовательской видимостью.
+const CodexTasksSection = "chats"
+
 // Action — один самодостаточный ответ команды app-next. Kind принимает:
 // launch — найти либо создать и привязать ровно одну задачу; observe — наблюдать
 // уже известные задачи; complete — все зависимости успешны; blocked — новых
@@ -29,12 +34,16 @@ type Action struct {
 }
 
 // Launch описывает задачу Codex App без transport-specific параметров stdio.
-// Пустой CodexThreadID означает, что task ещё не привязан. Непустой ID делает
-// повторный app-next восстановлением той же задачи, а не разрешением создать новую.
+// CWD выбирает сохранённый project либо same-directory fork, а SectionID требует
+// отдельную видимость в Tasks даже для project-задачи. Пустой CodexThreadID
+// означает, что task ещё не привязан. Непустой ID делает повторный app-next
+// восстановлением той же задачи, а не разрешением создать новую.
 type Launch struct {
 	StepID        string `json:"stepId"`
 	Title         string `json:"title"`
 	Prompt        string `json:"prompt"`
+	CWD           string `json:"cwd"`
+	SectionID     string `json:"sectionId"`
 	CodexThreadID string `json:"codexThreadId,omitempty"`
 	Model         string `json:"model,omitempty"`
 	Effort        string `json:"effort,omitempty"`
@@ -103,7 +112,8 @@ func Next(root, runID string) (action Action, err error) {
 func actionLaunch(launch coordinator.Launch, threadID string, revision uint64) *Launch {
 	return &Launch{
 		StepID: launch.StepID, Title: launch.Command.Title, Prompt: launch.Command.Text,
-		CodexThreadID: threadID, Model: launch.Command.Model, Effort: launch.Command.Effort, Revision: revision,
+		CWD: launch.Command.CWD, SectionID: CodexTasksSection, CodexThreadID: threadID,
+		Model: launch.Command.Model, Effort: launch.Command.Effort, Revision: revision,
 	}
 }
 
@@ -117,6 +127,19 @@ func Claim(root, runID, stepID string) (claimed bool, err error) {
 	}
 	defer func() { err = errors.Join(err, run.Close()) }()
 	return run.ClaimAppCreation(stepID)
+}
+
+// ClaimContinuation сохраняет durable-право на единственную отправку continue
+// тому interrupted turn, который управляющий чат только что прочитал. В отличие
+// от изменения статуса это отдельная внешняя попытка и потому требует своего
+// маркера до send_message_to_thread.
+func ClaimContinuation(root, runID, stepID, turnID string) (claimed bool, err error) {
+	run, err := runstore.OpenLocked(root, runID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { err = errors.Join(err, run.Close()) }()
+	return run.ClaimAppContinuation(stepID, turnID)
 }
 
 // ResetClaim выполняет только подтверждённый пользователем аварийный сброс.
