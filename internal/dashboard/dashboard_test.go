@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
@@ -97,12 +98,13 @@ TRACKER_CONTEXT_BEGIN
   "summary": "заголовок из контекста с меньшим приоритетом"
 }
 TRACKER_CONTEXT_END`)
+	setState(t, root, child, scheduler.Running)
 	childRun, err := runstore.OpenLocked(root, child.Meta.RunID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err = childRun.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "process_started", PID: 4321, Message: "безопасное событие"}); err == nil {
-		err = childRun.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "item_started", ItemID: "mcp-1", ItemType: "mcpToolCall"})
+		err = childRun.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "item_started", ItemID: "mcp-1", ItemType: "mcpToolCall", Content: "github · get_issue"})
 	}
 	if err == nil {
 		err = childRun.Close()
@@ -134,9 +136,9 @@ TRACKER_CONTEXT_END`)
 	html := recorder.Body.String()
 	for _, fragment := range []string{
 		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "vscode://file/",
-		"failed-workflow", "succeeded-workflow", "В работе", "Сломавшиеся", "Успешные",
+		"failed-workflow", "succeeded-workflow", "0/1 шагов", "1/1 шагов", "Работа агента",
 		"Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
-		"События", "Папка", "/events/" + child.Meta.RunID, "действие: mcpToolCall",
+		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID, "действие: mcpToolCall",
 		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
 		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",
 		"Flow, кубик, тикет, run/thread ID, текст задачи…",
@@ -149,12 +151,8 @@ TRACKER_CONTEXT_END`)
 	if strings.Index(html, parent.Meta.RunID) > strings.Index(html, child.Meta.RunID) {
 		t.Fatal("дочерний workflow показан вне родителя")
 	}
-	active, broken, successful := strings.Index(html, `data-group="active" open`), strings.Index(html, `data-group="failed"`), strings.Index(html, `data-group="succeeded"`)
-	if active < 0 || broken < active || successful < broken {
-		t.Fatalf("секции отсутствуют или нарушен порядок: active=%d failed=%d succeeded=%d", active, broken, successful)
-	}
-	if strings.Contains(html, `data-group="failed" open`) || strings.Contains(html, `data-group="succeeded" open`) {
-		t.Fatal("сломавшиеся или успешные workflow раскрыты по умолчанию")
+	if strings.Contains(html, `data-group=`) || strings.Contains(html, `data-node="`+succeeded.Meta.RunID+`" open`) {
+		t.Fatal("workflow снова разбиты по статусам или завершённый run раскрыт по умолчанию")
 	}
 	if strings.Contains(html, "codex://") || strings.Contains(html, "Тред JSONL") {
 		t.Fatal("dashboard снова раскрыл нативные ссылки или сырой rollout Codex")
@@ -180,8 +178,15 @@ TRACKER_CONTEXT_END`)
 	}
 	recorder = httptest.NewRecorder()
 	dashboard.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/events/"+child.Meta.RunID+"?step=cube", nil))
-	if recorder.Header().Get("Content-Type") != "text/plain; charset=utf-8" || !strings.Contains(recorder.Body.String(), "process_started") || !strings.Contains(recorder.Body.String(), "pid=4321") {
+	if recorder.Header().Get("Content-Type") != "text/plain; charset=utf-8" || !strings.Contains(recorder.Body.String(), "process_started") || !strings.Contains(recorder.Body.String(), "pid=4321") || strings.Contains(recorder.Body.String(), "github") {
 		t.Fatalf("события не отданы как безопасный текст: %s, %q", recorder.Header().Get("Content-Type"), recorder.Body.String())
+	}
+	recorder = httptest.NewRecorder()
+	dashboard.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/api/trace/"+child.Meta.RunID+"?step=cube&after=0", nil))
+	var trace traceResponse
+	if err = json.Unmarshal(recorder.Body.Bytes(), &trace); err != nil || recorder.Header().Get("Content-Type") != "application/json; charset=utf-8" ||
+		len(trace.Events) != 1 || trace.Events[0].Content != "github · get_issue" || trace.Next == 0 {
+		t.Fatalf("live-поток не отдан панели: status=%d trace=%+v err=%v", recorder.Code, trace, err)
 	}
 }
 
@@ -194,6 +199,7 @@ func TestProtectedRoutes(t *testing.T) {
 	for _, path := range []string{
 		"/memory/" + run.Meta.RunID + "/" + strings.Repeat("0", 32),
 		"/memory/not-a-run/not-a-thread", "/uml/not-a-run", "/memory/../../etc/passwd",
+		"/api/trace/" + run.Meta.RunID + "?step=unknown&after=0",
 	} {
 		recorder := httptest.NewRecorder()
 		dashboard.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
@@ -229,34 +235,31 @@ func TestPreview(t *testing.T) {
 	for _, fragment := range []string{
 		"fake data", "release-v0.3.0", "repair-failed-macos-build", "nightly-maintenance",
 		"prepare-release-notes-with-a-deliberately-long-name", "tone-running", "tone-failed", "tone-succeeded", "skipped", "#preview",
-		"В работе", "Сломавшиеся", "Успешные", "failed-nightly-cleanup", "previous-release", "За последние 24 часа", "За всё время",
+		"Работа агента", "0/2 шагов", "1/2 шагов", "failed-nightly-cleanup", "previous-release", "За последние 24 часа", "За всё время",
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("preview не показывает %q", fragment)
 		}
 	}
-	if strings.Contains(body, `http-equiv="refresh"`) {
+	if strings.Contains(body, `data-refresh="3"`) {
 		t.Fatal("статичный preview неожиданно начал polling")
 	}
 	live := httptest.NewRecorder()
 	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/", nil))
-	if !strings.Contains(live.Body.String(), "Запусков пока нет") || !strings.Contains(live.Body.String(), `http-equiv="refresh"`) {
+	if !strings.Contains(live.Body.String(), "Запусков пока нет") || !strings.Contains(live.Body.String(), `data-refresh="3"`) {
 		t.Fatal("пустой live dashboard не показывает подсказку или polling")
 	}
 }
 
-// TestGroupRuns фиксирует продуктовую классификацию и не позволяет случайно
-// перенести ожидающий workflow в завершённые либо изменить порядок секций.
-func TestGroupRuns(t *testing.T) {
-	roots := []*runNode{
-		{ID: "pending", State: "pending"}, {ID: "running", State: "running"},
-		{ID: "failed", State: "failed"}, {ID: "succeeded", State: "succeeded"},
-	}
-	groups := groupRuns(roots)
-	if len(groups) != 3 || groups[0].ID != "active" || !groups[0].Open || len(groups[0].Roots) != 2 ||
-		groups[1].ID != "failed" || groups[1].Open || len(groups[1].Roots) != 1 ||
-		groups[2].ID != "succeeded" || groups[2].Open || len(groups[2].Roots) != 1 {
-		t.Fatalf("неверная группировка workflow: %+v", groups)
+// TestSortNodesNewestFirst фиксирует единый временной порядок без статусных
+// секций: успешный новый workflow не должен оказаться ниже старого активного.
+func TestSortNodesNewestFirst(t *testing.T) {
+	old := &runNode{ID: "old-running", activityAt: time.Now().Add(-time.Hour)}
+	recent := &runNode{ID: "recent-succeeded", activityAt: time.Now()}
+	roots := []*runNode{old, recent}
+	sortNodes(roots)
+	if roots[0] != recent || roots[1] != old {
+		t.Fatalf("workflow отсортированы не по времени: %+v", roots)
 	}
 }
 
