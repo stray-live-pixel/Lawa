@@ -105,7 +105,7 @@ func Prepare(run *runstore.LockedRun, root string) (Preparation, error) {
 			Text:        buildPrompt(snapshot, workflowStep, saved, root),
 			Permissions: stepPermissions(runDir, ownMemory, saved.ThreadID),
 		}
-		applyRuntimeSettings(&command, workflowStep)
+		applyRuntimeSettings(&command, snapshot.Workflow.Model, workflowStep)
 		prepared.Launches = append(prepared.Launches, Launch{
 			StepID:  stepID,
 			Command: command,
@@ -148,7 +148,7 @@ func prepareContinuations(snapshot runstore.Snapshot, root string, enabled bool,
 			CWD: snapshot.Meta.CWD, Text: "continue",
 			Permissions: stepPermissions(runDir, memory, step.ThreadID),
 		}
-		applyRuntimeSettings(&command, workflowSteps[step.ID])
+		applyRuntimeSettings(&command, snapshot.Workflow.Model, workflowSteps[step.ID])
 		continuations = append(continuations, Continuation{
 			StepID: step.ID, ThreadID: step.CodexThreadID,
 			Command: command,
@@ -158,10 +158,15 @@ func prepareContinuations(snapshot runstore.Snapshot, root string, enabled bool,
 }
 
 // applyRuntimeSettings переводит устойчивые пользовательские значения workflow
-// в текущие имена протокола Codex. Явный normal обязан отключить унаследованный
+// в текущие имена протокола Codex. Корневой model служит значением по умолчанию,
+// а model кубика имеет больший приоритет. Если оба отсутствуют, пустое поле Command
+// сохраняет модель из конфигурации Codex. Явный normal обязан отключить унаследованный
 // Fast mode, поэтому он передаётся как default; отсутствие speed не добавляет
 // serviceTier и сохраняет конфигурацию окружения пользователя.
-func applyRuntimeSettings(command *codex.Command, step workflow.Step) {
+func applyRuntimeSettings(command *codex.Command, workflowModel *string, step workflow.Step) {
+	if workflowModel != nil {
+		command.Model = *workflowModel
+	}
 	if step.Model != nil {
 		command.Model = *step.Model
 	}

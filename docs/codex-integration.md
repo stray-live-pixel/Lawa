@@ -29,13 +29,15 @@ read для папки run и write только для `memory/<свой-thread
 одним аргументом `-c` без shell и выбирается полем `permissions` в `thread/start`.
 Managed restrictions остаются верхней границей и могут сузить эти права.
 
-Необязательные `model`, `effort` и `speed` кубика хранятся в неизменяемом
-`workflow.json`. Lawa передаёт model и service tier в `thread/start` или
-`thread/resume`, затем повторяет их вместе с effort в `turn/start`: именно turn
-поддерживает все три override и сохраняет одинаковое поведение после `resume`.
-Продуктовый `speed: normal` соответствует service tier `default`, `fast` — `fast`,
-а отсутствие speed не передаёт override и наследует Codex. Каталог совместимых
-model/effort остаётся ответственностью app-server и не фиксируется в Lawa.
+Необязательные общий `model` workflow и `model`, `effort`, `speed` кубика хранятся
+в неизменяемом `workflow.json`. Модель выбирается по приоритету: значение кубика,
+значение workflow, конфигурация Codex. Lawa передаёт выбранные model и service tier
+в `thread/start` или `thread/resume`, затем повторяет их вместе с effort в
+`turn/start`: именно turn поддерживает все три override и сохраняет одинаковое
+поведение после `resume`. Продуктовый `speed: normal` соответствует service tier
+`default`, `fast` — `fast`, а отсутствие speed не передаёт override и наследует
+Codex. Каталог совместимых model/effort остаётся ответственностью app-server и не
+фиксируется в Lawa.
 
 Это намеренный продуктовый контракт, подтверждённый автором 2026-08-30. Workflow
 не объявляет отдельный `read-only` или `workspace-write` режим: одинаковый профиль

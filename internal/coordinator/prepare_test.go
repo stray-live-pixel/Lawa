@@ -6,9 +6,35 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
+
+// TestApplyRuntimeSettingsModelPriority фиксирует все три ступени выбора модели:
+// значение кубика, общий default workflow и наследование Codex через пустую Command.
+func TestApplyRuntimeSettingsModelPriority(t *testing.T) {
+	workflowModel, stepModel := "gpt-5.6-luna", "gpt-5.6-sol"
+	for _, tc := range []struct {
+		name          string
+		workflowModel *string
+		stepModel     *string
+		want          string
+	}{
+		{name: "step", workflowModel: &workflowModel, stepModel: &stepModel, want: stepModel},
+		{name: "workflow", workflowModel: &workflowModel, want: workflowModel},
+		{name: "codex"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var command codex.Command
+			applyRuntimeSettings(&command, tc.workflowModel, workflow.Step{Model: tc.stepModel})
+			if command.Model != tc.want {
+				t.Fatalf("неверная модель для уровня %s: получено %q, ожидалось %q", tc.name, command.Model, tc.want)
+			}
+		})
+	}
+}
 
 // TestPrepare резервирует независимые шаги одной волной и проверяет, что
 // повторное планирование не возвращает их второй раз. Сетевых запросов в тесте
@@ -17,7 +43,7 @@ func TestPrepare(t *testing.T) {
 	root := t.TempDir()
 	cwd := t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
-		WorkflowJSON: []byte(`{"id":"demo","steps":[{"id":"first","type":"agent","prompt":"Первая задача","dependsOn":[],"model":"gpt-5.6-sol","effort":"high","speed":"fast"},{"id":"second","type":"agent","prompt":"Вторая задача","dependsOn":[],"speed":"normal"}]}`),
+		WorkflowJSON: []byte(`{"id":"demo","model":"gpt-5.6-luna","steps":[{"id":"first","type":"agent","prompt":"Первая задача","dependsOn":[],"model":"gpt-5.6-sol","effort":"high","speed":"fast"},{"id":"second","type":"agent","prompt":"Вторая задача","dependsOn":[],"speed":"normal"}]}`),
 		Task:         "Сделать MVP", Comment: "Проверить границы", CWD: cwd, InitiatorThreadID: "initiator",
 	})
 	if err != nil {
@@ -45,8 +71,8 @@ func TestPrepare(t *testing.T) {
 		if wantID == "first" && (launch.Command.Model != "gpt-5.6-sol" || launch.Command.Effort != "high" || launch.Command.ServiceTier != "fast") {
 			t.Fatalf("первый кубик потерял явные настройки Codex: %+v", launch.Command)
 		}
-		if wantID == "second" && (launch.Command.Model != "" || launch.Command.Effort != "" || launch.Command.ServiceTier != "default") {
-			t.Fatalf("normal или наследуемые настройки второго кубика искажены: %+v", launch.Command)
+		if wantID == "second" && (launch.Command.Model != "gpt-5.6-luna" || launch.Command.Effort != "" || launch.Command.ServiceTier != "default") {
+			t.Fatalf("общая модель, normal или наследуемые настройки второго кубика искажены: %+v", launch.Command)
 		}
 		profile := launch.Command.Permissions
 		wantRunDir := filepath.Join(root, snapshot.Meta.RunID)
@@ -89,7 +115,7 @@ func TestPrepare(t *testing.T) {
 func TestPrepareContinuationKeepsRuntimeSettings(t *testing.T) {
 	root := t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
-		WorkflowJSON: []byte(`{"id":"resume","steps":[{"id":"step","type":"agent","prompt":"Задача","dependsOn":[],"model":"gpt-5.6-terra","effort":"medium","speed":"fast"}]}`),
+		WorkflowJSON: []byte(`{"id":"resume","model":"gpt-5.6-terra","steps":[{"id":"step","type":"agent","prompt":"Задача","dependsOn":[],"effort":"medium","speed":"fast"}]}`),
 		Task:         "Задача", CWD: t.TempDir(), InitiatorThreadID: "initiator",
 	})
 	if err != nil {
