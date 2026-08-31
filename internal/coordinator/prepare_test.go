@@ -17,7 +17,7 @@ func TestPrepare(t *testing.T) {
 	root := t.TempDir()
 	cwd := t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
-		WorkflowJSON: []byte(`{"id":"demo","steps":[{"id":"first","type":"agent","prompt":"Первая задача","dependsOn":[]},{"id":"second","type":"agent","prompt":"Вторая задача","dependsOn":[]}]}`),
+		WorkflowJSON: []byte(`{"id":"demo","steps":[{"id":"first","type":"agent","prompt":"Первая задача","dependsOn":[],"model":"gpt-5.6-sol","effort":"high","speed":"fast"},{"id":"second","type":"agent","prompt":"Вторая задача","dependsOn":[],"speed":"normal"}]}`),
 		Task:         "Сделать MVP", Comment: "Проверить границы", CWD: cwd, InitiatorThreadID: "initiator",
 	})
 	if err != nil {
@@ -41,6 +41,12 @@ func TestPrepare(t *testing.T) {
 		wantTitle := "Lawa: demo / " + wantID + " [" + snapshot.Meta.RunID + "]"
 		if launch.StepID != wantID || launch.Command.CWD != cwd || launch.Command.Title != wantTitle {
 			t.Fatalf("неверная команда %d: %+v", index, launch)
+		}
+		if wantID == "first" && (launch.Command.Model != "gpt-5.6-sol" || launch.Command.Effort != "high" || launch.Command.ServiceTier != "fast") {
+			t.Fatalf("первый кубик потерял явные настройки Codex: %+v", launch.Command)
+		}
+		if wantID == "second" && (launch.Command.Model != "" || launch.Command.Effort != "" || launch.Command.ServiceTier != "default") {
+			t.Fatalf("normal или наследуемые настройки второго кубика искажены: %+v", launch.Command)
 		}
 		profile := launch.Command.Permissions
 		wantRunDir := filepath.Join(root, snapshot.Meta.RunID)
@@ -74,6 +80,43 @@ func TestPrepare(t *testing.T) {
 	again, err := Prepare(run, root)
 	if err != nil || len(again.Launches) != 0 || again.Complete {
 		t.Fatalf("повтор разрешил дубликат: %+v, %v", again, err)
+	}
+}
+
+// TestPrepareContinuationKeepsRuntimeSettings подтверждает контракт resume:
+// настройки берутся из неизменяемого workflow.json исходного run, а не из
+// текущего конфига Codex или последнего процесса Lawa.
+func TestPrepareContinuationKeepsRuntimeSettings(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := runstore.Create(root, runstore.Input{
+		WorkflowJSON: []byte(`{"id":"resume","steps":[{"id":"step","type":"agent","prompt":"Задача","dependsOn":[],"model":"gpt-5.6-terra","effort":"medium","speed":"fast"}]}`),
+		Task:         "Задача", CWD: t.TempDir(), InitiatorThreadID: "initiator",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+	if err := run.Reserve([]string{"step"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Update("step", scheduler.Cancelled, "existing-chat"); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := run.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	continuations, err := prepareContinuations(saved, root, true, map[string]bool{})
+	if err != nil || len(continuations) != 1 {
+		t.Fatalf("продолжение не подготовлено: %+v, %v", continuations, err)
+	}
+	command := continuations[0].Command
+	if command.Model != "gpt-5.6-terra" || command.Effort != "medium" || command.ServiceTier != "fast" || command.Text != "continue" {
+		t.Fatalf("resume изменил настройки кубика: %+v", command)
 	}
 }
 

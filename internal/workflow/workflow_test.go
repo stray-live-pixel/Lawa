@@ -32,6 +32,29 @@ func TestDecode(t *testing.T) {
 	}
 }
 
+// TestDecodeRuntimeSettings проверяет независимую опциональность настроек. Их
+// указатели сохраняют различие между наследованием Codex и явным override кубика.
+func TestDecodeRuntimeSettings(t *testing.T) {
+	input := `{"id":"runtime","steps":[` +
+		`{"id":"model","type":"agent","prompt":"Модель","dependsOn":[],"model":"gpt-5.6-sol"},` +
+		`{"id":"effort","type":"agent","prompt":"Рассуждение","dependsOn":[],"effort":"high"},` +
+		`{"id":"speed","type":"agent","prompt":"Скорость","dependsOn":[],"speed":"fast"},` +
+		`{"id":"inherited","type":"agent","prompt":"Обычная задача","dependsOn":[]}]}`
+	w, err := Decode(strings.NewReader(input))
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, effort, speed, inherited := w.Steps[0], w.Steps[1], w.Steps[2], w.Steps[3]
+	if model.Model == nil || *model.Model != "gpt-5.6-sol" || model.Effort != nil || model.Speed != nil ||
+		effort.Model != nil || effort.Effort == nil || *effort.Effort != "high" || effort.Speed != nil ||
+		speed.Model != nil || speed.Effort != nil || speed.Speed == nil || *speed.Speed != SpeedFast {
+		t.Fatalf("независимые настройки изменены или потеряны: model=%+v effort=%+v speed=%+v", model, effort, speed)
+	}
+	if inherited.Model != nil || inherited.Effort != nil || inherited.Speed != nil {
+		t.Fatalf("отсутствующие настройки перестали наследоваться: %+v", inherited)
+	}
+}
+
 // TestDecodeRejectsInvalidInput проверяет отклонение всей схемы, включая попытки
 // скрыть ошибку повторным ключом, другим регистром или вторым JSON-документом.
 func TestDecodeRejectsInvalidInput(t *testing.T) {
@@ -59,6 +82,13 @@ func TestDecodeRejectsInvalidInput(t *testing.T) {
 		"регистр поля":         strings.Replace(valid, `"dependsOn"`, `"DependsOn"`, 1),
 		"повтор поля workflow": strings.Replace(valid, `"id":"flow"`, `"id":"flow","id":"other"`, 1),
 		"повтор поля шага":     strings.Replace(valid, `"id":"a"`, `"id":"a","\u0069d":"b"`, 1),
+		"пустая model":         strings.Replace(valid, `"prompt":`, `"model":"","prompt":`, 1),
+		"model с пробелом":     strings.Replace(valid, `"prompt":`, `"model":"bad model","prompt":`, 1),
+		"числовая model":       strings.Replace(valid, `"prompt":`, `"model":42,"prompt":`, 1),
+		"пустой effort":        strings.Replace(valid, `"prompt":`, `"effort":"","prompt":`, 1),
+		"effort с пробелом":    strings.Replace(valid, `"prompt":`, `"effort":"very high","prompt":`, 1),
+		"неверный speed":       strings.Replace(valid, `"prompt":`, `"speed":"turbo","prompt":`, 1),
+		"числовой speed":       strings.Replace(valid, `"prompt":`, `"speed":2,"prompt":`, 1),
 		// Разные непарные суррогаты не должны превращаться в один ID через замену на U+FFFD.
 		"искажённая ссылка": `{"id":"flow","steps":[{"id":"\ud800","type":"agent","prompt":"x","dependsOn":[]},{"id":"b","type":"agent","prompt":"x","dependsOn":["\ud801"]}]}`,
 	}

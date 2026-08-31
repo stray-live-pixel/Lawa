@@ -32,6 +32,16 @@ func TestMain(m *testing.M) {
 func fakeServer(scenario string) {
 	input, output := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
 	send := func(v any) { _ = output.Encode(v) }
+	configuredRuntime := scenario == "settings-run" || scenario == "settings-continue"
+	runtimeMatches := func(params map[string]any, includeEffort bool) bool {
+		if !configuredRuntime {
+			return params["model"] == nil && params["effort"] == nil && params["serviceTier"] == nil
+		}
+		if params["model"] != "gpt-test" || params["serviceTier"] != "fast" {
+			return false
+		}
+		return !includeEffort && params["effort"] == nil || includeEffort && params["effort"] == "high"
+	}
 	for {
 		var m envelope
 		if input.Decode(&m) != nil {
@@ -78,7 +88,7 @@ func fakeServer(scenario string) {
 					panic("профиль не передан app-server одним безопасным аргументом")
 				}
 			}
-			if p["cwd"] != cwd || hasHistoryMode || !validIsolation || p["model"] != nil || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
+			if p["cwd"] != cwd || hasHistoryMode || !validIsolation || !runtimeMatches(p, false) || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
 				panic("искажены параметры чата, автономность или модель")
 			}
 			id := "thread-1"
@@ -89,7 +99,7 @@ func fakeServer(scenario string) {
 		case "thread/resume":
 			cwd, _ := os.Getwd()
 			validIsolation := p["sandbox"] == "read-only" && p["permissions"] == nil
-			if p["threadId"] != "thread-1" || p["cwd"] != cwd || !validIsolation ||
+			if p["threadId"] != "thread-1" || p["cwd"] != cwd || !validIsolation || !runtimeMatches(p, false) ||
 				p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
 				panic("искажены параметры продолжения чата")
 			}
@@ -108,7 +118,7 @@ func fakeServer(scenario string) {
 			}
 			items := p["input"].([]any)
 			want := "literal '$()`\\n"
-			if strings.HasPrefix(scenario, "continue:") {
+			if strings.HasPrefix(scenario, "continue:") || scenario == "settings-continue" {
 				want = "continue"
 			}
 			if scenario == "skill" {
@@ -117,7 +127,7 @@ func fakeServer(scenario string) {
 					panic("скилл не передан отдельным input")
 				}
 			}
-			if items[0].(map[string]any)["text"] != want || p["threadId"] != "thread-1" || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
+			if items[0].(map[string]any)["text"] != want || p["threadId"] != "thread-1" || !runtimeMatches(p, true) || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
 				panic("искажены команда, ID чата или автономность turn")
 			}
 			// Ответ должен сохранить строковый ID, не принять его за ответ turn/start.
@@ -258,6 +268,7 @@ func TestRun(t *testing.T) {
 		creates, turns int
 	}{
 		{"ok", "completed", 1, 1}, {"early", "completed", 1, 1},
+		{"settings-run", "completed", 1, 1},
 		{"skill", "completed", 1, 1}, {"permissions", "completed", 1, 1}, {"handled", "completed", 1, 1},
 		{"failed", "failed", 1, 1}, {"interrupted", "interrupted", 1, 1},
 		{"error:initialize", "", 0, 0}, {"eof:thread/start", "", 1, 0},
@@ -299,6 +310,9 @@ func TestRun(t *testing.T) {
 				}}
 			if tc.name == "skill" {
 				command.Skill = &Skill{"demo", "/test/SKILL.md"}
+			}
+			if tc.name == "settings-run" {
+				command.Model, command.Effort, command.ServiceTier = "gpt-test", "high", "fast"
 			}
 			if tc.name == "permissions" {
 				command.Sandbox = ""
@@ -378,6 +392,23 @@ func TestContinue(t *testing.T) {
 				t.Fatalf("continue создал новый чат или повторил turn: %s", &trace)
 			}
 		})
+	}
+}
+
+// TestContinueRuntimeSettings проверяет, что resume и новый turn получают те же
+// явные override. Иначе перезапуск Lawa мог бы незаметно вернуть настройки Codex.
+func TestContinueRuntimeSettings(t *testing.T) {
+	t.Setenv("LAWA_TEST_CODEX_SERVER", "settings-continue")
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Continue(t.Context(), "thread-1", Command{
+		Executable: binary, CWD: t.TempDir(), Text: "continue", Sandbox: "read-only",
+		Model: "gpt-test", Effort: "high", ServiceTier: "fast",
+	})
+	if err != nil || result.Status != "completed" || result.ThreadID != "thread-1" || result.TurnID != "turn-1" {
+		t.Fatalf("настройки продолжения не прошли через протокол: %+v, %v", result, err)
 	}
 }
 
@@ -579,6 +610,9 @@ func TestInvalidInput(t *testing.T) {
 		{CWD: t.TempDir(), Text: "test", Sandbox: "read-only", Permissions: &PermissionProfile{Name: "test", ReadPaths: []string{"/run"}, WritePaths: []string{"/run/own"}}},
 		{CWD: t.TempDir(), Text: "test", Permissions: &PermissionProfile{Name: "bad.name", ReadPaths: []string{"/run"}, WritePaths: []string{"/run/own"}}},
 		{CWD: t.TempDir(), Text: "test", Permissions: &PermissionProfile{Name: "test", ReadPaths: []string{"relative"}, WritePaths: []string{"/run/own"}}},
+		{CWD: t.TempDir(), Text: "test", Model: "bad model"},
+		{CWD: t.TempDir(), Text: "test", Effort: "very high"},
+		{CWD: t.TempDir(), Text: "test", ServiceTier: "fast mode"},
 	} {
 		result, err := Run(context.Background(), command)
 		if err == nil || result.CreationAttempted {
