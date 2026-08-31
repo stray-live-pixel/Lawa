@@ -258,6 +258,22 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 				err = drainActive(err, run, active, results)
 			}
 		}
+		if !options.ReturnOnFailure || errors.Is(err, ErrRunUnsuccessful) {
+			return
+		}
+		// Ctrl+C обнаруживается раньше, чем interruptActive успевает сохранить
+		// Cancelled. После остановки активных turn повторно читаем состояние и
+		// добавляем типизированный терминал только при фактически сохранённой
+		// неуспешности. Ошибка чтения остаётся инфраструктурной: вызывающий код не
+		// имеет права потерять CurrentRunID без доказательства терминальности.
+		status, _, statusErr := currentStatus(run)
+		if statusErr != nil {
+			err = errors.Join(err, fmt.Errorf("координатор: подтвердить терминальное состояние: %w", statusErr))
+			return
+		}
+		if hasTerminalFailure(status) {
+			err = errors.Join(err, ErrRunUnsuccessful)
+		}
 	}()
 	pollTicker := options.NewTicker(options.PollInterval)
 	refreshTicker := options.NewTicker(options.RefreshInterval)

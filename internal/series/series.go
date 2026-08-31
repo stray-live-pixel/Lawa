@@ -248,11 +248,17 @@ func Load(root, seriesID string) (Snapshot, error) {
 // RequestStop сериализуется с StartRun. Если новый run уже прошёл барьер, он
 // считается текущим и спокойно завершается; все более поздние запуски запрещены.
 func RequestStop(root, seriesID string) error {
+	return requestStop(root, seriesID, false)
+}
+
+// requestStop принимает режим блокировки только для детерминированной проверки
+// занятого launch.lock. Публичная команда всегда ждёт освобождения этого барьера.
+func requestStop(root, seriesID string, nonBlocking bool) error {
 	dir, err := seriesDir(root, seriesID)
 	if err != nil {
 		return err
 	}
-	guard, err := lockFile(filepath.Join(dir, "launch.lock"), false)
+	guard, err := lockFile(filepath.Join(dir, "launch.lock"), nonBlocking)
 	if err != nil {
 		return err
 	}
@@ -278,9 +284,17 @@ func (s *LockedSeries) SetNext(next time.Time) error {
 	return s.save()
 }
 
-// StartRun выполняет создание обычного run внутри межпроцессного барьера.
-// false означает, что stop победил гонку и callback не вызывался.
-func (s *LockedSeries) StartRun(create func() (string, error)) (bool, error) {
+// StartRun выполняет создание обычного run внутри межпроцессного барьера. Если
+// связь с серией не опубликована, новый и ещё никому не переданный run удаляется.
+// false означает, что stop победил гонку либо создание было полностью отменено.
+func (s *LockedSeries) StartRun(create func() (string, error), rollback func(string) error) (bool, error) {
+	return s.startRun(create, rollback, s.savePublished)
+}
+
+func (s *LockedSeries) startRun(create func() (string, error), rollback func(string) error, save func() (bool, error)) (bool, error) {
+	if create == nil || rollback == nil {
+		return false, errors.New("создание run требует функции создания и безопасного отката")
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	guard, err := lockFile(filepath.Join(s.dir, "launch.lock"), false)
@@ -294,17 +308,32 @@ func (s *LockedSeries) StartRun(create func() (string, error)) (bool, error) {
 	if s.meta.CurrentRunID != "" {
 		return false, fmt.Errorf("run %s уже активен в серии", s.meta.CurrentRunID)
 	}
+	previous := s.meta
 	runID, err := create()
 	if err != nil {
 		return false, err
 	}
+	if strings.TrimSpace(runID) == "" {
+		return false, errors.New("созданный run должен содержать runId")
+	}
 	s.meta.RunsStarted++
 	s.meta.CurrentRunID, s.meta.NextRunAt, s.meta.State = runID, nil, Running
-	return true, s.save()
+	published, saveErr := save()
+	if saveErr == nil {
+		return true, nil
+	}
+	if published {
+		return true, fmt.Errorf("связь серии с run %q опубликована, но не синхронизирована: %w", runID, saveErr)
+	}
+	s.meta = previous
+	cleanupErr := rollback(runID)
+	return false, fmt.Errorf("не удалось связать run %q с серией; откат нового run: %w", runID, errors.Join(saveErr, cleanupErr))
 }
 
-// FinishRun фиксирует терминал обычного run. При ошибке серия больше не
-// планируется: это явная политика stop-on-failure для failed и interrupted.
+// FinishRun фиксирует подтверждённый терминал обычного run. При ошибке самого
+// workflow серия больше не планируется: это явная политика stop-on-failure для
+// failed и interrupted. Ошибки управляющего процесса сюда передавать нельзя:
+// они не доказывают терминальность run и должны сохраняться через FailRunControl.
 func (s *LockedSeries) FinishRun(runErr error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -315,6 +344,20 @@ func (s *LockedSeries) FinishRun(runErr error) error {
 	} else {
 		s.meta.State, s.meta.LastError = Waiting, ""
 	}
+	return s.save()
+}
+
+// FailRunControl останавливает серию после ошибки управляющего процесса, когда
+// терминальность текущего run не подтверждена. Ссылка на run и счётчик
+// RunsFinished намеренно сохраняются: оператор сможет найти незавершённую работу
+// через series-status и безопасно решить, продолжать ли её командой resume.
+func (s *LockedSeries) FailRunControl(runErr error) error {
+	if runErr == nil {
+		return errors.New("ошибка управления серией не задана")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.meta.State, s.meta.NextRunAt, s.meta.LastError = Failed, nil, runErr.Error()
 	return s.save()
 }
 
@@ -361,26 +404,33 @@ func (s *LockedSeries) Close() error {
 }
 
 func (s *LockedSeries) save() error {
+	_, err := s.savePublished()
+	return err
+}
+
+// savePublished отличает отказ до атомарного Rename от ошибки Sync каталога.
+// После Rename откат run уже небезопасен: series.json может содержать его ID.
+func (s *LockedSeries) savePublished() (bool, error) {
 	data, err := json.Marshal(s.meta)
 	if err != nil {
-		return err
+		return false, err
 	}
 	tmp := filepath.Join(s.dir, ".series-"+newID()+".tmp")
 	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer os.Remove(tmp)
 	if _, err = f.Write(data); err == nil {
 		err = f.Sync()
 	}
 	if err = errors.Join(err, f.Close()); err != nil {
-		return err
+		return false, err
 	}
 	if err = os.Rename(tmp, filepath.Join(s.dir, "series.json")); err != nil {
-		return err
+		return false, err
 	}
-	return syncDirectory(s.dir)
+	return true, syncDirectory(s.dir)
 }
 
 func syncDirectory(path string) error {

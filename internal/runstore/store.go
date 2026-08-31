@@ -191,6 +191,31 @@ func Load(root, runID string) (Snapshot, error) {
 	return load(dir, runID)
 }
 
+// RemoveUnstarted удаляет только полностью созданный run, которому координатор
+// ещё не успел выдать ни одного задания. Откат допустим лишь между Create и
+// публикацией runId в серии; для уже известного пользователю run эту функцию
+// вызывать нельзя, даже если его шаги пока выглядят как Pending.
+func RemoveUnstarted(root, runID string) error {
+	snapshot, err := Load(root, runID)
+	if err != nil {
+		return fmt.Errorf("проверить откат run %q: %w", runID, err)
+	}
+	for _, step := range snapshot.Meta.Steps {
+		if step.State != scheduler.Pending || step.CodexThreadID != "" {
+			return fmt.Errorf("откат run %q запрещён: шаг %q уже передан исполнителю", runID, step.ID)
+		}
+	}
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(root, runID)
+	if err = os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("удалить незапущенный run %q из %q: %w", runID, dir, err)
+	}
+	return syncDir(root)
+}
+
 // openRun ограничивает все операции каталогом выбранного run, в том числе после
 // его открытия координатором. Доверенный root нельзя подменять во время работы.
 func openRun(root, runID string) (*os.Root, error) {

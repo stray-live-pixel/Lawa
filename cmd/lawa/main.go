@@ -396,6 +396,8 @@ func runSeries(ctx context.Context, root, executable string, input runstore.Inpu
 			var createErr error
 			snapshot, createErr = runstore.Create(root, input)
 			return snapshot.Meta.RunID, createErr
+		}, func(runID string) error {
+			return runstore.RemoveUnstarted(root, runID)
 		})
 		if startErr != nil {
 			return fmt.Errorf("создать run серии: %w", startErr)
@@ -404,11 +406,18 @@ func runSeries(ctx context.Context, root, executable string, input runstore.Inpu
 			return owner.FinishSeries(series.Stopped)
 		}
 		if _, err = fmt.Fprintf(out, "runId: %s\n", snapshot.Meta.RunID); err != nil {
-			return errors.Join(err, owner.FinishRun(err))
+			return errors.Join(err, owner.FailRunControl(err))
 		}
 		runErr := coordinate(ctx, root, snapshot.Meta.RunID, executable, out, stderr, deps, false, true)
-		if finishErr := owner.FinishRun(runErr); finishErr != nil {
-			return errors.Join(runErr, fmt.Errorf("сохранить завершение run серии: %w", finishErr))
+		// Только nil и типизированная ошибка workflow подтверждают, что обычный
+		// run достиг терминала. Ошибка вывода, хранения или интеграции останавливает
+		// управляющий цикл, но оставляет CurrentRunID для диагностики и resume.
+		if runErr == nil || errors.Is(runErr, coordinator.ErrRunUnsuccessful) {
+			if finishErr := owner.FinishRun(runErr); finishErr != nil {
+				return errors.Join(runErr, fmt.Errorf("сохранить завершение run серии: %w", finishErr))
+			}
+		} else if controlErr := owner.FailRunControl(runErr); controlErr != nil {
+			return errors.Join(runErr, fmt.Errorf("сохранить ошибку управления серией: %w", controlErr))
 		}
 		if runErr != nil {
 			return runErr

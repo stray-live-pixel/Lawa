@@ -2,10 +2,12 @@ package series
 
 import (
 	"errors"
-	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
+
+func ignoreRollback(string) error { return nil }
 
 // TestSchedulesWithControlledClock фиксирует календарную семантику без sleep:
 // after отсчитывается от переданного завершения, а cron пропускает старые точки.
@@ -71,14 +73,14 @@ func TestSeriesLifecycleAndStopBarrier(t *testing.T) {
 	started, err := owner.StartRun(func() (string, error) {
 		created++
 		return "run-one", nil
-	})
+	}, ignoreRollback)
 	if err != nil || !started {
 		t.Fatalf("первый run не начат: %t, %v", started, err)
 	}
 	if _, err = owner.StartRun(func() (string, error) {
 		created++
 		return "run-two", nil
-	}); err == nil {
+	}, ignoreRollback); err == nil {
 		t.Fatal("параллельный run не был запрещён")
 	}
 	if created != 1 {
@@ -94,7 +96,7 @@ func TestSeriesLifecycleAndStopBarrier(t *testing.T) {
 	started, err = owner.StartRun(func() (string, error) {
 		created++
 		return "forbidden", nil
-	})
+	}, ignoreRollback)
 	if err != nil || started || created != 1 {
 		t.Fatalf("stop пропустил новый run: started=%t created=%d err=%v", started, created, err)
 	}
@@ -104,6 +106,28 @@ func TestSeriesLifecycleAndStopBarrier(t *testing.T) {
 	snapshot, err := Load(root, seriesID)
 	if err != nil || snapshot.State != Stopped || snapshot.RunsStarted != 1 || snapshot.RunsFinished != 1 || !snapshot.StopRequested {
 		t.Fatalf("неверный финальный снимок: %+v, %v", snapshot, err)
+	}
+}
+
+// TestStartRunRollsBackUnpublishedRun проверяет откат и обе причины двойного сбоя.
+func TestStartRunRollsBackUnpublishedRun(t *testing.T) {
+	owner, err := Create(t.TempDir(), Config{Mode: Immediate})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+	saveFailure, cleanupFailure := errors.New("series.json недоступен"), errors.New("run не удалён")
+	cleanupCalled := false
+	started, err := owner.startRun(func() (string, error) { return "run-orphan", nil }, func(string) error {
+		cleanupCalled = true
+		return cleanupFailure
+	}, func() (bool, error) { return false, saveFailure })
+	if started || !cleanupCalled || !errors.Is(err, saveFailure) || !errors.Is(err, cleanupFailure) {
+		t.Fatalf("неверный результат отката: started=%t cleanup=%t err=%v", started, cleanupCalled, err)
+	}
+	snapshot := owner.Snapshot()
+	if snapshot.RunsStarted != 0 || snapshot.RunsFinished != 0 || snapshot.CurrentRunID != "" || snapshot.State != Waiting {
+		t.Fatalf("не восстановлено состояние до создания run: %+v", snapshot)
 	}
 }
 
@@ -124,30 +148,26 @@ func TestStopIsSerializedWithLaunch(t *testing.T) {
 			close(entered)
 			<-release
 			return "run-linearized-before-stop", nil
-		})
+		}, ignoreRollback)
 		launchDone <- startErr
 	}()
 	<-entered
-	var stopReturned atomic.Bool
-	stopDone := make(chan error, 1)
-	go func() {
-		stopDone <- RequestStop(root, seriesID)
-		stopReturned.Store(true)
-	}()
-	time.Sleep(10 * time.Millisecond)
-	if stopReturned.Load() {
-		t.Fatal("stop обошёл занятый launch.lock")
+	if err = requestStop(root, seriesID, true); !errors.Is(err, syscall.EWOULDBLOCK) {
+		t.Fatalf("stop не обнаружил занятый launch.lock: %v", err)
+	}
+	if snapshot, loadErr := Load(root, seriesID); loadErr != nil || snapshot.StopRequested {
+		t.Fatalf("stop-маркер опубликован до захвата барьера: %+v, %v", snapshot, loadErr)
 	}
 	close(release)
 	if err = <-launchDone; err != nil {
 		t.Fatal(err)
 	}
-	if err = <-stopDone; err != nil {
+	if err = RequestStop(root, seriesID); err != nil {
 		t.Fatal(err)
 	}
 	started, err := owner.StartRun(func() (string, error) {
-		return "forbidden", errors.New("callback не должен вызываться")
-	})
+		return "", errors.New("callback не должен вызываться")
+	}, ignoreRollback)
 	if err != nil || started {
 		t.Fatalf("после линейризованного stop разрешён следующий run: %t, %v", started, err)
 	}

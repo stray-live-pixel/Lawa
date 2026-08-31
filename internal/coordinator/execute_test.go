@@ -603,7 +603,7 @@ func TestExecuteReleasesUnattemptedCreation(t *testing.T) {
 
 // TestExecuteCancellationInterruptsTurn проверяет локальный контракт сигнала:
 // координатор адресно прерывает активный turn, сохраняет Cancelled и возвращает
-// управление без ожидания искусственного завершения работы агентом.
+// типизированный терминал серии без ожидания искусственного завершения агентом.
 func TestExecuteCancellationInterruptsTurn(t *testing.T) {
 	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"one","type":"agent","prompt":"Один","dependsOn":[]}]}`)
 	client := newFakeClient()
@@ -612,7 +612,7 @@ func TestExecuteCancellationInterruptsTurn(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- Execute(ctx, run, Options{Root: root, PollInterval: time.Hour, Client: client})
+		done <- Execute(ctx, run, Options{Root: root, PollInterval: time.Hour, Client: client, ReturnOnFailure: true})
 	}()
 	select {
 	case <-client.started:
@@ -622,7 +622,7 @@ func TestExecuteCancellationInterruptsTurn(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrRunUnsuccessful) {
 			t.Fatalf("неверная ошибка отмены: %v", err)
 		}
 	case <-time.After(time.Second):

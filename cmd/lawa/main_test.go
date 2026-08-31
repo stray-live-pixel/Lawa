@@ -90,6 +90,22 @@ type failingWriter struct{ err error }
 // Write имитирует отказ приёмника до записи первого байта.
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
 
+// failOnWriteWriter пропускает служебные сообщения до заданной записи. Он нужен
+// для воспроизведения отказа после публикации seriesId и создания первого run.
+type failOnWriteWriter struct {
+	writes, failAt int
+	err            error
+}
+
+// Write возвращает настроенную ошибку ровно на выбранной операции вывода.
+func (w *failOnWriteWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, w.err
+	}
+	return len(p), nil
+}
+
 // cliRendererFunc подставляет renderer в сквозные CLI-тесты без внешнего PlantUML.
 type cliRendererFunc func(context.Context, []byte) ([]byte, error)
 
@@ -482,6 +498,86 @@ func TestRecurringRunModesWithControlledClock(t *testing.T) {
 				t.Fatalf("неверный прогресс серии: %+v, %v", snapshot, err)
 			}
 		})
+	}
+}
+
+// TestRecurringRunWithoutLimitStopsExplicitly проверяет публичный бесконечный
+// режим: отсутствие --max-runs не завершает серию само, а series-stop перед
+// третьей итерацией оставляет ровно два законченных обычных run.
+func TestRecurringRunWithoutLimitStopsExplicitly(t *testing.T) {
+	parent, cwd := t.TempDir(), t.TempDir()
+	root, workflowPath := filepath.Join(parent, "runs"), filepath.Join(parent, "workflow.json")
+	if err := os.WriteFile(workflowPath, []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
+	waits := 0
+	deps.waitUntil = func(ctx context.Context, _ time.Time, _ func() time.Time, _ func() (bool, error)) error {
+		waits++
+		if waits != 3 {
+			return nil
+		}
+		entries, err := os.ReadDir(filepath.Join(root, "series"))
+		if err != nil {
+			return fmt.Errorf("найти серию для остановки: %w", err)
+		}
+		if len(entries) != 1 {
+			return fmt.Errorf("для остановки ожидалась одна серия, найдено %d", len(entries))
+		}
+		return executeContext(ctx, []string{"series-stop", entries[0].Name(), "--root", root}, io.Discard, io.Discard, deps)
+	}
+	var out bytes.Buffer
+	err := executeContext(t.Context(), []string{
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator",
+		"--root", root, "--repeat", "immediate",
+	}, &out, io.Discard, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "series"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("не найдена остановленная серия: %v, %v", entries, err)
+	}
+	snapshot, err := series.Load(root, entries[0].Name())
+	if err != nil || snapshot.State != series.Stopped || snapshot.Config.MaxRuns != 0 || snapshot.RunsStarted != 2 || snapshot.RunsFinished != 2 || !snapshot.StopRequested || strings.Count(out.String(), "runId:") != 2 {
+		t.Fatalf("серия без лимита завершилась не по явному stop: %+v, waits=%d out=%q err=%v", snapshot, waits, out.String(), err)
+	}
+}
+
+// TestRecurringRunOutputFailureKeepsCurrentRun воспроизводит R1 через публичный
+// CLI: run уже создан, но его ID не удалось вывести. Серия должна показать этот
+// незавершённый run оператору, а не засчитать ложный терминал.
+func TestRecurringRunOutputFailureKeepsCurrentRun(t *testing.T) {
+	parent, cwd := t.TempDir(), t.TempDir()
+	root := filepath.Join(parent, "runs")
+	workflowPath := filepath.Join(parent, "workflow.json")
+	if err := os.WriteFile(workflowPath, []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("stdout закрыт")
+	out := &failOnWriteWriter{failAt: 2, err: failure}
+	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
+	err := executeContext(t.Context(), []string{
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator",
+		"--root", root, "--repeat", "immediate", "--max-runs", "1",
+	}, out, io.Discard, deps)
+	if !errors.Is(err, failure) {
+		t.Fatalf("ошибка вывода потеряна: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "series"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("не найдена созданная серия: %v, %v", entries, err)
+	}
+	snapshot, err := series.Load(root, entries[0].Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != series.Failed || snapshot.RunsStarted != 1 || snapshot.RunsFinished != 0 || snapshot.CurrentRunID == "" || snapshot.LastError != failure.Error() {
+		t.Fatalf("ошибка вывода ложно завершила run: %+v", snapshot)
+	}
+	run, err := runstore.Load(root, snapshot.CurrentRunID)
+	if err != nil || run.Meta.Steps[0].State != scheduler.Pending {
+		t.Fatalf("series-status ссылается не на незавершённый run: %+v, %v", run.Meta.Steps, err)
 	}
 }
 
