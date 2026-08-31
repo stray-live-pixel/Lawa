@@ -137,8 +137,16 @@ type Options struct {
 	Client              Client
 	Notify              func(Status) error
 	ContinueInterrupted bool
-	NewTicker           func(time.Duration) Ticker
+	// ReturnOnFailure завершает автоматическую серию, когда активных turn уже
+	// нет, но хотя бы один шаг failed/interrupted. Обычные run/resume сохраняют
+	// прежнее ожидание ручного продолжения.
+	ReturnOnFailure bool
+	NewTicker       func(time.Duration) Ticker
 }
+
+// ErrRunUnsuccessful отличает терминальный failed/interrupted от сбоя самого
+// координатора. В обоих случаях серия останавливается, но причина остаётся явной.
+var ErrRunUnsuccessful = errors.New("run завершён неуспешно; серия остановлена по политике stop-on-failure")
 
 type launchResult struct {
 	stepID string
@@ -309,6 +317,9 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 		if status.Complete && len(active) == 0 {
 			return nil
 		}
+		if options.ReturnOnFailure && len(active) == 0 && hasTerminalFailure(status) {
+			return ErrRunUnsuccessful
+		}
 
 		select {
 		case <-ctx.Done():
@@ -323,6 +334,18 @@ func Execute(ctx context.Context, run *runstore.LockedRun, options Options) (err
 			periodicRefreshDue = true
 		}
 	}
+}
+
+// hasTerminalFailure не считает ожидание подтверждения ошибкой: пользователь
+// ещё может продолжить тот же turn. Failed и Cancelled соответствуют явно
+// выбранной политике остановки повторяющейся серии.
+func hasTerminalFailure(status Status) bool {
+	for _, step := range status.Steps {
+		if step.State == scheduler.Failed || step.State == scheduler.Cancelled {
+			return true
+		}
+	}
+	return false
 }
 
 // drainActive не наблюдает остальные сохранённые чаты и не запускает новые волны.

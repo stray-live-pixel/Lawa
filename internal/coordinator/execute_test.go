@@ -425,6 +425,20 @@ func TestExecuteParallelChain(t *testing.T) {
 	}
 }
 
+// TestExecuteReturnsTerminalFailureForSeries закрепляет выбранную продуктовую
+// политику: обычный run ждёт ручной работы, а серия получает явный терминал и
+// не создаёт следующий run после failed.
+func TestExecuteReturnsTerminalFailureForSeries(t *testing.T) {
+	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"one","type":"agent","prompt":"Один","dependsOn":[]}]}`)
+	client := newFakeClient()
+	client.runStatuses["one"] = []string{"failed"}
+	client.inspectStatuses["chat-one"] = []codex.WorkStatus{codex.WorkFailed}
+	err := Execute(t.Context(), run, Options{Root: root, PollInterval: time.Millisecond, Client: client, ReturnOnFailure: true})
+	if !errors.Is(err, ErrRunUnsuccessful) {
+		t.Fatalf("failed run не остановил серию: %v", err)
+	}
+}
+
 // TestExecuteManualContinuation проверяет главный resume-сценарий MVP: failed
 // не создаёт второй чат, последующий completed открывает зависимый шаг.
 func TestExecuteManualContinuation(t *testing.T) {

@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/series"
 	"github.com/stray-live-pixel/Lawa/internal/statusreport"
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
@@ -312,6 +314,7 @@ type cliFakeClient struct {
 	runs      map[string]int
 	continues map[string]int
 	inspect   map[string]codex.WorkStatus
+	onRun     func()
 }
 
 type cliFakeObserver struct{ client *cliFakeClient }
@@ -327,6 +330,9 @@ func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Res
 	c.mu.Lock()
 	c.runs[stepID]++
 	c.mu.Unlock()
+	if c.onRun != nil {
+		c.onRun()
+	}
 	if err := command.OnThread(threadID); err != nil {
 		return codex.Result{ThreadID: threadID, CreationAttempted: true}, err
 	}
@@ -390,10 +396,92 @@ func cliTestDependencies(client coordinator.Client, check func(context.Context, 
 		refreshInterval: coordinator.DefaultRefreshInterval,
 		chatInterval:    defaultChatInterval,
 		now:             time.Now,
+		waitUntil:       series.WaitUntil,
 		renderer:        successfulCLIRenderer(),
 		userHomeDir: func() (string, error) {
 			return "", errors.New("home не должен использоваться при --root")
 		},
+	}
+}
+
+// TestRecurringRunModesWithControlledClock проходит публичный CLI для всех
+// режимов. Управляемые часы доказывают точный лимит, отсчёт after от завершения
+// и отсутствие очереди cron-точек, пропущенных во время долгого run.
+func TestRecurringRunModesWithControlledClock(t *testing.T) {
+	cases := []struct {
+		name        string
+		flags       []string
+		start       time.Time
+		runDuration time.Duration
+		wantTargets []time.Time
+	}{
+		{
+			name: "immediate", flags: []string{"--repeat", "immediate", "--max-runs", "3"},
+			start:       time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC),
+			wantTargets: []time.Time{time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC), time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC), time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)},
+		},
+		{
+			name: "after", flags: []string{"--repeat", "after", "--repeat-delay", "1h", "--max-runs", "2"},
+			start: time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC), runDuration: 15 * time.Minute,
+			wantTargets: []time.Time{time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC), time.Date(2026, 8, 31, 11, 15, 0, 0, time.UTC)},
+		},
+		{
+			name: "cron", flags: []string{"--repeat", "cron", "--cron", "0 10 * * *", "--timezone", "Europe/Moscow", "--max-runs", "2"},
+			start: time.Date(2026, 8, 31, 6, 59, 0, 0, time.UTC), runDuration: 2 * time.Hour,
+			wantTargets: []time.Time{time.Date(2026, 8, 31, 7, 0, 0, 0, time.UTC), time.Date(2026, 9, 1, 7, 0, 0, 0, time.UTC)},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, cwd := filepath.Join(t.TempDir(), "runs"), t.TempDir()
+			workflowPath := filepath.Join(t.TempDir(), "workflow.json")
+			if err := os.WriteFile(workflowPath, []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var clockMu sync.Mutex
+			current := tc.start
+			now := func() time.Time {
+				clockMu.Lock()
+				defer clockMu.Unlock()
+				return current
+			}
+			client := newCLIFakeClient()
+			client.onRun = func() {
+				clockMu.Lock()
+				current = current.Add(tc.runDuration)
+				clockMu.Unlock()
+			}
+			deps := cliTestDependencies(client, func(context.Context, codex.Connection) error { return nil })
+			deps.now = now
+			var targets []time.Time
+			deps.waitUntil = func(_ context.Context, target time.Time, _ func() time.Time, _ func() (bool, error)) error {
+				targets = append(targets, target)
+				clockMu.Lock()
+				current = target
+				clockMu.Unlock()
+				return nil
+			}
+			args := []string{"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator", "--root", root}
+			args = append(args, tc.flags...)
+			var out bytes.Buffer
+			if err := executeContext(t.Context(), args, &out, io.Discard, deps); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(targets, tc.wantTargets) {
+				t.Fatalf("точки запуска: %v; ожидались %v", targets, tc.wantTargets)
+			}
+			if got := strings.Count(out.String(), "runId:"); got != len(tc.wantTargets) {
+				t.Fatalf("создано %d run вместо %d: %q", got, len(tc.wantTargets), out.String())
+			}
+			seriesEntries, err := os.ReadDir(filepath.Join(root, "series"))
+			if err != nil || len(seriesEntries) != 1 {
+				t.Fatalf("не найдена одна серия: %v, %v", seriesEntries, err)
+			}
+			snapshot, err := series.Load(root, seriesEntries[0].Name())
+			if err != nil || snapshot.State != series.Completed || snapshot.RunsStarted != len(tc.wantTargets) || snapshot.RunsFinished != len(tc.wantTargets) {
+				t.Fatalf("неверный прогресс серии: %+v, %v", snapshot, err)
+			}
+		})
 	}
 }
 
@@ -512,6 +600,9 @@ func TestArgumentParsingAndExitCodes(t *testing.T) {
 		{"workflow.json", "--unknown", "x"},
 		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--task-file", "/tmp/task", "--initiator-thread-id", "i"},
 		{"first", "second", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--repeat="},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--repeat", "after", "--repeat-delay="},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--max-runs", "2"},
 	} {
 		if _, err := parseRunArguments(args); err == nil {
 			t.Errorf("приняты неверные аргументы: %v", args)
