@@ -1,0 +1,3 @@
+interface:
+  display_name: "release"
+  short_description: "Собрать и опубликовать новый релиз Lawa"
