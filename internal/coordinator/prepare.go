@@ -4,11 +4,13 @@
 package coordinator
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/stray-live-pixel/Lawa/internal/capacity"
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
@@ -21,15 +23,17 @@ import (
 type Launch struct {
 	StepID  string
 	Command codex.Command
+	lease   *capacity.Lease
 }
 
 // Preparation описывает решение по одному целостному снимку. Waiting показывает
 // ещё не запущенные зависимости, Complete — уже завершённый workflow. Launches
 // содержит только шаги, которые Prepare успел сохранить как Starting.
 type Preparation struct {
-	Launches []Launch
-	Waiting  []string
-	Complete bool
+	Launches           []Launch
+	Waiting            []string
+	WaitingForCapacity []string
+	Complete           bool
 }
 
 // Continuation описывает один новый turn в уже существующем чате. Он создаётся
@@ -40,35 +44,23 @@ type Continuation struct {
 }
 
 // Prepare выбирает готовые Pending-шаги и атомарно сохраняет намерение создать
-// всю готовую волну до возврата команд вызывающему коду. Благодаря этому ни
-// повторный Prepare, ни перезапуск процесса не создаст второй чат вслепую.
+// доступную часть волны до возврата команд вызывающему коду. Публичный вариант
+// не ограничивает волну; CLI передаёт в private prepare общий root-level Pool.
+// Благодаря резервированию ни повторный Prepare, ни перезапуск процесса не
+// создаст второй чат вслепую.
 //
 // Если запись не удалась, функция не возвращает список для запуска. Атомарный
 // meta.json не публикует частичную волну; LockedRun после ошибки Sync всё равно
 // запрещает операции, потому что результат публикации мог стать неопределённым.
 func Prepare(run *runstore.LockedRun, root string) (Preparation, error) {
-	return prepare(run, root, false, buildPrompt)
+	return prepare(run, root, capacity.Unlimited())
 }
 
-// PrepareNextForApp резервирует не всю готовую волну, а ровно один кубик для
-// передачи Codex App. Между резервированием и вызовом app-инструмента существует
-// граница двух процессов без общей транзакции. Один кубик позволяет управляющему
-// чату сначала создать и сохранить identity задачи, а уже затем брать следующий:
-// после сбоя останется одна восстанавливаемая связь, а не несколько неизвестных
-// попыток создания. Независимые кубики всё равно запускаются параллельно — агент
-// вызывает функцию повторно, не ожидая завершения уже привязанных задач.
-func PrepareNextForApp(run *runstore.LockedRun, root string) (Preparation, error) {
-	return prepare(run, root, true, buildAppPrompt)
-}
-
-type promptBuilder func(runstore.Snapshot, workflow.Step, runstore.Step, string) string
-
-// prepare содержит общую проверку снимка и построение команды для двух
-// транспортов. stdio резервирует готовую волну атомарно, а Codex App — первый
-// кубик. Отличается и контракт памяти: отдельный app-server разрешает агенту
-// писать собственный файл, тогда как app-native задачу контролирует Desktop и
-// её финальный ответ сохраняет управляющий чат после завершения turn.
-func prepare(run *runstore.LockedRun, root string, one bool, prompt promptBuilder) (Preparation, error) {
+// prepare проверяет сохранённый снимок и строит команды единственного runtime —
+// Codex App Server. Lawa напрямую владеет stdio-сессиями, получает общие слоты и
+// одним Sync резервирует только поместившуюся часть готовой волны. Остальные
+// Pending-шаги остаются доступными следующему циклу после освобождения слота.
+func prepare(run *runstore.LockedRun, root string, pool *capacity.Pool) (Preparation, error) {
 	if run == nil {
 		return Preparation{}, fmt.Errorf("координатор: нужен открытый запуск")
 	}
@@ -106,14 +98,28 @@ func prepare(run *runstore.LockedRun, root string, one bool, prompt promptBuilde
 		return Preparation{}, fmt.Errorf("координатор: %w", err)
 	}
 	prepared := Preparation{Waiting: plan.Waiting, Complete: plan.Complete}
-	ready := plan.Ready
-	if one && len(ready) > 1 {
-		ready = ready[:1]
+	if pool == nil {
+		pool = capacity.Unlimited()
+	}
+	ready := make([]string, 0, len(plan.Ready))
+	leases := make([]*capacity.Lease, 0, len(plan.Ready))
+	for index, stepID := range plan.Ready {
+		lease, available, acquireErr := pool.TryAcquire()
+		if acquireErr != nil {
+			return Preparation{}, errors.Join(fmt.Errorf("координатор: получить слот параллельности: %w", acquireErr), releaseLeases(leases))
+		}
+		if !available {
+			prepared.WaitingForCapacity = append(prepared.WaitingForCapacity, plan.Ready[index:]...)
+			break
+		}
+		ready = append(ready, stepID)
+		leases = append(leases, lease)
 	}
 	if err := run.Reserve(ready); err != nil {
+		err = errors.Join(err, releaseLeases(leases))
 		return Preparation{}, fmt.Errorf("координатор: зарезервировать готовые шаги: %w", err)
 	}
-	for _, stepID := range ready {
+	for index, stepID := range ready {
 		saved := savedSteps[stepID]
 		workflowStep := steps[stepID]
 		runDir := filepath.Join(root, snapshot.Meta.RunID)
@@ -121,54 +127,25 @@ func prepare(run *runstore.LockedRun, root string, one bool, prompt promptBuilde
 		command := codex.Command{
 			CWD:         snapshot.Meta.CWD,
 			Title:       fmt.Sprintf("Lawa: %s / %s [%s]", snapshot.Workflow.ID, stepID, snapshot.Meta.RunID),
-			Text:        prompt(snapshot, workflowStep, saved, root),
+			Text:        buildPrompt(snapshot, workflowStep, saved, root),
 			Permissions: stepPermissions(runDir, ownMemory, saved.ThreadID),
 		}
 		applyRuntimeSettings(&command, snapshot.Workflow.Model, workflowStep)
 		prepared.Launches = append(prepared.Launches, Launch{
 			StepID:  stepID,
 			Command: command,
+			lease:   leases[index],
 		})
 	}
 	return prepared, nil
 }
 
-// AppLaunch восстанавливает детерминированное описание уже зарезервированного
-// app-native кубика. Оно нужно после перезапуска управляющего чата: task title и
-// prompt можно построить заново из неизменяемого workflow, не резервируя второй
-// кубик и не создавая дубликат задачи Codex App.
-func AppLaunch(snapshot runstore.Snapshot, root, stepID string) (Launch, error) {
-	root, err := filepath.Abs(root)
-	if err != nil {
-		return Launch{}, fmt.Errorf("координатор: определить root: %w", err)
+func releaseLeases(leases []*capacity.Lease) error {
+	var err error
+	for _, lease := range leases {
+		err = errors.Join(err, lease.Release())
 	}
-	if err = validateMemories(snapshot, root); err != nil {
-		return Launch{}, err
-	}
-	var saved *runstore.Step
-	var definition *workflow.Step
-	for index := range snapshot.Meta.Steps {
-		if snapshot.Meta.Steps[index].ID == stepID {
-			saved = &snapshot.Meta.Steps[index]
-			break
-		}
-	}
-	for index := range snapshot.Workflow.Steps {
-		if snapshot.Workflow.Steps[index].ID == stepID {
-			definition = &snapshot.Workflow.Steps[index]
-			break
-		}
-	}
-	if saved == nil || definition == nil {
-		return Launch{}, fmt.Errorf("координатор: нет шага %q", stepID)
-	}
-	command := codex.Command{
-		CWD:   snapshot.Meta.CWD,
-		Title: fmt.Sprintf("Lawa: %s / %s [%s]", snapshot.Workflow.ID, stepID, snapshot.Meta.RunID),
-		Text:  buildAppPrompt(snapshot, *definition, *saved, root),
-	}
-	applyRuntimeSettings(&command, snapshot.Workflow.Model, *definition)
-	return Launch{StepID: stepID, Command: command}, nil
+	return err
 }
 
 func validateMemories(snapshot runstore.Snapshot, root string) error {
@@ -270,21 +247,6 @@ func buildPrompt(snapshot runstore.Snapshot, step workflow.Step, savedStep runst
 		"По ходу работы обновляй только этот файл. Чужую память можно читать, но нельзя изменять.",
 		"Не изменяй workflow.json, task.md, meta.json и coordinator.lock в папке запуска.",
 		"Перед завершением запиши в свою память итог, пути к результатам и оставшиеся ограничения.",
-	})
-}
-
-// buildAppPrompt не поручает дочерней задаче записывать служебную память: её
-// sandbox принадлежит Codex App и не должен расширяться ради Lawa. После
-// завершения управляющий чат сохранит финальный ответ через app-update, поэтому
-// зависимые кубики прочитают тот же результат без копирования между промптами.
-func buildAppPrompt(snapshot runstore.Snapshot, step workflow.Step, savedStep runstore.Step, root string) string {
-	return buildPromptWithClosing(snapshot, step, savedStep, root, []string{
-		"Перед началом прочитай доступную память кубиков; твоя память находится здесь: %s",
-		"Не изменяй файлы памяти и служебные файлы workflow: их обновляет управляющий чат Lawa.",
-		"Если задача требует запустить или продолжить другой workflow Lawa, используй только установленный скилл Lawa и его app-native контур. Не запускай `lawa run` в фоновом terminal-сеансе и не рассчитывай, что дочерний процесс переживёт завершение этой задачи.",
-		"Ты остаёшься контроллером вложенного workflow до его терминального результата. Если по постановке нужно освободить эту задачу раньше, сначала создай отдельную видимую задачу-контроллер Codex с тем же cwd; фоновый shell-процесс контроллером не является.",
-		"В финальном ответе обязательно укажи итог, пути к результатам и оставшиеся ограничения.",
-		"Финальный ответ будет сохранён как память этого кубика и станет входом зависимых кубиков.",
 	})
 }
 

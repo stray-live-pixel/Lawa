@@ -20,7 +20,6 @@ import (
 	"syscall"
 	"time"
 	_ "time/tzdata"
-	"unicode/utf8"
 
 	"github.com/robfig/cron/v3"
 )
@@ -46,13 +45,12 @@ const (
 	Failed    State = "failed"
 )
 
-// Driver фиксирует, кто создаёт и наблюдает отдельные run серии. Пустое
-// значение принадлежит историческому долгоживущему CLI-координатору. AppDriver
-// означает, что каждый короткий вызов app-series-next лишь атомарно продвигает
-// состояние, а задачи и живые события остаются во владении Codex App.
+// Driver остался в структуре только для чтения формата v2, где значение "app"
+// обозначало удалённый app-native runtime. Новые серии v3 всегда исполняются
+// напрямую через Codex App Server и не нуждаются в выборе драйвера.
 type Driver string
 
-const AppDriver Driver = "app"
+const historicalAppDriver Driver = "app"
 
 // Config — сохранённый контракт повторения. Delay хранится строкой, чтобы
 // series.json оставался понятным человеку и не зависел от наносекунд JSON.
@@ -70,7 +68,7 @@ type Config struct {
 type Metadata struct {
 	Version      int        `json:"version"`
 	SeriesID     string     `json:"seriesId"`
-	Driver       Driver     `json:"driver,omitempty"`
+	Driver       Driver     `json:"driver,omitempty"` // Только совместимость с историческим v2.
 	Config       Config     `json:"config"`
 	State        State      `json:"state"`
 	RunsStarted  int        `json:"runsStarted"`
@@ -80,26 +78,19 @@ type Metadata struct {
 	LastError    string     `json:"lastError,omitempty"`
 }
 
-// AppTemplate — неизменяемый вход каждого run app-native серии. Он хранится
-// отдельно от series.json, чтобы обычный series-status не печатал постановку
-// пользователя. WorkflowJSON сохраняется строкой побайтно: при каждом повторе
-// runstore снова валидирует тот же снимок, а не изменившийся исходный файл.
-type AppTemplate struct {
-	WorkflowJSON      string `json:"workflowJson"`
-	Task              string `json:"task"`
-	Comment           string `json:"comment,omitempty"`
-	CWD               string `json:"cwd"`
-	InitiatorThreadID string `json:"initiatorThreadId"`
-	ParentRunID       string `json:"parentRunId,omitempty"`
-}
-
 // Snapshot дополняет атомарные метаданные отдельным stop-маркером. Маркер не
 // переписывает series.json из второго процесса и поэтому не может потерять
 // конкурентное обновление владельца серии.
 type Snapshot struct {
 	Metadata
-	StopRequested bool
+	StopRequested       bool
+	HistoricalAppNative bool
 }
+
+// ErrHistoricalAppNative защищает опубликованные до v3 серии от продолжения
+// другим runtime. Их метаданные доступны через Load/series-status, но Lawa не
+// создаёт новые run: прежним внешним задачам мог уже владеть Codex Desktop.
+var ErrHistoricalAppNative = errors.New("историческая app-native серия доступна только для чтения")
 
 // Schedule скрывает конкретный cron-парсер от CLI и тестов управляемых часов.
 type Schedule interface {
@@ -225,31 +216,9 @@ func Create(root string, config Config) (*LockedSeries, error) {
 	return create(root, config, syncDirectory)
 }
 
-// CreateApp создаёт серию, которую можно безопасно продолжать короткими
-// app-series-next после завершения исходного turn или перезапуска приложения.
-// Шаблон публикуется и синхронизируется до series.json: видимая app-серия всегда
-// содержит все данные для следующего обычного run.
-func CreateApp(root string, config Config, template AppTemplate) (*LockedSeries, error) {
-	if !validAppTemplate(template) {
-		return nil, errors.New("app-серия требует workflow, постановку, cwd и ID чата-инициатора в UTF-8")
-	}
-	return createWithTemplate(root, config, template, syncDirectory)
-}
-
 // create принимает синхронизацию каталогов явно, чтобы тесты могли проверить
 // порядок сохранения имён и отказ диска без глобальной подмены для других серий.
 func create(root string, config Config, syncParent func(string) error) (_ *LockedSeries, err error) {
-	return createInternal(root, config, Driver(""), nil, syncParent)
-}
-
-func createWithTemplate(root string, config Config, template AppTemplate, syncParent func(string) error) (_ *LockedSeries, err error) {
-	return createInternal(root, config, AppDriver, &template, syncParent)
-}
-
-// createInternal сохраняет общий порядок публикации двух форм серии. Отдельный
-// callback намеренно не используется: запись шаблона является частью формата и
-// должна проходить те же проверки и синхронизацию во всех вызывающих местах.
-func createInternal(root string, config Config, driver Driver, template *AppTemplate, syncParent func(string) error) (_ *LockedSeries, err error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("нужна папка хранения root")
 	}
@@ -263,11 +232,7 @@ func createInternal(root string, config Config, driver Driver, template *AppTemp
 	if err = mkdirAllSynced(base, syncParent); err != nil {
 		return nil, err
 	}
-	version := 1
-	if driver == AppDriver {
-		version = 2
-	}
-	owner := &LockedSeries{meta: Metadata{Version: version, SeriesID: newID(), Driver: driver, Config: config, State: Waiting}}
+	owner := &LockedSeries{meta: Metadata{Version: 3, SeriesID: newID(), Config: config, State: Waiting}}
 	owner.dir = filepath.Join(base, owner.meta.SeriesID)
 	if err = os.Mkdir(owner.dir, 0o700); err != nil {
 		return nil, err
@@ -283,11 +248,6 @@ func createInternal(root string, config Config, driver Driver, template *AppTemp
 	if err = syncParent(base); err != nil {
 		return nil, err
 	}
-	if template != nil {
-		if err = saveAppTemplate(owner.dir, *template); err != nil {
-			return nil, err
-		}
-	}
 	if err = owner.save(); err != nil {
 		return nil, err
 	}
@@ -298,9 +258,9 @@ func createInternal(root string, config Config, driver Driver, template *AppTemp
 	return owner, nil
 }
 
-// Open захватывает серию только на время одной короткой app-операции. Legacy
-// процесс по-прежнему держит тот же coordinator.lock весь срок жизни, поэтому
-// два режима не могут одновременно менять series.json.
+// Open захватывает app-server серию для изменения. Исторический app-native
+// формат намеренно отклоняется после чтения: автоматическая миграция могла бы
+// создать run поверх задач, которые уже были запущены через Codex Desktop.
 func Open(root, seriesID string) (*LockedSeries, error) {
 	dir, err := seriesDir(root, seriesID)
 	if err != nil {
@@ -317,6 +277,9 @@ func Open(root, seriesID string) (*LockedSeries, error) {
 	meta, err := loadMetadata(dir, seriesID)
 	if err != nil {
 		return nil, errors.Join(err, owner.Close())
+	}
+	if isHistoricalAppNative(meta) {
+		return nil, errors.Join(ErrHistoricalAppNative, owner.Close())
 	}
 	owner.meta = meta
 	return owner, nil
@@ -336,36 +299,7 @@ func Load(root, seriesID string) (Snapshot, error) {
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return Snapshot{}, err
 	}
-	return Snapshot{Metadata: meta, StopRequested: err == nil}, nil
-}
-
-// LoadAppTemplate читает только шаблон app-native серии и повторно проверяет
-// связанный series.json. Произвольный series-id не становится путём к файлу, а
-// legacy-серия не может случайно перейти на другой механизм исполнения.
-func LoadAppTemplate(root, seriesID string) (AppTemplate, error) {
-	snapshot, err := Load(root, seriesID)
-	if err != nil {
-		return AppTemplate{}, err
-	}
-	if snapshot.Version != 2 || snapshot.Driver != AppDriver {
-		return AppTemplate{}, errors.New("серия не принадлежит app-native driver")
-	}
-	dir, err := seriesDir(root, seriesID)
-	if err != nil {
-		return AppTemplate{}, err
-	}
-	data, err := os.ReadFile(filepath.Join(dir, "app-template.json"))
-	if err != nil {
-		return AppTemplate{}, err
-	}
-	var template AppTemplate
-	if err = json.Unmarshal(data, &template); err != nil || !validAppTemplate(template) {
-		if err == nil {
-			err = errors.New("повреждён шаблон app-серии")
-		}
-		return AppTemplate{}, err
-	}
-	return template, nil
+	return Snapshot{Metadata: meta, StopRequested: err == nil, HistoricalAppNative: isHistoricalAppNative(meta)}, nil
 }
 
 // RequestStop сериализуется с StartRun. Если новый run уже прошёл барьер, он
@@ -380,6 +314,13 @@ func requestStop(root, seriesID string, nonBlocking bool) error {
 	dir, err := seriesDir(root, seriesID)
 	if err != nil {
 		return err
+	}
+	meta, err := loadMetadata(dir, seriesID)
+	if err != nil {
+		return err
+	}
+	if isHistoricalAppNative(meta) {
+		return ErrHistoricalAppNative
 	}
 	guard, err := lockFile(filepath.Join(dir, "launch.lock"), nonBlocking)
 	if err != nil {
@@ -565,36 +506,16 @@ func loadMetadata(dir, seriesID string) (Metadata, error) {
 	if err = json.Unmarshal(data, &meta); err != nil {
 		return Metadata{}, err
 	}
-	legacy := meta.Version == 1 && meta.Driver == ""
-	app := meta.Version == 2 && meta.Driver == AppDriver
-	if (!legacy && !app) || meta.SeriesID != seriesID {
+	appServer := (meta.Version == 1 || meta.Version == 3) && meta.Driver == ""
+	appNative := isHistoricalAppNative(meta)
+	if (!appServer && !appNative) || meta.SeriesID != seriesID {
 		return Metadata{}, errors.New("повреждены метаданные серии")
 	}
 	return meta, nil
 }
 
-func saveAppTemplate(dir string, template AppTemplate) error {
-	data, err := json.Marshal(template)
-	if err != nil {
-		return err
-	}
-	f, err := os.OpenFile(filepath.Join(dir, "app-template.json"), os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	if _, err = f.Write(data); err == nil {
-		err = f.Sync()
-	}
-	if err = errors.Join(err, f.Close()); err != nil {
-		return err
-	}
-	return syncDirectory(dir)
-}
-
-func validAppTemplate(template AppTemplate) bool {
-	return utf8.ValidString(template.WorkflowJSON+template.Task+template.Comment+template.CWD+template.InitiatorThreadID+template.ParentRunID) &&
-		strings.TrimSpace(template.WorkflowJSON) != "" && strings.TrimSpace(template.Task) != "" &&
-		strings.TrimSpace(template.CWD) != "" && strings.TrimSpace(template.InitiatorThreadID) != ""
+func isHistoricalAppNative(meta Metadata) bool {
+	return meta.Version == 2 && meta.Driver == historicalAppDriver
 }
 
 func syncDirectory(path string) error {

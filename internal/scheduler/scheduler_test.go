@@ -238,7 +238,8 @@ func TestSnapshotsAreNotMutated(t *testing.T) {
 	}
 }
 
-// TestWideAndDeepGraphs защищает отсутствие лимита параллельности и рекурсии.
+// TestWideAndDeepGraphs защищает полный список готовой волны и отсутствие
+// рекурсии. Общий root-level лимит применяется coordinator после Evaluate.
 // Порядок Steps обратный; планировщик не должен навязывать порядок из JSON.
 func TestWideAndDeepGraphs(t *testing.T) {
 	for _, chain := range []bool{false, true} {

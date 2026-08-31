@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stray-live-pixel/Lawa/internal/capacity"
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
@@ -28,9 +29,40 @@ type fakeClient struct {
 	runs, creations, continues map[string]int
 	interrupts                 map[string]int
 	interruptFailures          map[string]error
+	latestTurns                map[string]string
 	inspects                   map[string]int
 	observerOpens              int
 	observerCloses             int
+	probe                      *executionProbe
+}
+
+// executionProbe считает одновременно работающие fake turn у нескольких
+// клиентов. Общий экземпляр позволяет регрессионному тесту проверить именно
+// root-wide лимит, а не локальный лимит одного workflow или процесса.
+type executionProbe struct {
+	mu               sync.Mutex
+	current, maximum int
+}
+
+func (p *executionProbe) start() {
+	p.mu.Lock()
+	p.current++
+	if p.current > p.maximum {
+		p.maximum = p.current
+	}
+	p.mu.Unlock()
+}
+
+func (p *executionProbe) finish() {
+	p.mu.Lock()
+	p.current--
+	p.mu.Unlock()
+}
+
+func (p *executionProbe) snapshot() (current, maximum int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.current, p.maximum
 }
 
 func newFakeClient() *fakeClient {
@@ -48,6 +80,7 @@ func newFakeClient() *fakeClient {
 		continues:          map[string]int{},
 		interrupts:         map[string]int{},
 		interruptFailures:  map[string]error{},
+		latestTurns:        map[string]string{},
 		inspects:           map[string]int{},
 	}
 }
@@ -83,17 +116,26 @@ func (c *fakeClient) Run(ctx context.Context, command codex.Command) (codex.Resu
 		}
 	}
 	if command.OnTurn != nil {
-		command.OnTurn("turn-"+stepID, func(ctx context.Context) error {
+		if err := command.OnTurn("turn-"+stepID, func(ctx context.Context) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			return c.interrupt(stepID)
-		})
+		}); err != nil {
+			return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, CreationAttempted: true, TurnAttempted: true}, err
+		}
 	}
+	c.mu.Lock()
+	c.latestTurns[threadID] = "turn-" + stepID
+	c.mu.Unlock()
 	if command.Notify != nil {
 		if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 			return codex.Result{ThreadID: threadID, CreationAttempted: true, TurnAttempted: true}, err
 		}
+	}
+	if c.probe != nil {
+		c.probe.start()
+		defer c.probe.finish()
 	}
 	c.started <- stepID
 	if release != nil {
@@ -134,13 +176,18 @@ func (c *fakeClient) Continue(ctx context.Context, threadID string, command code
 		return codex.Result{ThreadID: threadID}, err
 	}
 	if command.OnTurn != nil {
-		command.OnTurn("continued-"+stepID, func(ctx context.Context) error {
+		if err := command.OnTurn("continued-"+stepID, func(ctx context.Context) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			return c.interrupt(stepID)
-		})
+		}); err != nil {
+			return codex.Result{ThreadID: threadID, TurnID: "continued-" + stepID, TurnAttempted: true}, err
+		}
 	}
+	c.mu.Lock()
+	c.latestTurns[threadID] = "continued-" + stepID
+	c.mu.Unlock()
 	if command.Notify != nil {
 		if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 			return codex.Result{ThreadID: threadID, TurnID: "continued-" + stepID, TurnAttempted: true}, err
@@ -191,7 +238,11 @@ func (o *fakeObserver) Inspect(threadID string) (codex.Observation, error) {
 			c.inspectStatuses[threadID] = statuses[1:]
 		}
 	}
-	return observationFor(threadID, status), nil
+	observation := observationFor(threadID, status)
+	if latest := c.latestTurns[threadID]; latest != "" {
+		observation.LatestTurnID = latest
+	}
+	return observation, nil
 }
 
 func (o *fakeObserver) Close() error {
@@ -234,8 +285,16 @@ func observationFor(threadID string, status codex.WorkStatus) codex.Observation 
 func createExecutionRun(t *testing.T, workflowJSON string) (string, *runstore.LockedRun) {
 	t.Helper()
 	root := t.TempDir()
+	return root, createExecutionRunAt(t, root, workflowJSON)
+}
+
+// createExecutionRunAt создаёт независимый run в переданном root. В production
+// именно так несколько процессов Lawa делят настройку и slot-файлы, оставаясь
+// владельцами разных run-lock.
+func createExecutionRunAt(t *testing.T, root, workflowJSON string) *runstore.LockedRun {
+	t.Helper()
 	snapshot, err := runstore.Create(root, runstore.Input{
-		WorkflowJSON: []byte(workflowJSON), Task: "Сделать MVP", CWD: t.TempDir(), InitiatorThreadID: "initiator",
+		WorkflowJSON: []byte(workflowJSON), Task: "Сделать MVP", CWD: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -245,7 +304,7 @@ func createExecutionRun(t *testing.T, workflowJSON string) (string, *runstore.Lo
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = run.Close() })
-	return root, run
+	return run
 }
 
 // controlledTicker позволяет продвинуть только нужные часы координатора. Тесты
@@ -425,6 +484,95 @@ func TestExecuteParallelChain(t *testing.T) {
 	}
 }
 
+// TestExecuteSharesParallelLimitAcrossWorkflows проверяет критерий issue #57:
+// два одновременно работающих coordinator в одном root суммарно не запускают
+// больше N turn. После завершения первой пары ожидающие Pending-шаги получают
+// освобождённые слоты и оба workflow доходят до успешного терминала.
+func TestExecuteSharesParallelLimitAcrossWorkflows(t *testing.T) {
+	root := t.TempDir()
+	workflowJSON := `{"id":"flow","steps":[{"id":"first","type":"agent","prompt":"Первый","dependsOn":[]},{"id":"second","type":"agent","prompt":"Второй","dependsOn":[]}]}`
+	firstRun := createExecutionRunAt(t, root, workflowJSON)
+	secondRun := createExecutionRunAt(t, root, workflowJSON)
+	firstPool, err := capacity.Configure(root, "2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPool, err := capacity.Configure(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	release := make(chan struct{})
+	probe := &executionProbe{}
+	firstClient, secondClient := newFakeClient(), newFakeClient()
+	for _, client := range []*fakeClient{firstClient, secondClient} {
+		client.probe = probe
+		client.releases["first"] = release
+		client.releases["second"] = release
+	}
+	done := make(chan error, 2)
+	capacityWaits := make(chan int, 32)
+	notify := func(status Status) error {
+		capacityWaits <- len(status.WaitingForCapacity)
+		return nil
+	}
+	go func() {
+		done <- Execute(t.Context(), firstRun, Options{Root: root, PollInterval: time.Millisecond, Client: firstClient, Capacity: firstPool, Notify: notify})
+	}()
+	go func() {
+		done <- Execute(t.Context(), secondRun, Options{Root: root, PollInterval: time.Millisecond, Client: secondClient, Capacity: secondPool, Notify: notify})
+	}()
+
+	deadline := time.After(time.Second)
+	for {
+		current, maximum := probe.snapshot()
+		if current == 2 {
+			if maximum != 2 {
+				t.Fatalf("до освобождения слота работало больше лимита: current=%d maximum=%d", current, maximum)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("два разрешённых turn не стартовали: current=%d maximum=%d", current, maximum)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	waitDeadline := time.After(time.Second)
+	waitReported := false
+	for !waitReported {
+		select {
+		case waiting := <-capacityWaits:
+			if waiting != 0 {
+				waitReported = true
+			}
+		case <-waitDeadline:
+			t.Fatal("ожидание общего слота не появилось в live-статусе")
+		}
+	}
+	close(release)
+	for range 2 {
+		select {
+		case executeErr := <-done:
+			if executeErr != nil {
+				t.Fatal(executeErr)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("workflow не завершился после освобождения общих слотов")
+		}
+	}
+	current, maximum := probe.snapshot()
+	if current != 0 || maximum != 2 {
+		t.Fatalf("общий лимит нарушен или слот потерян: current=%d maximum=%d", current, maximum)
+	}
+	for _, client := range []*fakeClient{firstClient, secondClient} {
+		client.mu.Lock()
+		if client.runs["first"] != 1 || client.runs["second"] != 1 {
+			t.Errorf("workflow запущен не полностью или с дублем: runs=%v", client.runs)
+		}
+		client.mu.Unlock()
+	}
+}
+
 // TestExecuteReturnsTerminalFailureForSeries закрепляет выбранную продуктовую
 // политику: обычный run ждёт ручной работы, а серия получает явный терминал и
 // не создаёт следующий run после failed.
@@ -474,6 +622,9 @@ func TestExecuteReusesObserverAcrossPolling(t *testing.T) {
 	for _, stepID := range stepIDs {
 		threadID := "chat-" + stepID
 		if err := run.Update(stepID, scheduler.Failed, threadID); err != nil {
+			t.Fatal(err)
+		}
+		if err := run.SetTurn(stepID, "turn-1"); err != nil {
 			t.Fatal(err)
 		}
 		client.inspectStatuses[threadID] = []codex.WorkStatus{codex.WorkFailed}

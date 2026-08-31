@@ -1,8 +1,10 @@
 // Package codex управляет официальными app-server-сессиями. Run и Continue
 // выполняют один активный turn через отдельный процесс, а Observer переиспользует
-// один read-only процесс для последовательных thread/read. Это клиент протокола,
-// не координатор workflow; передача живой работы в Desktop и долговечный фоновый
-// сервис в этот контракт не входят.
+// один read-only процесс для последовательных thread/read. Это единственный
+// runtime Lawa. Интеграция с задачами Desktop намеренно отсутствует: публичного
+// API управления ими нет, а агент-посредник добавил бы модельные turn, задержку,
+// стоимость и узкое место массового параллелизма. Архитектурное решение описано в
+// docs/codex-integration.md.
 // Протокол: https://learn.chatgpt.com/docs/app-server.
 package codex
 
@@ -44,6 +46,17 @@ type Event struct {
 	Params json.RawMessage `json:"params"`
 }
 
+// ProcessEvent описывает только жизненный цикл собственного процесса App Server.
+// Он не содержит командную строку или окружение: эти поля не нужны оператору и
+// могли бы раскрыть локальные настройки. ExitCode отсутствует при завершении сигналом.
+type ProcessEvent struct {
+	Kind     string
+	Time     time.Time
+	PID      int
+	ExitCode *int
+	Signal   string
+}
+
 // Command описывает один новый запуск. Пустой Executable означает codex из PATH;
 // shell не используется. Пустые Model, Effort и ServiceTier наследуются из Codex;
 // непустые значения являются явными override одного кубика и повторяются при
@@ -55,7 +68,8 @@ type Event struct {
 // взаимоисключён с Sandbox. Managed restrictions остаются обязательными; отказ
 // возвращается без обхода.
 // Stderr получает диагностику сервера; nil отбрасывает её, не накапливая в памяти.
-// OnThread вызывается после получения ID, строго до отправки команды: координатор
+// OnProcess вызывается после Start и после Wait собственного app-server. OnThread
+// вызывается после получения ID, строго до отправки команды: координатор
 // может сохранить связь и запретить turn своей ошибкой. OnTurn получает ID сразу
 // после ответа turn/start вместе с одноразовой функцией interrupt. Эта функция
 // отправляет turn/interrupt через ту же stdio-сессию, которая владеет активным
@@ -72,8 +86,9 @@ type Command struct {
 	Skill                                 *Skill
 	Permissions                           *PermissionProfile
 	Stderr                                io.Writer
+	OnProcess                             func(ProcessEvent) error
 	OnThread                              func(string) error
-	OnTurn                                func(string, func(context.Context) error)
+	OnTurn                                func(string, func(context.Context) error) error
 	Notify                                func(Event) error
 	Respond                               func(context.Context, Event) (any, error)
 }
@@ -172,7 +187,7 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 	defer func() { err = errors.Join(err, session.Close(), ctx.Err()) }()
 	c := session.client
 	// Автономность относится только к этому чату; конфиг Desktop не изменяется.
-	// Экспериментальный historyMode не передаём: серверный legacy по умолчанию
+	// Экспериментальный historyMode не передаём: серверный режим по умолчанию
 	// поддерживает создание и resume через thread/read, тогда как paginated доступен не во
 	// всех версиях app-server и пока не гарантирует полный жизненный цикл чата.
 	params := map[string]any{"cwd": command.CWD, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
@@ -335,14 +350,16 @@ func startAndWait(c *client, command Command, inputs []map[string]any, result *R
 	if command.OnTurn != nil {
 		var once sync.Once
 		var interruptErr error
-		command.OnTurn(result.TurnID, func(ctx context.Context) error {
+		if err := command.OnTurn(result.TurnID, func(ctx context.Context) error {
 			once.Do(func() {
 				interruptErr = c.callAsync(ctx, "turn/interrupt", map[string]any{
 					"threadId": result.ThreadID, "turnId": result.TurnID,
 				})
 			})
 			return interruptErr
-		})
+		}); err != nil {
+			return fmt.Errorf("сохранить ID turn до ожидания: %w", err)
+		}
 	}
 	for c.completed[result.TurnID].Status == "" {
 		message, err := c.read()

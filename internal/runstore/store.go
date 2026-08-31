@@ -44,16 +44,21 @@ const StatusImageFilename = "workflow-status.png"
 var ErrInitiatorAsExecutor = errors.New("в meta.json чат постановки задачи указан вместо чата исполнителя; " +
 	"запуск нельзя продолжать или автоматически перезапускать")
 
+// ErrHistoricalAppNative означает, что run был начат удалённым runtime Codex
+// Desktop. Lawa сохраняет его для status/dashboard, но не продолжает через App
+// Server: часть задач могла уже выполняться, а публичного API Desktop для точной
+// сверки и управления ими нет. Автоматический resume поэтому создавал бы дубли.
+var ErrHistoricalAppNative = errors.New("исторический app-native run доступен только для чтения; автоматический resume запрещён")
+
 // Input — общий вход нового запуска. WorkflowJSON сохраняется побайтно; Task
 // и Comment записываются отдельными разделами task.md без обрезки пробелов.
 // ParentRunID необязателен, но обязан вести в существующий run того же root.
 // CWD должен указывать на существующую папку. Проверка подключения — вне пакета.
 type Input struct {
-	WorkflowJSON      []byte
-	Task, Comment     string
-	CWD               string
-	InitiatorThreadID string
-	ParentRunID       string
+	WorkflowJSON  []byte
+	Task, Comment string
+	CWD           string
+	ParentRunID   string
 }
 
 // Metadata — версия формата и постоянные связи запуска. ParentRunID появился в
@@ -64,30 +69,30 @@ type Metadata struct {
 	RunID             string `json:"runId"`
 	ParentRunID       string `json:"parentRunId,omitempty"`
 	CWD               string `json:"cwd"`
-	InitiatorThreadID string `json:"initiatorThreadId"`
+	InitiatorThreadID string `json:"initiatorThreadId,omitempty"` // Только чтение форматов v1/v2.
 	Steps             []Step `json:"steps"`
 }
 
-// Step связывает ID из графа с отдельным файлом памяти и чатом Codex.
-// Произвольный ID из workflow никогда не используется как имя файла. Revision
-// монотонно растёт после каждого принятого app-update и позволяет отклонять
-// запоздавшие наблюдения параллельных управляющих чатов. Старый coordinator не
-// передаёт ожидаемую ревизию, поэтому для его запусков поле может оставаться нулём.
+// Step связывает ID из графа с отдельным файлом памяти, thread и последним turn
+// Codex App Server. Произвольный ID из workflow не используется как имя файла.
+// Revision сохраняется только для чтения исторического app-native формата v2.
 type Step struct {
 	ID            string          `json:"id"`
 	ThreadID      string          `json:"threadId"`
 	CodexThreadID string          `json:"codexThreadId"`
+	TurnID        string          `json:"turnId,omitempty"`
 	State         scheduler.State `json:"state"`
-	Revision      uint64          `json:"revision,omitempty"`
+	Revision      uint64          `json:"revision,omitempty"` // Только совместимость с v2.
 }
 
 // Snapshot содержит сохранённый вход и последний известный снимок состояний.
 // Это не подтверждение текущего статуса чатов: перед исполнением нужна сверка
 // с Codex. Чтение снимка не резервирует запуск и не заменяет блокировку run.
 type Snapshot struct {
-	Workflow workflow.Workflow
-	Task     string
-	Meta     Metadata
+	Workflow            workflow.Workflow
+	Task                string
+	Meta                Metadata
+	HistoricalAppNative bool
 }
 
 // Create проверяет входы до записи и создаёт новый run под root (обычно
@@ -116,8 +121,8 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if !validText(in.Task) || !utf8.ValidString(in.Comment) || !validText(in.InitiatorThreadID) || !validText(in.CWD) {
-		return Snapshot{}, fmt.Errorf("нужны постановка, cwd и ID чата-инициатора; текст должен быть UTF-8")
+	if !validText(in.Task) || !utf8.ValidString(in.Comment) || !validText(in.CWD) {
+		return Snapshot{}, fmt.Errorf("нужны постановка и cwd; текст должен быть UTF-8")
 	}
 	cwd, err := filepath.Abs(in.CWD)
 	if err != nil {
@@ -144,7 +149,7 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 		}
 	}
 	s := Snapshot{Workflow: w, Task: fmt.Sprintf("# Постановка задачи\n\n%s\n\n# Комментарий пользователя\n\n%s\n", in.Task, in.Comment)}
-	s.Meta = Metadata{Version: 2, RunID: newID(), ParentRunID: in.ParentRunID, CWD: cwd, InitiatorThreadID: in.InitiatorThreadID}
+	s.Meta = Metadata{Version: 3, RunID: newID(), ParentRunID: in.ParentRunID, CWD: cwd}
 	for _, step := range w.Steps {
 		s.Meta.Steps = append(s.Meta.Steps, Step{ID: step.ID, ThreadID: newID(), State: scheduler.Pending})
 	}
@@ -375,6 +380,13 @@ func loadSnapshot(dir *os.Root, runID string, rejectUnknownMembers bool) (Snapsh
 			return Snapshot{}, fmt.Errorf("память шага %q должна быть обычным файлом", step.ID)
 		}
 	}
+	if s.Meta.Version == 2 {
+		historical, detectErr := historicalAppNative(dir)
+		if detectErr != nil {
+			return Snapshot{}, detectErr
+		}
+		s.HistoricalAppNative = historical
+	}
 	return s, nil
 }
 
@@ -384,10 +396,12 @@ func loadSnapshot(dir *os.Root, runID string, rejectUnknownMembers bool) (Snapsh
 // а не превращаем в новый Pending.
 func (s Snapshot) validate(runID string) error {
 	m := s.Meta
-	if (m.Version != 1 && m.Version != 2) || m.Version == 1 && m.ParentRunID != "" ||
+	oldFormat := m.Version == 1 || m.Version == 2
+	if (m.Version != 1 && m.Version != 2 && m.Version != 3) || m.Version == 1 && m.ParentRunID != "" ||
 		m.RunID != runID || m.ParentRunID == m.RunID || m.ParentRunID != "" && !validID(m.ParentRunID) ||
 		!filepath.IsAbs(m.CWD) || !validText(m.CWD) || strings.ContainsRune(m.CWD, 0) ||
-		!validText(m.InitiatorThreadID) || len(m.Steps) != len(s.Workflow.Steps) {
+		oldFormat && !validText(m.InitiatorThreadID) || m.Version == 3 && m.InitiatorThreadID != "" ||
+		len(m.Steps) != len(s.Workflow.Steps) {
 		return fmt.Errorf("повреждены входы, версия или состав meta.json")
 	}
 	// Постановка хранится отдельно: её повреждение не должно направлять
@@ -405,7 +419,7 @@ func (s Snapshot) validate(runID string) error {
 		// Чат постановки задачи управляет запуском, но не исполняет кубики.
 		// Проверяем до состояния: конфликт заслуживает отдельной ошибки и в Pending.
 		// Контекст и запрет повтора — в ErrInitiatorAsExecutor.
-		if step.CodexThreadID == m.InitiatorThreadID {
+		if oldFormat && step.CodexThreadID == m.InitiatorThreadID {
 			return fmt.Errorf("запуск %q, шаг %q: %w", m.RunID, step.ID, ErrInitiatorAsExecutor)
 		}
 		requiresChat := step.State != scheduler.Pending && step.State != scheduler.Starting
@@ -418,10 +432,44 @@ func (s Snapshot) validate(runID string) error {
 			}
 			chats[step.CodexThreadID] = true
 		}
+		if step.TurnID != "" && (!validText(step.TurnID) || step.CodexThreadID == "") {
+			return fmt.Errorf("шаг %q: turnId требует известный codexThreadId", step.ID)
+		}
+		if m.Version == 3 && step.Revision != 0 {
+			return fmt.Errorf("шаг %q: revision не поддерживается форматом app-server v3", step.ID)
+		}
 		states[step.ID] = step.State
 	}
 	_, err := scheduler.Evaluate(s.Workflow, states)
 	return err
+}
+
+// historicalAppNative ищет только защитные marker-файлы опубликованного v2
+// runtime. Старые app-server и app-native run использовали одинаковый meta.json;
+// marker — единственное устойчивое локальное свидетельство, что Desktop уже мог
+// создать внешнюю задачу. Неизвестный обычный файл не меняет классификацию.
+func historicalAppNative(dir *os.Root) (bool, error) {
+	directory, err := dir.Open(".")
+	if err != nil {
+		return false, err
+	}
+	entries, err := directory.ReadDir(-1)
+	if closeErr := directory.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if strings.HasPrefix(name, "app-create-") || strings.HasPrefix(name, "app-continue-") {
+			if entry.Type().IsRegular() {
+				return true, nil
+			}
+			return false, fmt.Errorf("исторический marker %q должен быть обычным файлом", name)
+		}
+	}
+	return false, nil
 }
 
 // newID даёт 128 случайных бит в безопасном для имени файла формате. В Go 1.27

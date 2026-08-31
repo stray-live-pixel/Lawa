@@ -20,8 +20,7 @@ import (
 )
 
 const (
-	testInitiatorThreadID = "01a05852-8c1a-72f2-b37c-fe281bc2b58c"
-	testExecutorThreadID  = "01a05852-8c1a-72f2-b37c-fe281bc2b58d"
+	testExecutorThreadID = "01a05852-8c1a-72f2-b37c-fe281bc2b58d"
 )
 
 func createRun(t *testing.T, root, workflowID, parent string) runstore.Snapshot {
@@ -33,7 +32,7 @@ func createRunWithTask(t *testing.T, root, workflowID, parent, task string) runs
 	workflow := `{"id":` + quoted(workflowID) + `,"steps":[{"id":"cube","type":"agent","prompt":"Сделай","dependsOn":[]}]}`
 	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(workflow), Task: task, CWD: t.TempDir(),
-		InitiatorThreadID: testInitiatorThreadID, ParentRunID: parent,
+		ParentRunID: parent,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -87,8 +86,6 @@ func setState(t *testing.T, root string, snapshot runstore.Snapshot, state sched
 // только из проверенных snapshot.
 func TestDashboard(t *testing.T) {
 	root := t.TempDir()
-	codexHome := t.TempDir()
-	t.Setenv("CODEX_HOME", codexHome)
 	parent := createRun(t, root, `<release>&`, "")
 	setState(t, root, parent, scheduler.Running)
 	child := createRunWithTask(t, root, "child-workflow", parent.Meta.RunID, `ISSUE_ID=THINKTWICE-592
@@ -100,6 +97,19 @@ TRACKER_CONTEXT_BEGIN
   "summary": "заголовок из контекста с меньшим приоритетом"
 }
 TRACKER_CONTEXT_END`)
+	childRun, err := runstore.OpenLocked(root, child.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = childRun.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "process_started", PID: 4321, Message: "безопасное событие"}); err == nil {
+		err = childRun.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "item_started", ItemID: "mcp-1", ItemType: "mcpToolCall"})
+	}
+	if err == nil {
+		err = childRun.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
 	failed := createRun(t, root, "failed-workflow", "")
 	setState(t, root, failed, scheduler.Failed)
 	succeeded := createRun(t, root, "succeeded-workflow", "")
@@ -115,8 +125,6 @@ TRACKER_CONTEXT_END`)
 	if err := os.Mkdir(filepath.Join(root, "broken-run"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	writeRollout(t, codexHome, testInitiatorThreadID)
-	writeRollout(t, codexHome, testExecutorThreadID)
 	addFutureMetadataFields(t, root, parent.Meta.RunID)
 	addFutureMetadataFields(t, root, child.Meta.RunID)
 
@@ -125,10 +133,10 @@ TRACKER_CONTEXT_END`)
 	dashboard.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
 	html := recorder.Body.String()
 	for _, fragment := range []string{
-		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "codex://threads/", "vscode://file/",
+		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "vscode://file/",
 		"failed-workflow", "succeeded-workflow", "В работе", "Сломавшиеся", "Успешные",
 		"Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
-		"Тред JSONL", "Папка", testInitiatorThreadID + ".jsonl", testExecutorThreadID + ".jsonl",
+		"События", "Папка", "/events/" + child.Meta.RunID, "действие: mcpToolCall",
 		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
 		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",
 		"Flow, кубик, тикет, run/thread ID, текст задачи…",
@@ -147,6 +155,9 @@ TRACKER_CONTEXT_END`)
 	}
 	if strings.Contains(html, `data-group="failed" open`) || strings.Contains(html, `data-group="succeeded" open`) {
 		t.Fatal("сломавшиеся или успешные workflow раскрыты по умолчанию")
+	}
+	if strings.Contains(html, "codex://") || strings.Contains(html, "Тред JSONL") {
+		t.Fatal("dashboard снова раскрыл нативные ссылки или сырой rollout Codex")
 	}
 	search := httptest.NewRecorder()
 	dashboard.ServeHTTP(search, httptest.NewRequest(http.MethodGet, "/?period=all&q=thinktwice-592", nil))
@@ -167,19 +178,11 @@ TRACKER_CONTEXT_END`)
 	if recorder.Header().Get("Content-Type") != "image/png" || recorder.Body.String() != string(png) {
 		t.Fatalf("неверный UML: %s, %q", recorder.Header().Get("Content-Type"), recorder.Body.String())
 	}
-}
-
-func writeRollout(t *testing.T, codexHome, threadID string) string {
-	t.Helper()
-	directory := filepath.Join(codexHome, "sessions", "2026", "08", "31")
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		t.Fatal(err)
+	recorder = httptest.NewRecorder()
+	dashboard.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/events/"+child.Meta.RunID+"?step=cube", nil))
+	if recorder.Header().Get("Content-Type") != "text/plain; charset=utf-8" || !strings.Contains(recorder.Body.String(), "process_started") || !strings.Contains(recorder.Body.String(), "pid=4321") {
+		t.Fatalf("события не отданы как безопасный текст: %s, %q", recorder.Header().Get("Content-Type"), recorder.Body.String())
 	}
-	path := filepath.Join(directory, "rollout-2026-08-31T17-56-39-"+threadID+".jsonl")
-	if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return path
 }
 
 // TestProtectedRoutes не позволяет URL выбрать чужой файл или memory другого
@@ -197,6 +200,22 @@ func TestProtectedRoutes(t *testing.T) {
 		if recorder.Code != http.StatusNotFound {
 			t.Errorf("опасный путь %q получил %d", path, recorder.Code)
 		}
+	}
+}
+
+// TestCorruptedEventsRemainVisible сохраняет сам run в дереве, но показывает
+// оператору отдельную проблему журнала вместо молчаливой потери observability.
+func TestCorruptedEventsRemainVisible(t *testing.T) {
+	root := t.TempDir()
+	run := createRun(t, root, "visible-with-broken-events", "")
+	if err := os.WriteFile(filepath.Join(root, run.Meta.RunID, "events.jsonl"), []byte("not json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recorder := httptest.NewRecorder()
+	Handler(root).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/?period=all", nil))
+	body := recorder.Body.String()
+	if !strings.Contains(body, "visible-with-broken-events") || !strings.Contains(body, "журнал событий") {
+		t.Fatalf("повреждение журнала скрыто вместе с run: %q", body)
 	}
 }
 
@@ -267,34 +286,6 @@ TRACKER_CONTEXT_END`
 	}
 	if empty := ticketFromTask("Описание со ссылкой https://example.test/not-a-ticket"); empty != (ticketReference{}) {
 		t.Fatalf("произвольная ссылка ошибочно распознана как тикет: %+v", empty)
-	}
-}
-
-// TestThreadLogIndex проверяет активные и архивные rollout, приоритет активного
-// файла и строгий UUID-фильтр. Содержимое журналов для построения ссылок не читается.
-func TestThreadLogIndex(t *testing.T) {
-	codexHome := t.TempDir()
-	active := writeRollout(t, codexHome, testInitiatorThreadID)
-	archiveDir := filepath.Join(codexHome, "archived_sessions")
-	if err := os.MkdirAll(archiveDir, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	duplicate := filepath.Join(archiveDir, "rollout-2026-08-30T10-00-00-"+testInitiatorThreadID+".jsonl")
-	archivedID := "01a05852-8c1a-72f2-b37c-fe281bc2b58e"
-	archived := filepath.Join(archiveDir, "rollout-2026-08-30T10-00-00-"+archivedID+".jsonl")
-	invalid := filepath.Join(archiveDir, "rollout-2026-08-30T10-00-00-not-a-thread.jsonl")
-	for _, path := range []string{duplicate, archived, invalid} {
-		if err := os.WriteFile(path, []byte("{}\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-	}
-	symlink := filepath.Join(archiveDir, "rollout-2026-08-30T10-00-00-01a05852-8c1a-72f2-b37c-fe281bc2b58f.jsonl")
-	if err := os.Symlink(active, symlink); err != nil {
-		t.Fatal(err)
-	}
-	logs := indexThreadLogs(codexHome)
-	if logs[testInitiatorThreadID] != vscodeFileURL(active) || logs[archivedID] != vscodeFileURL(archived) || len(logs) != 2 {
-		t.Fatalf("неверный индекс журналов: %+v", logs)
 	}
 }
 

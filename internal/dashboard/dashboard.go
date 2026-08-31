@@ -56,33 +56,34 @@ type runGroup struct {
 // runNode — готовая к HTML структура одного workflow и его потомков. Все URL
 // строит сервер из проверенных ID, поэтому template.URL не содержит сырого ввода.
 type runNode struct {
-	ID, ParentID, Name, State, Tone, Updated  string
-	TicketID, TicketTitle                     string
-	CodexURL, ThreadLogURL, VSCodeURL, UMLURL template.URL
-	TicketURL                                 template.URL
-	HasUML, Open                              bool
-	Steps                                     []stepNode
-	Children                                  []*runNode
-	updatedAt, activityAt                     time.Time
-	searchText, treeState                     string
+	ID, ParentID, Name, State, Tone, Updated string
+	TicketID, TicketTitle                    string
+	EventsURL, VSCodeURL, UMLURL             template.URL
+	TicketURL                                template.URL
+	HasUML, Open                             bool
+	Steps                                    []stepNode
+	Children                                 []*runNode
+	updatedAt, activityAt                    time.Time
+	searchText, treeState                    string
 }
 
 // stepNode описывает лист дерева и доступность его сохранённой памяти.
 type stepNode struct {
-	ID, State, Tone                   string
-	CodexURL, ThreadLogURL, MemoryURL template.URL
-	HasMemory                         bool
+	ID, State, Tone, Runtime, Message, Action string
+	EventsURL, MemoryURL                      template.URL
+	HasMemory                                 bool
 }
 
 // Handler возвращает полностью автономный HTTP-интерфейс для абсолютного root.
 // Маршруты памяти и PNG сначала загружают runstore snapshot и используют только
 // проверенные ID из него. Пользовательский URL поэтому не становится путём файла.
 func Handler(root string) http.Handler {
-	h := handler{root: root, codexHome: resolveCodexHome()}
+	h := handler{root: root}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", h.live)
 	mux.HandleFunc("GET /preview", h.preview)
 	mux.HandleFunc("GET /memory/{run}/{thread}", h.memory)
+	mux.HandleFunc("GET /events/{run}", h.events)
 	mux.HandleFunc("GET /uml/{run}", h.uml)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// ServeMux канонизирует пути с `..` редиректом. Для read-only локального
@@ -95,19 +96,18 @@ func Handler(root string) http.Handler {
 	})
 }
 
-// handler хранит области чтения Lawa и Codex. codexHome нужен только для
-// построения локальных vscode://-ссылок: dashboard не отдаёт содержимое сырых
-// журналов по HTTP и не позволяет запросу выбрать произвольный файл.
-type handler struct{ root, codexHome string }
+// handler хранит единственную область чтения Lawa. Dashboard не обходит
+// внутренние каталоги Codex и не раскрывает сырые rollout-файлы.
+type handler struct{ root string }
 
 // live перечитывает хранилище на каждый polling-запрос.
 func (h handler) live(w http.ResponseWriter, r *http.Request) {
 	view := page{Title: "Lawa workflows", Refresh: "3"}
-	roots, problems := loadTree(h.root, indexThreadLogs(h.codexHome))
+	roots, problems := loadTree(h.root)
 	visible, filter, pagination := applyDashboardView(roots, parseViewParams(r.URL.Query()), time.Now())
 	view.Groups, view.Problems, view.Filter, view.Pagination = groupRuns(visible), problems, filter, pagination
 	if len(roots) == 0 {
-		view.EmptyMessage = "Запусков пока нет. Создайте workflow командой lawa app-run."
+		view.EmptyMessage = "Запусков пока нет. Создайте workflow командой lawa run."
 	} else {
 		view.EmptyMessage = "Ничего не найдено. Измените период или строку поиска."
 	}
@@ -143,6 +143,25 @@ func (h handler) memory(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
+// events отдаёт только нормализованный журнал Lawa. Опциональный step query
+// фильтрует уже разобранные события и никогда не становится именем файла.
+func (h handler) events(w http.ResponseWriter, r *http.Request) {
+	runID, stepID := r.PathValue("run"), strings.TrimSpace(r.URL.Query().Get("step"))
+	events, err := runstore.ReadEvents(h.root, runID)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	for _, event := range events {
+		if stepID != "" && event.StepID != stepID {
+			continue
+		}
+		_, _ = fmt.Fprintln(w, runstore.FormatEvent(event))
+	}
+}
+
 func (h handler) uml(w http.ResponseWriter, r *http.Request) {
 	runID := r.PathValue("run")
 	data, err := runstore.ReadStatusImage(h.root, runID)
@@ -158,7 +177,7 @@ func (h handler) uml(w http.ResponseWriter, r *http.Request) {
 // loadTree изолирует повреждение одного каталога. Сначала все корректные run
 // собираются в map, затем связи проверяются на потерянных родителей и циклы.
 // Только после этого создаётся рекурсивная структура для безопасного шаблона.
-func loadTree(root string, threadLogs threadLogIndex) ([]*runNode, []problem) {
+func loadTree(root string) ([]*runNode, []problem) {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -177,7 +196,11 @@ func loadTree(root string, threadLogs threadLogIndex) ([]*runNode, []problem) {
 			problems = append(problems, problem{Name: entry.Name(), Message: diagnostic(loadErr)})
 			continue
 		}
-		nodes[entry.Name()] = makeRunNode(root, snapshot, threadLogs)
+		node, eventErr := makeRunNode(root, snapshot)
+		nodes[entry.Name()] = node
+		if eventErr != nil {
+			problems = append(problems, problem{Name: entry.Name(), Message: "журнал событий: " + diagnostic(eventErr)})
+		}
 	}
 	for _, node := range nodes {
 		if parentCycle(node, nodes) {
@@ -208,19 +231,20 @@ func loadTree(root string, threadLogs threadLogIndex) ([]*runNode, []problem) {
 
 // makeRunNode добавляет только существующие память и PNG; отсутствие артефакта
 // превращается в неактивное действие, а не в ссылку на несуществующий файл.
-func makeRunNode(root string, snapshot runstore.Snapshot, threadLogs threadLogIndex) *runNode {
+func makeRunNode(root string, snapshot runstore.Snapshot) (*runNode, error) {
 	runID := snapshot.Meta.RunID
 	ticket := ticketFromTask(snapshot.Task)
+	events, eventErr := runstore.ReadEvents(root, runID)
+	summaries := runstore.SummarizeEvents(events)
 	node := &runNode{
 		ID: runID, ParentID: snapshot.Meta.ParentRunID, Name: snapshot.Workflow.ID,
 		State: workflowState(snapshot), Open: true, TicketID: ticket.ID, TicketTitle: ticket.Title, TicketURL: ticket.URL,
-		CodexURL: codexURL(snapshot.Meta.InitiatorThreadID), ThreadLogURL: threadLogs[snapshot.Meta.InitiatorThreadID],
-		VSCodeURL: vscodeFileURL(filepath.Join(root, runID)),
+		EventsURL: template.URL("/events/" + runID), VSCodeURL: vscodeFileURL(filepath.Join(root, runID)),
 	}
 	node.Tone = tone(node.State)
 	search := []string{
 		snapshot.Workflow.ID, runID, snapshot.Meta.ParentRunID, snapshot.Meta.CWD,
-		snapshot.Meta.InitiatorThreadID, snapshot.Task, node.State,
+		snapshot.Task, node.State,
 		ticket.ID, ticket.Title, string(ticket.URL),
 	}
 	if snapshot.Workflow.Model != nil {
@@ -242,21 +266,46 @@ func makeRunNode(root string, snapshot runstore.Snapshot, threadLogs threadLogIn
 		node.updatedAt = info.ModTime()
 		node.Updated = node.updatedAt.Format("2006-01-02 15:04:05")
 	}
+	if len(events) != 0 && events[len(events)-1].Time.After(node.updatedAt) {
+		node.updatedAt = events[len(events)-1].Time
+		node.Updated = node.updatedAt.Local().Format("2006-01-02 15:04:05")
+	}
 	if _, err := runstore.ReadStatusImage(root, runID); err == nil {
 		node.HasUML, node.UMLURL = true, template.URL("/uml/"+runID)
 	}
 	for _, step := range snapshot.Meta.Steps {
 		memory, err := runstore.ReadMemory(root, runID, step.ThreadID)
-		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, string(step.State), string(memory), string(threadLogs[step.CodexThreadID]))
+		summary := summaries[step.ID]
+		runtime := ""
+		if summary.PID != 0 {
+			runtime = fmt.Sprintf("pid %d", summary.PID)
+		} else if summary.ExitCode != nil {
+			runtime = fmt.Sprintf("exit %d", *summary.ExitCode)
+		} else if summary.Signal != "" {
+			runtime = "signal " + summary.Signal
+		}
+		if step.TurnID != "" {
+			if runtime != "" {
+				runtime += " · "
+			}
+			runtime += "turn " + step.TurnID
+		}
+		if !summary.LastActivity.IsZero() {
+			if runtime != "" {
+				runtime += " · "
+			}
+			runtime += summary.LastActivity.Local().Format("15:04:05")
+		}
+		action := strings.Join(summary.ActiveItemTypes, ", ")
+		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State), string(memory), summary.Message, action)
 		node.Steps = append(node.Steps, stepNode{
-			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
-			CodexURL: codexURL(step.CodexThreadID), ThreadLogURL: threadLogs[step.CodexThreadID],
-			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID),
-			HasMemory: err == nil && len(memory) > 0,
+			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)), Runtime: runtime, Message: summary.Message, Action: action,
+			EventsURL: template.URL("/events/" + runID + "?step=" + url.QueryEscape(step.ID)),
+			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID), HasMemory: err == nil && len(memory) > 0,
 		})
 	}
 	node.searchText = strings.Join(search, "\n")
-	return node
+	return node, eventErr
 }
 
 // workflowState сворачивает состояния кубиков в три цветных итога и нейтральное
@@ -360,14 +409,6 @@ func tone(state string) string {
 	}
 }
 
-// codexURL кодирует thread ID как один сегмент deeplink Codex.
-func codexURL(threadID string) template.URL {
-	if strings.TrimSpace(threadID) == "" {
-		return ""
-	}
-	return template.URL((&url.URL{Scheme: "codex", Host: "threads", Path: "/" + threadID}).String())
-}
-
 // vscodeFileURL строит ссылку только из локального пути, выбранного Lawa. url.URL
 // экранирует пробелы и другие специальные символы; ручная конкатенация здесь
 // могла бы получить иной host или оборвать путь на первом `#`.
@@ -440,16 +481,20 @@ func IsLoopbackAddress(address string) bool {
 func previewPage(params viewParams, now time.Time) page {
 	action := template.URL("#preview")
 	step := func(id, state string, memory bool) stepNode {
-		return stepNode{ID: id, State: state, Tone: tone(state), CodexURL: action, ThreadLogURL: action, MemoryURL: action, HasMemory: memory}
+		currentAction := ""
+		if state == "running" {
+			currentAction = "commandExecution"
+		}
+		return stepNode{ID: id, State: state, Tone: tone(state), Runtime: "pid 4201 · turn turn-preview · 18:42:10", Action: currentAction, EventsURL: action, MemoryURL: action, HasMemory: memory}
 	}
 	run := func(id, name, state string, age time.Duration, steps ...stepNode) *runNode {
 		search := []string{id, name, state}
 		for _, item := range steps {
-			search = append(search, item.ID, item.State)
+			search = append(search, item.ID, item.State, item.Action)
 		}
 		return &runNode{
 			ID: id, Name: name, State: state, Tone: tone(state), Updated: "2026-08-31 18:42:10",
-			CodexURL: action, ThreadLogURL: action, VSCodeURL: action, UMLURL: action, HasUML: true, Open: true, Steps: steps,
+			EventsURL: action, VSCodeURL: action, UMLURL: action, HasUML: true, Open: true, Steps: steps,
 			updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
 		}
 	}

@@ -21,7 +21,6 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 	"github.com/stray-live-pixel/Lawa/internal/series"
 	"github.com/stray-live-pixel/Lawa/internal/statusreport"
-	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // TestCLI проверяет справку без Codex, аргументы и валидацию настоящих файлов.
@@ -41,7 +40,7 @@ func TestCLI(t *testing.T) {
 		{"справка", []string{"help"}, "Команды:"},
 		{"короткая справка", []string{"-h"}, "Команды:"},
 		{"длинная справка", []string{"--help"}, "Команды:"},
-		{"инструкция скилла", []string{"skill"}, "# Lawa: запуск workflow из чата Codex"},
+		{"инструкция скилла", []string{"skill"}, "# Lawa"},
 		{"версия", []string{"version"}, "dev"},
 		{"пример", []string{"validate", "../../examples/review.json"}, `Workflow "review" корректен; шагов: 4.`},
 		{"неверный граф", []string{"validate", invalid}, ""},
@@ -275,71 +274,30 @@ func TestSkillInstruction(t *testing.T) {
 		t.Error("проектный скилл /lawa расходится с выводом lawa skill")
 	}
 
-	// Метаданные идут первыми, чтобы stdout можно было без ручной обработки
-	// сохранить в SKILL.md. Точное сравнение не пропустит текст перед frontmatter
-	// или потерю обязательных полей, из-за которых Codex не распознает скилл.
-	const metadata = "---\nname: lawa\ndescription: \"Запуск и продолжение workflow Lawa из чата Codex.\"\n---\n\n"
+	const metadata = "---\nname: lawa\ndescription: Запуск, наблюдение и продолжение JSON-workflow Lawa через Codex App Server.\n---\n\n"
 	if !strings.HasPrefix(skillInstruction, metadata) {
 		t.Errorf("инструкция не начинается с обязательных метаданных SKILL.md: %q", skillInstruction)
 	}
-	// Пример проверяет тот же production-валидатор, что и команда validate. Так
-	// документация не сможет предлагать неизвестные поля, потерянные зависимости
-	// или цикл после будущего изменения контракта workflow.
-	const exampleStart, exampleEnd = "~~~json\n", "\n~~~"
-	example := strings.SplitN(skillInstruction, exampleStart, 2)
-	if len(example) != 2 {
-		t.Fatal("в инструкции отсутствует JSON-пример workflow")
-	}
-	example = strings.SplitN(example[1], exampleEnd, 2)
-	if len(example) != 2 {
-		t.Fatal("JSON-пример workflow не завершён")
-	}
-	if _, err := workflow.Decode(strings.NewReader(example[0])); err != nil {
-		t.Errorf("инструкция содержит невалидный пример workflow: %v", err)
-	}
 	for _, fragment := range []string{
-		"есть только бинарник lawa",
-		"явной просьбы пользователя",
+		"Единственный runtime",
+		"нет публичного программного API",
+		"задержку, стоимость",
+		"Codex Desktop не меняет runtime",
+		"command -v",
+		"codex login status",
+		"codex login --device-auth",
+		"codex login --with-api-key",
+		"Не проси присылать API key",
 		"lawa validate <workflow.json>",
-		`"dependsOn": ["architecture", "security"]`,
-		"Не добавляй неизвестные поля",
-		"прямые и\nкосвенные циклы",
-		"Никогда не запускай `lawa run`",
-		"fork_thread с environment=same-directory",
-		"`launch.sectionId` (сейчас `chats`)",
-		"app-continue-claim",
-		"отдельную видимую задачу-контроллер Codex",
-		"lawa app-series-next",
-		"heartbeat текущей задачи через automation_update",
-		"lawa run <workflow.json>",
-		"--task-file <файл-постановки>",
-		"--initiator-thread-id <id-этого-чата>",
-		"не интерполируя пользовательский текст в shell",
-		"не оставляй команду без наблюдения дольше 60 секунд",
-		"не реже раза в минуту",
-		"не чаще раза в 5 минут",
-		"не прикладывай PNG в чат",
-		"Не отправляй ради статуса новые turn",
-		"ведёт в точный чат кубика",
-		"`vscode://file/<percent-encoded-absolute-run-dir>`",
-		"`workflow-status.md`",
-		"`workflow-status.puml` и `workflow-status.png`",
-		"`plantuml -pipe`",
-		"короткую диагностику в ближайшую чат-сводку",
+		"lawa run workflow.json",
+		"--max-parallel",
+		"Не добавляй `--mode`",
+		"lawa status <run-id>",
+		"lawa logs <run-id>",
+		"сырые rollout Codex туда не копируются",
 		"lawa resume <run-id>",
-		"Resume сам отправляет один turn `continue`",
-		"Failed-чат пользователь продолжает",
-		"прерывают активные turn через\nCodex",
-		"ID\nтекущего чата недоступен",
-		"memory/<threadId>.md",
-		"обновляет только\nсобственный memory/<threadId>.md",
-		"https://github.com/stray-live-pixel/Lawa",
-		"https://raw.githubusercontent.com/stray-live-pixel/Lawa/main/product/1.md",
-		"lawa version",
-		"Значение\n   dev означает локальную сборку",
-		"его SHA-256 и полный вывод `lawa help`",
-		"явное\nразрешение перед публичной",
-		"https://github.com/stray-live-pixel/Lawa/issues/new",
+		"Исторические app-native run",
+		"пишет только собственный файл памяти",
 	} {
 		if !strings.Contains(skillInstruction, fragment) {
 			t.Errorf("в инструкции отсутствует обязательный фрагмент %q", fragment)
@@ -352,13 +310,14 @@ type cliFakeClient struct {
 	runs      map[string]int
 	continues map[string]int
 	inspect   map[string]codex.WorkStatus
+	latest    map[string]string
 	onRun     func()
 }
 
 type cliFakeObserver struct{ client *cliFakeClient }
 
 func newCLIFakeClient() *cliFakeClient {
-	return &cliFakeClient{runs: map[string]int{}, continues: map[string]int{}, inspect: map[string]codex.WorkStatus{}}
+	return &cliFakeClient{runs: map[string]int{}, continues: map[string]int{}, inspect: map[string]codex.WorkStatus{}, latest: map[string]string{}}
 }
 
 func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Result, error) {
@@ -375,8 +334,13 @@ func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Res
 		return codex.Result{ThreadID: threadID, CreationAttempted: true}, err
 	}
 	if command.OnTurn != nil {
-		command.OnTurn("turn-"+stepID, func(context.Context) error { return nil })
+		if err := command.OnTurn("turn-"+stepID, func(context.Context) error { return nil }); err != nil {
+			return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, CreationAttempted: true, TurnAttempted: true}, err
+		}
 	}
+	c.mu.Lock()
+	c.latest[threadID] = "turn-" + stepID
+	c.mu.Unlock()
 	if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 		return codex.Result{ThreadID: threadID, CreationAttempted: true, TurnAttempted: true}, err
 	}
@@ -392,8 +356,13 @@ func (c *cliFakeClient) Continue(_ context.Context, threadID string, command cod
 	c.inspect[threadID] = codex.WorkCompleted
 	c.mu.Unlock()
 	if command.OnTurn != nil {
-		command.OnTurn("continued-turn", func(context.Context) error { return nil })
+		if err := command.OnTurn("continued-turn", func(context.Context) error { return nil }); err != nil {
+			return codex.Result{ThreadID: threadID, TurnID: "continued-turn", TurnAttempted: true}, err
+		}
 	}
+	c.mu.Lock()
+	c.latest[threadID] = "continued-turn"
+	c.mu.Unlock()
 	if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 		return codex.Result{ThreadID: threadID, TurnID: "continued-turn", TurnAttempted: true}, err
 	}
@@ -408,11 +377,15 @@ func (o *cliFakeObserver) Inspect(threadID string) (codex.Observation, error) {
 	c := o.client
 	c.mu.Lock()
 	status := c.inspect[threadID]
+	latest := c.latest[threadID]
 	c.mu.Unlock()
 	if status == "" {
 		status = codex.WorkCompleted
 	}
-	observation := codex.Observation{ThreadID: threadID, ThreadStatus: "idle", LatestTurnID: "turn-1"}
+	if latest == "" {
+		latest = "turn-1"
+	}
+	observation := codex.Observation{ThreadID: threadID, ThreadStatus: "idle", LatestTurnID: latest}
 	switch status {
 	case codex.WorkCompleted:
 		observation.LatestTurnStatus = "completed"
@@ -428,14 +401,15 @@ func (o *cliFakeObserver) Close() error { return nil }
 
 func cliTestDependencies(client coordinator.Client, check func(context.Context, codex.Connection) error) dependencies {
 	return dependencies{
-		check:           check,
-		client:          func(string, io.Writer) coordinator.Client { return client },
-		pollInterval:    time.Millisecond,
-		refreshInterval: coordinator.DefaultRefreshInterval,
-		chatInterval:    defaultChatInterval,
-		now:             time.Now,
-		waitUntil:       series.WaitUntil,
-		renderer:        successfulCLIRenderer(),
+		check:            check,
+		client:           func(string, io.Writer) coordinator.Client { return client },
+		pollInterval:     time.Millisecond,
+		logsPollInterval: time.Millisecond,
+		refreshInterval:  coordinator.DefaultRefreshInterval,
+		chatInterval:     defaultChatInterval,
+		now:              time.Now,
+		waitUntil:        series.WaitUntil,
+		renderer:         successfulCLIRenderer(),
 		userHomeDir: func() (string, error) {
 			return "", errors.New("home не должен использоваться при --root")
 		},
@@ -499,7 +473,7 @@ func TestRecurringRunModesWithControlledClock(t *testing.T) {
 				clockMu.Unlock()
 				return nil
 			}
-			args := []string{"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator", "--root", root}
+			args := []string{"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--root", root}
 			args = append(args, tc.flags...)
 			var out bytes.Buffer
 			if err := executeContext(t.Context(), args, &out, io.Discard, deps); err != nil {
@@ -550,7 +524,7 @@ func TestRecurringRunWithoutLimitStopsExplicitly(t *testing.T) {
 	}
 	var out bytes.Buffer
 	err := executeContext(t.Context(), []string{
-		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator",
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача",
 		"--root", root, "--repeat", "immediate",
 	}, &out, io.Discard, deps)
 	if err != nil {
@@ -580,7 +554,7 @@ func TestRecurringRunOutputFailureKeepsCurrentRun(t *testing.T) {
 	out := &failOnWriteWriter{failAt: 2, err: failure}
 	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
 	err := executeContext(t.Context(), []string{
-		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator",
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача",
 		"--root", root, "--repeat", "immediate", "--max-runs", "1",
 	}, out, io.Discard, deps)
 	if !errors.Is(err, failure) {
@@ -616,7 +590,7 @@ func TestRecurringRunFinalOutputFailureFinishesCurrentRun(t *testing.T) {
 	failure := errors.New("финальный stdout закрыт")
 	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
 	err := executeContext(t.Context(), []string{
-		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator",
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача",
 		"--root", root, "--repeat", "immediate", "--max-runs", "1",
 	}, failOnTextWriter{text: "успешно завершён", err: failure}, io.Discard, deps)
 	if !errors.Is(err, failure) {
@@ -683,7 +657,7 @@ func TestRunCommand(t *testing.T) {
 	var out bytes.Buffer
 	err := executeContext(t.Context(), []string{
 		"run", workflowPath, "--cwd", cwd, "--task-file", taskPath, "--comment-file", commentPath,
-		"--initiator-thread-id", "initiator", "--root", root, "--codex", "/test/codex",
+		"--root", root, "--codex", "/test/codex",
 	}, &out, io.Discard, deps)
 	if err != nil {
 		t.Fatal(err)
@@ -696,9 +670,132 @@ func TestRunCommand(t *testing.T) {
 		t.Fatalf("ожидался один run: %v, %v", entries, err)
 	}
 	snapshot, err := runstore.Load(root, entries[0].Name())
-	if err != nil || snapshot.Meta.InitiatorThreadID != "initiator" || snapshot.Meta.Steps[0].State != scheduler.Succeeded ||
+	if err != nil || snapshot.Meta.Version != 3 || snapshot.Meta.Steps[0].State != scheduler.Succeeded ||
 		snapshot.Meta.Steps[0].CodexThreadID != "chat-step" || !strings.Contains(snapshot.Task, "Финальная задача") || !strings.Contains(snapshot.Task, "Срочно") {
 		t.Fatalf("неверно сохранён run: %+v, %v", snapshot, err)
+	}
+	var statusOutput, logsOutput bytes.Buffer
+	if err = executeContext(t.Context(), []string{"status", snapshot.Meta.RunID, "--root", root}, &statusOutput, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	if err = executeContext(t.Context(), []string{"logs", snapshot.Meta.RunID, "step", "--root", root}, &logsOutput, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusOutput.String(), "runtime: app-server") || !strings.Contains(statusOutput.String(), "turn-step") ||
+		!strings.Contains(logsOutput.String(), "thread_started") || !strings.Contains(logsOutput.String(), "step_state") {
+		t.Fatalf("CLI observability потеряла run: status=%q logs=%q", statusOutput.String(), logsOutput.String())
+	}
+	if err = executeContext(t.Context(), []string{"logs", snapshot.Meta.RunID, "missing", "--root", root}, io.Discard, io.Discard, deps); err == nil || !strings.Contains(err.Error(), "не содержит шаг") {
+		t.Fatalf("logs принял неизвестный шаг: %v", err)
+	}
+	owner, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err == nil {
+		err = owner.AppendEvent(runstore.RuntimeEvent{StepID: "step", Kind: "process_started", PID: 123})
+	}
+	if err == nil {
+		err = owner.AppendEvent(runstore.RuntimeEvent{
+			StepID: "step", Kind: "item_started", ItemID: "command-1", ItemType: "commandExecution", Message: "внимание \x1b[2J",
+		})
+	}
+	if owner != nil {
+		err = errors.Join(err, owner.Close())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusOutput.Reset()
+	if err = executeContext(t.Context(), []string{"status", snapshot.Meta.RunID, "--root", root}, &statusOutput, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusOutput.String(), "действие: commandExecution") ||
+		!strings.Contains(statusOutput.String(), `сообщение: внимание \u001B[2J`) || strings.Contains(statusOutput.String(), "\x1b") {
+		t.Fatalf("status не показал действие или передал управляющий символ: %q", statusOutput.String())
+	}
+
+	owner, err = runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err == nil {
+		err = owner.AppendEvent(runstore.RuntimeEvent{StepID: "step", Kind: "item_completed", ItemID: "command-1", ItemType: "commandExecution"})
+	}
+	if err == nil {
+		err = owner.AppendEvent(runstore.RuntimeEvent{StepID: "step", Kind: "process_exited", PID: 123, Signal: "terminated"})
+	}
+	if owner != nil {
+		err = errors.Join(err, owner.Close())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	statusOutput.Reset()
+	if err = executeContext(t.Context(), []string{"status", snapshot.Meta.RunID, "--root", root}, &statusOutput, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(statusOutput.String(), "завершён, signal terminated") || strings.Contains(statusOutput.String(), "действие:") {
+		t.Fatalf("status потерял завершение процесса или оставил завершённое действие: %q", statusOutput.String())
+	}
+}
+
+// TestLogsFollowDrainsTerminalEvent воспроизводит порядок coordinator: сначала
+// terminal сохраняется в meta.json, затем в журнал дописывается step_state.
+// Follow обязан дождаться этой записи и не печатать старые события повторно.
+func TestLogsFollowDrainsTerminalEvent(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	snapshot, err := runstore.Create(root, runstore.Input{
+		WorkflowJSON: []byte(`{"id":"follow","steps":[{"id":"step","type":"agent","prompt":"work","dependsOn":[]}]}`),
+		Task:         "Проверить follow", CWD: cwd,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err == nil {
+		err = owner.Reserve([]string{"step"})
+	}
+	if err == nil {
+		err = owner.Update("step", scheduler.Unknown, "thread-1")
+	}
+	if err == nil {
+		err = owner.SetTurn("step", "turn-1")
+	}
+	if err == nil {
+		err = owner.AppendEvent(runstore.RuntimeEvent{StepID: "step", ThreadID: "thread-1", TurnID: "turn-1", Kind: "turn_bound"})
+	}
+	if err == nil {
+		err = owner.Update("step", scheduler.Succeeded, "thread-1")
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Close()
+
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	var output bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		done <- logsCommand(ctx, []string{snapshot.Meta.RunID, "--root", root, "--follow"}, &output, dependencies{logsPollInterval: time.Millisecond})
+	}()
+	select {
+	case followErr := <-done:
+		t.Fatalf("follow завершился до финального события: %v", followErr)
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	if err = owner.AppendEvent(runstore.RuntimeEvent{
+		StepID: "step", ThreadID: "thread-1", TurnID: "turn-1", Kind: "step_state", State: string(scheduler.Succeeded),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case followErr := <-done:
+		if followErr != nil {
+			t.Fatal(followErr)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("follow не завершился после финального события")
+	}
+	text := output.String()
+	if strings.Count(text, "turn_bound") != 1 || !strings.Contains(text, "step_state") {
+		t.Fatalf("follow повторил старое или потерял финальное событие: %q", text)
 	}
 }
 
@@ -708,7 +805,7 @@ func TestRunCommandParent(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	workflowJSON := []byte(`{"id":"child","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`)
 	parent, err := runstore.Create(root, runstore.Input{
-		WorkflowJSON: workflowJSON, Task: "Родитель", CWD: cwd, InitiatorThreadID: "parent-chat",
+		WorkflowJSON: workflowJSON, Task: "Родитель", CWD: cwd,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -720,7 +817,7 @@ func TestRunCommandParent(t *testing.T) {
 	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
 	var out bytes.Buffer
 	if err = executeContext(t.Context(), []string{
-		"run", workflowPath, "--cwd", cwd, "--task", "Ребёнок", "--initiator-thread-id", "child-chat",
+		"run", workflowPath, "--cwd", cwd, "--task", "Ребёнок",
 		"--parent-run", parent.Meta.RunID, "--root", root,
 	}, &out, io.Discard, deps); err != nil {
 		t.Fatal(err)
@@ -747,7 +844,7 @@ func TestRunPreflightFailureLeavesNoRun(t *testing.T) {
 	failure := errors.New("Codex unavailable")
 	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return failure })
 	err := executeContext(t.Context(), []string{
-		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator", "--root", root,
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--root", root,
 	}, io.Discard, io.Discard, deps)
 	if !errors.Is(err, failure) {
 		t.Fatalf("потеряна ошибка preflight: %v", err)
@@ -763,7 +860,7 @@ func TestResumeCommand(t *testing.T) {
 	root, cwd := t.TempDir(), t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(`{"id":"chain","steps":[{"id":"child","type":"agent","prompt":"Итог","dependsOn":["parent"]},{"id":"parent","type":"agent","prompt":"Факты","dependsOn":[]}]}`),
-		Task:         "Задача", CWD: cwd, InitiatorThreadID: "initiator",
+		Task:         "Задача", CWD: cwd,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -799,21 +896,32 @@ func TestResumeCommand(t *testing.T) {
 func TestArgumentParsingAndExitCodes(t *testing.T) {
 	for _, args := range [][]string{
 		{"workflow.json", "--cwd"},
-		{"workflow.json", "--cwd", "/tmp", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i"},
+		{"workflow.json", "--cwd", "/tmp", "--cwd", "/tmp", "--task", "x"},
 		{"workflow.json", "--unknown", "x"},
-		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--task-file", "/tmp/task", "--initiator-thread-id", "i"},
-		{"first", "second", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i"},
-		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--repeat="},
-		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--repeat", "after", "--repeat-delay="},
-		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--max-runs", "2"},
-		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--parent-run="},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--task-file", "/tmp/task"},
+		{"first", "second", "--cwd", "/tmp", "--task", "x"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--repeat="},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--repeat", "after", "--repeat-delay="},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--max-runs", "2"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--max-parallel="},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--max-parallel", "0"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--max-parallel", "many"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--parent-run="},
 	} {
 		if _, err := parseRunArguments(args); err == nil {
 			t.Errorf("приняты неверные аргументы: %v", args)
 		}
 	}
-	if parsed, err := parseRunArguments([]string{"--task=x", "workflow.json", "--initiator-thread-id=i", "--cwd=/tmp", "--parent-run=parent"}); err != nil || parsed.workflow != "workflow.json" || parsed.parentRun != "parent" {
+	if parsed, err := parseRunArguments([]string{"--task=x", "workflow.json", "--cwd=/tmp", "--parent-run=parent", "--max-parallel=7"}); err != nil || parsed.workflow != "workflow.json" || parsed.parentRun != "parent" || parsed.maxParallel != "7" {
 		t.Fatalf("не приняты флаги до пути или --name=value: %+v, %v", parsed, err)
+	}
+	if parsed, err := parseResumeArguments([]string{"run-1", "--max-parallel", "3"}); err != nil || parsed.maxParallel != "3" {
+		t.Fatalf("resume не принял общий лимит: %+v, %v", parsed, err)
+	}
+	for _, args := range [][]string{{"run-1", "--max-parallel="}, {"run-1", "--max-parallel", "-1"}} {
+		if _, err := parseResumeArguments(args); err == nil {
+			t.Errorf("resume принял неверный общий лимит: %v", args)
+		}
 	}
 	if exitCode(nil, 0) != 0 || exitCode(errors.New("x"), 0) != 2 || exitCode(context.Canceled, 2) != 130 || exitCode(context.Canceled, 15) != 143 {
 		t.Fatal("неверные коды завершения")
@@ -841,15 +949,15 @@ func TestParseServeArguments(t *testing.T) {
 // inline-комментарий без файловой формы остаётся разрешённым контрактом CLI.
 func TestParseRunArgumentsRejectsMutuallyExclusiveEmptyFlags(t *testing.T) {
 	for _, args := range [][]string{
-		{"workflow.json", "--cwd", "/tmp", "--task=", "--task-file", "/tmp/task", "--initiator-thread-id", "i"},
-		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--comment=", "--comment-file", "/tmp/comment", "--initiator-thread-id", "i"},
+		{"workflow.json", "--cwd", "/tmp", "--task=", "--task-file", "/tmp/task"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--comment=", "--comment-file", "/tmp/comment"},
 	} {
 		if _, err := parseRunArguments(args); err == nil {
 			t.Errorf("приняты взаимоисключающие флаги: %v", args)
 		}
 	}
 	parsed, err := parseRunArguments([]string{
-		"workflow.json", "--cwd", "/tmp", "--task", "x", "--comment=", "--initiator-thread-id", "i",
+		"workflow.json", "--cwd", "/tmp", "--task", "x", "--comment=",
 	})
 	if err != nil || parsed.comment != "" || parsed.commentFile != "" {
 		t.Fatalf("одиночный пустой --comment= должен быть допустим: %+v, %v", parsed, err)
@@ -903,5 +1011,19 @@ func TestReportExitDistinguishesCancellationFromStorageFailure(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReportExitEscapesTerminalControls не позволяет внешней диагностике Codex
+// очистить экран или нарисовать поддельную строку результата через ANSI escape.
+func TestReportExitEscapesTerminalControls(t *testing.T) {
+	var stderr bytes.Buffer
+	if code := reportExit(&stderr, errors.New("Codex: \x1b[2J\nподдельный успех"), 0); code != 2 {
+		t.Fatalf("неверный код выхода: %d", code)
+	}
+	got := stderr.String()
+	if strings.Contains(got, "\x1b") || strings.Contains(got, "\nподдельный") ||
+		!strings.Contains(got, `\u001B[2J\u000Aподдельный успех`) {
+		t.Fatalf("ошибка передала управляющий символ в терминал: %q", got)
 	}
 }

@@ -368,6 +368,32 @@ func TestRun(t *testing.T) {
 	}
 }
 
+// TestProcessLifecycle проверяет, что фасад observability получает настоящий PID
+// и подтверждённый exit дочернего App Server, не читая таблицу процессов извне.
+func TestProcessLifecycle(t *testing.T) {
+	t.Setenv("LAWA_TEST_CODEX_SERVER", "ok")
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ProcessEvent
+	var trace bytes.Buffer
+	result, err := Run(t.Context(), Command{
+		Executable: binary, CWD: t.TempDir(), Text: "literal '$()`\\n", Sandbox: "read-only", Stderr: &trace,
+		OnProcess: func(event ProcessEvent) error {
+			events = append(events, event)
+			return nil
+		},
+	})
+	if err != nil || result.Status != "completed" {
+		t.Fatalf("run не завершён: %+v, %v; server: %s", result, err, &trace)
+	}
+	if len(events) != 2 || events[0].Kind != "started" || events[0].PID <= 0 ||
+		events[1].Kind != "exited" || events[1].PID != events[0].PID || events[1].ExitCode == nil || *events[1].ExitCode != 0 || events[1].Signal != "" {
+		t.Fatalf("неверный lifecycle процесса: %+v", events)
+	}
+}
+
 // TestContinue проверяет, что сохранённый чат сначала возобновляется, затем
 // получает ровно один новый turn с текстом continue. Все три терминальных статуса
 // сохраняются без создания нового thread и без интерпретации failed как RPC-сбоя.
@@ -383,7 +409,7 @@ func TestContinue(t *testing.T) {
 			turnID := ""
 			result, err := Continue(t.Context(), "thread-1", Command{
 				Executable: binary, CWD: t.TempDir(), Text: "continue", Sandbox: "read-only", Stderr: &trace,
-				OnTurn: func(id string, _ func(context.Context) error) { turnID = id },
+				OnTurn: func(id string, _ func(context.Context) error) error { turnID = id; return nil },
 			})
 			if err != nil || result.ThreadID != "thread-1" || result.TurnID != "turn-1" || result.Status != status || turnID != "turn-1" {
 				t.Fatalf("неверный результат continue: %+v, callback=%q, ошибка=%v; сервер: %s", result, turnID, err, &trace)
@@ -435,11 +461,12 @@ func TestRunInterruptUsesOwningSession(t *testing.T) {
 	go func() {
 		result, runErr := Run(ctx, Command{
 			Executable: binary, CWD: cwd, Text: "literal '$()`\\n", Sandbox: "read-only", Stderr: &trace,
-			OnTurn: func(id string, interrupt func(context.Context) error) {
+			OnTurn: func(id string, interrupt func(context.Context) error) error {
 				if id != "turn-1" {
 					t.Errorf("неверный ID активного turn: %q", id)
 				}
 				ready <- interrupt
+				return nil
 			},
 		})
 		done <- outcome{result: result, err: runErr}

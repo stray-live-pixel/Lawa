@@ -15,15 +15,23 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/buildinfo"
 )
 
+// processExitGracePeriod даёт App Server завершить служебные горутины после
+// закрытия stdin. Это не timeout turn: Close вызывается только после результата
+// или ошибки. Три секунды также покрывают замедление процесса под race detector,
+// не оставляя действительно зависший дочерний процесс без ограничения.
+const processExitGracePeriod = 3 * time.Second
+
 // session владеет одним процессом app-server и его stdio. Активные turn разных
 // кубиков всегда получают отдельные сессии: так они не делят RPC-ID и события,
 // а сбой одного процесса не ломает остальные. Только read-only Observer намеренно
 // переиспользует сессию для последовательных thread/read между polling-циклами.
 type session struct {
-	client *client
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-	proc   *exec.Cmd
+	client       *client
+	stdin        io.WriteCloser
+	stdout       io.ReadCloser
+	proc         *exec.Cmd
+	onProcess    func(ProcessEvent) error
+	exitNotified bool
 }
 
 // openSession запускает официальный app-server и завершает обязательное
@@ -50,7 +58,7 @@ func openSession(ctx context.Context, command Command, result *Result) (*session
 	process.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	// WaitDelay ограничивает только очистку pipe после выхода app-server. Это не
 	// таймаут turn и не разрешение прерывать работу агента по времени.
-	process.WaitDelay = time.Second
+	process.WaitDelay = processExitGracePeriod
 	stdin, err := process.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -65,7 +73,12 @@ func openSession(ctx context.Context, command Command, result *Result) (*session
 		_ = stdout.Close()
 		return nil, fmt.Errorf("запустить Codex: %w", err)
 	}
-	s := &session{stdin: stdin, stdout: stdout, proc: process}
+	s := &session{stdin: stdin, stdout: stdout, proc: process, onProcess: command.OnProcess}
+	if command.OnProcess != nil {
+		if callbackErr := command.OnProcess(ProcessEvent{Kind: "started", Time: time.Now().UTC(), PID: process.Process.Pid}); callbackErr != nil {
+			return nil, errors.Join(callbackErr, s.Close())
+		}
+	}
 	s.client = &client{
 		ctx:       ctx,
 		command:   command,
@@ -151,7 +164,7 @@ func tomlString(value string) string {
 }
 
 // Close закрывает транспорт и дожидается только собственного app-server.
-// Desktop, сохранённые чаты и настройки не удаляются. Через секунду зависший
+// Desktop, сохранённые чаты и настройки не удаляются. Через три секунды зависший
 // служебный процесс завершается принудительно; активный turn к этому моменту
 // публичный Run уже обязан был получить терминальное событие либо ошибку.
 func (s *session) Close() error {
@@ -164,13 +177,31 @@ func (s *session) Close() error {
 	select {
 	case err := <-done:
 		_ = s.stdout.Close()
+		notifyErr := s.notifyExit()
 		s.proc = nil
-		return err
-	case <-time.After(time.Second):
+		return errors.Join(err, notifyErr)
+	case <-time.After(processExitGracePeriod):
 		_ = s.proc.Process.Kill()
 		<-done
 		_ = s.stdout.Close()
+		notifyErr := s.notifyExit()
 		s.proc = nil
+		return notifyErr
+	}
+}
+
+// notifyExit вызывается после Wait ровно один раз, пока ProcessState ещё
+// доступен. Сигнал и exit code взаимоисключаются по семантике os.ProcessState.
+func (s *session) notifyExit() error {
+	if s.exitNotified || s.onProcess == nil || s.proc == nil || s.proc.ProcessState == nil {
 		return nil
 	}
+	s.exitNotified = true
+	event := ProcessEvent{Kind: "exited", Time: time.Now().UTC(), PID: s.proc.Process.Pid}
+	if status, ok := s.proc.ProcessState.Sys().(syscall.WaitStatus); ok && status.Signaled() {
+		event.Signal = status.Signal().String()
+	} else if code := s.proc.ProcessState.ExitCode(); code >= 0 {
+		event.ExitCode = &code
+	}
+	return s.onProcess(event)
 }

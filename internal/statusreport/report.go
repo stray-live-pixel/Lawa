@@ -154,6 +154,7 @@ func writeVisualization(ctx context.Context, runDir string, status coordinator.S
 // относительной Markdown-ссылкой и отображается прямо при просмотре файла.
 func DetailedReport(status coordinator.Status, runDir string, artifacts Artifacts, visualizationErr error) string {
 	var message strings.Builder
+	waitingForCapacity := stringSet(status.WaitingForCapacity)
 	fmt.Fprintf(&message, "# Статус workflow \"%s\"\n\n", markdownText(status.WorkflowID))
 	for _, step := range status.Steps {
 		label := markdownText(step.ID)
@@ -163,6 +164,9 @@ func DetailedReport(status coordinator.Status, runDir string, artifacts Artifact
 		fmt.Fprintf(&message, "- %s — %s", label, markdownText(string(step.State)))
 		if step.CodexThreadID == "" {
 			message.WriteString(" (чат ещё не создан)")
+		}
+		if waitingForCapacity[step.ID] {
+			message.WriteString(" (ждёт свободный слот общего лимита)")
 		}
 		message.WriteByte('\n')
 	}
@@ -202,6 +206,9 @@ func Summary(status coordinator.Status, runDir string, artifactErr error) string
 		fmt.Fprintf(&message, ", требуют внимания: %d", statistics.attention)
 	}
 	message.WriteString(".\n")
+	if len(status.WaitingForCapacity) != 0 {
+		fmt.Fprintf(&message, "Свободный слот общего лимита ждут: %d.\n", len(status.WaitingForCapacity))
+	}
 	if status.Complete {
 		fmt.Fprintf(&message, "Run %s успешно завершён.\n", markdownText(status.RunID))
 	}
@@ -211,6 +218,17 @@ func Summary(status coordinator.Status, runDir string, artifactErr error) string
 	}
 	message.WriteByte('\n')
 	return message.String()
+}
+
+// stringSet превращает transient-список причин ожидания в быстрый lookup для
+// подробного отчёта. Состояние самого шага остаётся Pending: общий лимит — не
+// новое сохранённое состояние планировщика, а причина ожидания текущего процесса.
+func stringSet(values []string) map[string]bool {
+	result := make(map[string]bool, len(values))
+	for _, value := range values {
+		result[value] = true
+	}
+	return result
 }
 
 type stateStatistics struct {

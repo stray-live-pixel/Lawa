@@ -1,6 +1,6 @@
-// Команда lawa проверяет, запускает и продолжает workflow через Codex App Server.
-// Чат-инициатор остаётся пользовательским интерфейсом, а это CLI сохраняет run,
-// координирует зависимости и печатает только компактные изменения статусов.
+// Команда lawa предоставляет единый фасад над Codex App Server: пользователь
+// работает с run/status/logs, а запуск процессов, thread/turn и восстановление
+// остаются внутренней ответственностью Lawa.
 package main
 
 import (
@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/stray-live-pixel/Lawa/internal/buildinfo"
+	"github.com/stray-live-pixel/Lawa/internal/capacity"
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/dashboard"
@@ -28,33 +29,19 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
-const help = `Lawa — выполнение JSON-workflow через отдельные задачи Codex.
+const help = `Lawa — выполнение JSON-workflow через Codex App Server.
 
 Команды:
-  lawa app-run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>) --initiator-thread-id <id>
-      Создать run для задач, которыми владеет Codex App; основной режим скилла /lawa.
-  lawa app-next <run-id>
-      Получить JSON следующего действия: launch, observe, complete или blocked.
-  lawa app-series-next <series-id>
-      Атомарно продолжить app-native серию: run, wait, complete или stopped.
-  lawa app-series-fail <series-id> --run <run-id> --reason-file <путь>
-      Зафиксировать наблюдённый failed/interrupted и остановить app-native серию.
-  lawa app-claim <run-id> --step <id>
-      Атомарно получить право на единственную попытку создания задачи Codex App.
-  lawa app-continue-claim <run-id> --step <id> --turn-id <id>
-      Атомарно получить право один раз продолжить конкретный interrupted turn.
-  lawa app-reset-claim <run-id> --step <id> --confirm-reset <id>
-      После подтверждения пользователя разрешить повтор неопределённого create_thread.
-  lawa app-bind <run-id> --step <id> --thread-id <id>
-      Сохранить identity сразу после создания задачи Codex App.
-  lawa app-update <run-id> --step <id> --state <state> --revision <N> [--result-file <путь>]
-      Сохранить живой или финальный статус; succeeded требует финальный ответ.
-  lawa run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>) --initiator-thread-id <id>
-      Legacy: выполнить workflow через отдельные app-server для терминала/автоматизации.
+  lawa run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>)
+      Создать run, запустить готовые кубики и наблюдать их до результата.
   lawa resume <run-id>
-      Продолжить сохранённый run и учесть ручную работу в прежних чатах.
+      Сверить сохранённые thread и продолжить interrupted-кубики.
+  lawa status <run-id>
+      Показать состояния, thread/turn, процесс и последнюю активность кубиков.
+  lawa logs <run-id> [step-id] [--follow]
+      Показать безопасный журнал событий всего run или одного кубика.
   lawa serve [--root <путь>] [--listen <адрес>]
-      Показать workflow, тикеты и локальные журналы; по умолчанию http://127.0.0.1:60800.
+      Запустить read-only dashboard; по умолчанию http://127.0.0.1:60800.
   lawa series-status <series-id>
       Показать режим, прогресс, текущий run и время следующего запуска.
   lawa series-stop <series-id>
@@ -76,25 +63,24 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
   --task-file <путь>           Безопасная альтернатива --task для многострочного текста.
   --comment <текст>            Комментарий пользователя; может быть пустым.
   --comment-file <путь>        Альтернатива --comment.
-  --initiator-thread-id <id>   ID чата, из которого вызван /lawa; обязательно.
   --parent-run <run-id>        Необязательный родитель для дерева связанных workflow.
   --root <путь>                Хранилище run; по умолчанию ~/.light-ai-workflows.
   --codex <путь>               Исполняемый файл Codex; по умолчанию codex из PATH.
+  --max-parallel <N>           Общий для root лимит активных turn; сохраняется.
   --repeat <режим>             immediate, after или cron.
   --repeat-delay <интервал>    Задержка after от завершения run, например 1h.
   --cron <расписание>          Стандартные 5 полей: minute hour day month weekday.
   --timezone <IANA-зона>       Явная зона cron, например Europe/Moscow.
   --max-runs <N>               Положительный лимит; без него серия бесконечна.
 
-app-run принимает обычные параметры run, кроме --codex. С --repeat он создаёт
-app-native серию для heartbeat Codex App и возвращает seriesId вместе с действием.
-Workflow со speed пока требует legacy run: task API Codex App не принимает service tier.
-app-next/app-claim/app-reset-claim/app-bind/app-update предназначены для управляющего чата и печатают
-машиночитаемый JSON либо короткое подтверждение; они не запускают app-server.
-
 Параметры resume:
   --root <путь>                То же хранилище run.
   --codex <путь>               Исполняемый файл Codex.
+  --max-parallel <N>           Задать или изменить общий лимит для root.
+
+Параметры status/logs:
+  --root <путь>                То же хранилище run.
+  --follow                     Для logs: ждать новые события до завершения или сигнала.
 
 Параметры serve:
   --root <путь>                То же хранилище run.
@@ -106,7 +92,7 @@ app-next/app-claim/app-reset-claim/app-bind/app-update предназначен�
                                требует --yes.
   --codex-home <путь>          Корень скиллов; по умолчанию $CODEX_HOME или ~/.codex.
 
-serve, validate, skill, version, update и help не запускают агентов и не требуют подключения к Codex.
+status, logs, serve, validate, skill, version, update и help не запускают агентов.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
@@ -114,7 +100,13 @@ Resume отправляет continue только interrupted-чатам; failed
 Run и resume печатают краткую статистику и VS Code-ссылку не чаще раза в 5 минут;
 первый и финальный снимки выводятся сразу. Подробный workflow-status.md и схема
 обновляются локально при изменениях и не реже раза в минуту.
+Max-parallel сохраняется для root и суммарно ограничивает отдельные процессы run
+и resume; без сохранённого значения собственного лимита нет.
 Для PNG нужна команда plantuml с поддержкой -pipe; её ошибка не останавливает workflow.
+
+Lawa использует только Codex App Server и не создаёт нативные задачи Codex Desktop.
+Причина: у Desktop нет публичного программного API для внешнего Go-процесса,
+а управление через агента-посредника добавляет задержку, стоимость и узкое место.
 `
 
 // skillInstruction хранится отдельным SKILL.md, чтобы инструкцию можно было читать,
@@ -159,7 +151,7 @@ func main() {
 func reportExit(stderr io.Writer, err error, received int32) int {
 	code := exitCode(err, received)
 	if err != nil && (received == 0 || !isCancellationOnly(err)) {
-		fmt.Fprintln(stderr, "lawa:", err)
+		fmt.Fprintln(stderr, "lawa:", runstore.SafeTerminalText(err.Error()))
 	}
 	return code
 }
@@ -207,16 +199,17 @@ func exitCode(err error, received int32) int {
 // dependencies содержит заменяемые границы CLI. Production использует настоящий
 // app-server, тесты — клиент без модели и изолированное временное хранилище.
 type dependencies struct {
-	check           func(context.Context, codex.Connection) error
-	client          func(string, io.Writer) coordinator.Client
-	pollInterval    time.Duration
-	refreshInterval time.Duration
-	chatInterval    time.Duration
-	now             func() time.Time
-	waitUntil       func(context.Context, time.Time, func() time.Time, func() (bool, error)) error
-	renderer        statusreport.Renderer
-	userHomeDir     func() (string, error)
-	update          updateDependencies
+	check            func(context.Context, codex.Connection) error
+	client           func(string, io.Writer) coordinator.Client
+	pollInterval     time.Duration
+	logsPollInterval time.Duration
+	refreshInterval  time.Duration
+	chatInterval     time.Duration
+	now              func() time.Time
+	waitUntil        func(context.Context, time.Time, func() time.Time, func() (bool, error)) error
+	renderer         statusreport.Renderer
+	userHomeDir      func() (string, error)
+	update           updateDependencies
 }
 
 // productionDependencies собирает стандартное окружение команд run/resume.
@@ -229,11 +222,12 @@ func productionDependencies() dependencies {
 		// Одна read-only app-server-сессия обслуживает все сверки текущего запуска.
 		// Пять секунд сохраняют отзывчивость ручного продолжения и не создают
 		// лишний поток thread/read-запросов в ожидании действий пользователя.
-		pollInterval:    5 * time.Second,
-		refreshInterval: coordinator.DefaultRefreshInterval,
-		chatInterval:    defaultChatInterval,
-		now:             time.Now,
-		waitUntil:       series.WaitUntil,
+		pollInterval:     5 * time.Second,
+		logsPollInterval: time.Second,
+		refreshInterval:  coordinator.DefaultRefreshInterval,
+		chatInterval:     defaultChatInterval,
+		now:              time.Now,
+		waitUntil:        series.WaitUntil,
 		// Pipe-режим не даёт renderer доступ к путям run. Отсутствующий или
 		// сломанный PlantUML станет видимой диагностикой, но не остановит workflow.
 		renderer:    statusreport.CommandRenderer{Executable: "plantuml", Timeout: 30 * time.Second},
@@ -273,28 +267,14 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 	switch args[0] {
 	case "validate":
 		return validateCommand(args[1:], out)
-	case "app-run":
-		return appRunCommand(ctx, args[1:], out, deps)
-	case "app-next":
-		return appNextCommand(ctx, args[1:], out, deps)
-	case "app-series-next":
-		return appSeriesNextCommand(ctx, args[1:], out, deps)
-	case "app-series-fail":
-		return appSeriesFailCommand(args[1:], out, deps)
-	case "app-claim":
-		return appClaimCommand(args[1:], out, deps)
-	case "app-continue-claim":
-		return appContinueClaimCommand(args[1:], out, deps)
-	case "app-reset-claim":
-		return appResetClaimCommand(args[1:], out, deps)
-	case "app-bind":
-		return appBindCommand(ctx, args[1:], out, deps)
-	case "app-update":
-		return appUpdateCommand(ctx, args[1:], out, deps)
 	case "run":
 		return runCommand(ctx, args[1:], out, stderr, deps)
 	case "resume":
 		return resumeCommand(ctx, args[1:], out, stderr, deps)
+	case "status":
+		return statusCommand(args[1:], out, deps)
+	case "logs":
+		return logsCommand(ctx, args[1:], out, deps)
 	case "serve":
 		return serveCommand(ctx, args[1:], out, stderr, deps)
 	case "series-status":
@@ -329,12 +309,12 @@ func validateCommand(args []string, out io.Writer) error {
 
 // runArguments хранит уже разобранные, но ещё не нормализованные параметры run.
 type runArguments struct {
-	workflow, cwd, task, taskFile, comment, commentFile, initiator, parentRun, root, executable string
-	repeat, repeatDelay, cron, timezone, maxRuns                                                string
+	workflow, cwd, task, taskFile, comment, commentFile, parentRun, root, executable string
+	maxParallel, repeat, repeatDelay, cron, timezone, maxRuns                        string
 }
 
 // resumeArguments не содержит cwd: продолжение обязано использовать сохранённый.
-type resumeArguments struct{ runID, root, executable string }
+type resumeArguments struct{ runID, root, executable, maxParallel string }
 
 // serveArguments хранит независимые от Codex параметры локального HTTP-сервера.
 type serveArguments struct{ root, address string }
@@ -370,8 +350,8 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 			return err
 		}
 	}
-	if !utf8.ValidString(parsed.task+parsed.comment+parsed.initiator) || strings.TrimSpace(parsed.task) == "" || strings.TrimSpace(parsed.initiator) == "" {
-		return errors.New("постановка и ID чата должны быть непустым текстом UTF-8; комментарий также должен быть UTF-8")
+	if !utf8.ValidString(parsed.task+parsed.comment) || strings.TrimSpace(parsed.task) == "" {
+		return errors.New("постановка должна быть непустым текстом UTF-8; комментарий также должен быть UTF-8")
 	}
 	var config series.Config
 	var schedule series.Schedule
@@ -385,13 +365,17 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 	if err = deps.check(ctx, connection); err != nil {
 		return fmt.Errorf("проверить подключение Codex: %w", err)
 	}
+	pool, err := capacity.Configure(parsed.root, parsed.maxParallel)
+	if err != nil {
+		return fmt.Errorf("настроить общий лимит параллельности: %w", err)
+	}
 	input := runstore.Input{
 		WorkflowJSON: workflowJSON,
 		Task:         parsed.task, Comment: parsed.comment, CWD: parsed.cwd,
-		InitiatorThreadID: parsed.initiator, ParentRunID: parsed.parentRun,
+		ParentRunID: parsed.parentRun,
 	}
 	if parsed.repeat != "" {
-		return runSeries(ctx, parsed.root, parsed.executable, input, config, schedule, out, stderr, deps)
+		return runSeries(ctx, parsed.root, parsed.executable, input, config, schedule, pool, out, stderr, deps)
 	}
 	snapshot, err := runstore.Create(parsed.root, input)
 	if err != nil {
@@ -400,7 +384,7 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 	if _, err = fmt.Fprintf(out, "runId: %s\n", snapshot.Meta.RunID); err != nil {
 		return err
 	}
-	return coordinate(ctx, parsed.root, snapshot.Meta.RunID, parsed.executable, out, stderr, deps, false, false)
+	return coordinate(ctx, parsed.root, snapshot.Meta.RunID, parsed.executable, pool, out, stderr, deps, false, false)
 }
 
 // resumeCommand никогда не создаёт замену отсутствующему или повреждённому run.
@@ -412,7 +396,11 @@ func resumeCommand(ctx context.Context, args []string, out, stderr io.Writer, de
 	if parsed.root, err = resolveRoot(parsed.root, deps.userHomeDir); err != nil {
 		return err
 	}
-	return coordinate(ctx, parsed.root, parsed.runID, parsed.executable, out, stderr, deps, true, false)
+	pool, err := capacity.Configure(parsed.root, parsed.maxParallel)
+	if err != nil {
+		return fmt.Errorf("настроить общий лимит параллельности: %w", err)
+	}
+	return coordinate(ctx, parsed.root, parsed.runID, parsed.executable, pool, out, stderr, deps, true, false)
 }
 
 // serveCommand не открывает Codex и не создаёт хранилище. Loopback безопасен по
@@ -439,7 +427,7 @@ func serveCommand(ctx context.Context, args []string, out, stderr io.Writer, dep
 // runSeries последовательно создаёт обычные run. Блокирующий coordinate служит
 // главным барьером параллельности: следующий run нельзя запланировать, пока
 // предыдущий не вернул терминальный успех или явную неуспешность.
-func runSeries(ctx context.Context, root, executable string, input runstore.Input, config series.Config, schedule series.Schedule, out, stderr io.Writer, deps dependencies) (err error) {
+func runSeries(ctx context.Context, root, executable string, input runstore.Input, config series.Config, schedule series.Schedule, pool *capacity.Pool, out, stderr io.Writer, deps dependencies) (err error) {
 	owner, err := series.Create(root, config)
 	if err != nil {
 		return fmt.Errorf("создать серию: %w", err)
@@ -485,7 +473,7 @@ func runSeries(ctx context.Context, root, executable string, input runstore.Inpu
 		if _, err = fmt.Fprintf(out, "runId: %s\n", snapshot.Meta.RunID); err != nil {
 			return errors.Join(err, owner.FailRunControl(err))
 		}
-		outcome, runErr := coordinateWithOutcome(ctx, root, snapshot.Meta.RunID, executable, out, stderr, deps, false, true)
+		outcome, runErr := coordinateWithOutcome(ctx, root, snapshot.Meta.RunID, executable, pool, out, stderr, deps, false, true)
 		// Терминальность берём из сохранённого состояния, а не выводим из ошибки.
 		// Поэтому отказ финальной сводки останавливает серию и остаётся видимым,
 		// но уже успешный run всё равно учитывается и больше не предлагается resume.
@@ -521,7 +509,7 @@ func seriesStatusCommand(args []string, out io.Writer, deps dependencies) error 
 	}
 	lastError := ""
 	if snapshot.LastError != "" {
-		lastError = "последняя ошибка: " + snapshot.LastError + "\n"
+		lastError = "последняя ошибка: " + runstore.SafeTerminalText(snapshot.LastError) + "\n"
 	}
 	_, err = fmt.Fprintf(out, "seriesId: %s\nрежим: %s\nсостояние: %s\nзапусков: %d начато, %d завершено\ncurrentRunId: %s\nnextRunAt: %s\nstopRequested: %t\n%s", snapshot.SeriesID, snapshot.Config.Mode, snapshot.State, snapshot.RunsStarted, snapshot.RunsFinished, current, next, snapshot.StopRequested, lastError)
 	return err
@@ -557,15 +545,15 @@ func parseSeriesArguments(args []string, deps dependencies) (string, string, err
 // Любая ошибка закрывает только владельца хранилища; сохранённые чаты не удаляются.
 // resume отличает явное продолжение от первого run: только resume имеет право
 // автоматически отправлять continue в interrupted-чаты.
-func coordinate(ctx context.Context, root, runID, executable string, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (err error) {
-	_, err = coordinateWithOutcome(ctx, root, runID, executable, out, stderr, deps, resume, returnOnFailure)
+func coordinate(ctx context.Context, root, runID, executable string, pool *capacity.Pool, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (err error) {
+	_, err = coordinateWithOutcome(ctx, root, runID, executable, pool, out, stderr, deps, resume, returnOnFailure)
 	return err
 }
 
 // coordinateWithOutcome сохраняет результат Execute отдельно от ошибок открытия,
 // вывода и закрытия хранилища. Терминальный Outcome остаётся действительным, если
 // ошибка управления произошла уже после надёжного сохранения состояния run.
-func coordinateWithOutcome(ctx context.Context, root, runID, executable string, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (outcome coordinator.Outcome, err error) {
+func coordinateWithOutcome(ctx context.Context, root, runID, executable string, pool *capacity.Pool, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (outcome coordinator.Outcome, err error) {
 	run, err := runstore.OpenLocked(root, runID)
 	if err != nil {
 		return coordinator.Outcome{}, fmt.Errorf("открыть запуск %q: %w", runID, err)
@@ -589,6 +577,7 @@ func coordinateWithOutcome(ctx context.Context, root, runID, executable string, 
 		Client: deps.client(executable, stderr), ContinueInterrupted: resume,
 		ReturnOnFailure: returnOnFailure,
 		Notify:          publisher.Publish,
+		Capacity:        pool,
 	})
 }
 
@@ -598,19 +587,20 @@ func parseRunArguments(args []string) (runArguments, error) {
 	var parsed runArguments
 	positionals, values, err := parseOptions(args, map[string]bool{
 		"cwd": true, "task": true, "task-file": true, "comment": true, "comment-file": true,
-		"initiator-thread-id": true, "parent-run": true, "root": true, "codex": true, "repeat": true,
+		"parent-run": true, "root": true, "codex": true, "max-parallel": true, "repeat": true,
 		"repeat-delay": true, "cron": true, "timezone": true, "max-runs": true,
 	})
 	if err != nil || len(positionals) != 1 {
 		if err != nil {
 			return parsed, err
 		}
-		return parsed, errors.New("использование: lawa run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>) --initiator-thread-id <id>")
+		return parsed, errors.New("использование: lawa run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>)")
 	}
 	parsed.workflow, parsed.cwd, parsed.task = positionals[0], values["cwd"], values["task"]
 	parsed.taskFile, parsed.comment = values["task-file"], values["comment"]
-	parsed.commentFile, parsed.initiator = values["comment-file"], values["initiator-thread-id"]
+	parsed.commentFile = values["comment-file"]
 	parsed.parentRun, parsed.root, parsed.executable = values["parent-run"], values["root"], values["codex"]
+	parsed.maxParallel = values["max-parallel"]
 	parsed.repeat, parsed.repeatDelay, parsed.cron = values["repeat"], values["repeat-delay"], values["cron"]
 	parsed.timezone, parsed.maxRuns = values["timezone"], values["max-runs"]
 	_, hasTask := values["task"]
@@ -630,13 +620,16 @@ func parseRunArguments(args []string) (runArguments, error) {
 	if value, present := values["parent-run"]; present && strings.TrimSpace(value) == "" {
 		return runArguments{}, errors.New("--parent-run требует непустой run-id")
 	}
-	for _, name := range []string{"repeat-delay", "cron", "timezone", "max-runs"} {
+	for _, name := range []string{"max-parallel", "repeat-delay", "cron", "timezone", "max-runs"} {
 		if value, present := values[name]; present && strings.TrimSpace(value) == "" {
 			return runArguments{}, fmt.Errorf("--%s требует непустое значение", name)
 		}
 	}
-	if strings.TrimSpace(parsed.cwd) == "" || strings.TrimSpace(parsed.initiator) == "" || strings.TrimSpace(parsed.task) == "" && parsed.taskFile == "" {
-		return runArguments{}, errors.New("run требует --cwd, один из --task/--task-file и --initiator-thread-id")
+	if strings.TrimSpace(parsed.cwd) == "" || strings.TrimSpace(parsed.task) == "" && parsed.taskFile == "" {
+		return runArguments{}, errors.New("run требует --cwd и один из --task/--task-file")
+	}
+	if err := capacity.Validate(parsed.maxParallel); err != nil {
+		return runArguments{}, err
 	}
 	if parsed.repeat == "" && (parsed.repeatDelay != "" || parsed.cron != "" || parsed.timezone != "" || parsed.maxRuns != "") {
 		return runArguments{}, errors.New("--repeat-delay, --cron, --timezone и --max-runs требуют --repeat")
@@ -644,17 +637,25 @@ func parseRunArguments(args []string) (runArguments, error) {
 	return parsed, nil
 }
 
-// parseResumeArguments разрешает только постоянный runId и настройки транспорта.
+// parseResumeArguments разрешает только постоянный runId, настройки транспорта
+// и общий root-level лимит, который одинаково действует для run и resume.
 func parseResumeArguments(args []string) (resumeArguments, error) {
 	var parsed resumeArguments
-	positionals, values, err := parseOptions(args, map[string]bool{"root": true, "codex": true})
+	positionals, values, err := parseOptions(args, map[string]bool{"root": true, "codex": true, "max-parallel": true})
 	if err != nil || len(positionals) != 1 || strings.TrimSpace(positionals[0]) == "" {
 		if err != nil {
 			return parsed, err
 		}
-		return parsed, errors.New("использование: lawa resume <run-id> [--root <путь>] [--codex <путь>]")
+		return parsed, errors.New("использование: lawa resume <run-id> [--root <путь>] [--codex <путь>] [--max-parallel <N>]")
 	}
 	parsed.runID, parsed.root, parsed.executable = positionals[0], values["root"], values["codex"]
+	parsed.maxParallel = values["max-parallel"]
+	if value, present := values["max-parallel"]; present && strings.TrimSpace(value) == "" {
+		return resumeArguments{}, errors.New("--max-parallel требует непустое значение")
+	}
+	if err = capacity.Validate(parsed.maxParallel); err != nil {
+		return resumeArguments{}, err
+	}
 	return parsed, nil
 }
 

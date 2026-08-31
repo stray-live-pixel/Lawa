@@ -22,7 +22,7 @@
 </head>
 <body><main>
   <h1>{{.Title}} {{if .Preview}}<span class="badge">fake data</span>{{end}}</h1>
-  <p class="subtitle">Связанные workflow и память кубиков{{if .Refresh}} · обновление каждые {{.Refresh}} сек.{{end}}</p>
+  <p class="subtitle">Связанные workflow, процессы App Server и безопасные события{{if .Refresh}} · обновление каждые {{.Refresh}} сек.{{end}}</p>
   <form class="filters" method="get">
     <label class="search"><span class="sr-only">Поиск</span><input class="control" type="search" name="q" value="{{.Filter.Query}}" placeholder="Flow, кубик, тикет, run/thread ID, текст задачи…" maxlength="300"></label>
     <label><span class="sr-only">Период</span><select class="control" name="period" aria-label="Период">{{range .Filter.Periods}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}</select></label>
@@ -66,8 +66,7 @@
         <span class="meta">{{.State}} · run {{.ID}}{{if .Updated}} · {{.Updated}}{{end}}</span>
       </span>
       <span class="actions">
-        {{if .CodexURL}}<a class="action" href="{{.CodexURL}}" title="Открыть задачу в Codex">Codex</a>{{else}}<span class="action disabled" title="Задача ещё не создана">Codex</span>{{end}}
-        {{if .ThreadLogURL}}<a class="action" href="{{.ThreadLogURL}}" title="Открыть полный сырой rollout Codex в VS Code">Тред JSONL</a>{{else}}<span class="action disabled" title="Локальный rollout Codex не найден">Тред JSONL</span>{{end}}
+        <a class="action" href="{{.EventsURL}}" title="Открыть безопасный журнал событий Lawa">События</a>
         <a class="action" href="{{.VSCodeURL}}" title="Открыть папку run в VS Code">Папка</a>
         {{if .HasUML}}<a class="action" href="{{.UMLURL}}" title="Открыть схему workflow">UML</a>{{else}}<span class="action disabled" title="PNG ещё не создан">UML</span>{{end}}
       </span>
@@ -75,10 +74,9 @@
     <ul class="children">
       {{range .Steps}}<li class="step">
         <span class="dot tone-{{.Tone}}" role="img" aria-label="Статус: {{.State}}" title="{{.State}}"></span>
-        <span class="step-main"><span class="name">{{.ID}}</span><span class="meta">{{.State}}</span></span>
+        <span class="step-main"><span class="name">{{.ID}}</span><span class="meta">{{.State}}{{if .Runtime}} · {{.Runtime}}{{end}}{{if .Action}} · действие: {{.Action}}{{end}}{{if .Message}} · {{.Message}}{{end}}</span></span>
         <span class="actions">
-          {{if .CodexURL}}<a class="action" href="{{.CodexURL}}" title="Открыть задачу в Codex">Codex</a>{{else}}<span class="action disabled" title="Задача ещё не создана">Codex</span>{{end}}
-          {{if .ThreadLogURL}}<a class="action" href="{{.ThreadLogURL}}" title="Открыть полный сырой rollout Codex в VS Code">Тред JSONL</a>{{else}}<span class="action disabled" title="Локальный rollout Codex не найден">Тред JSONL</span>{{end}}
+          <a class="action" href="{{.EventsURL}}" title="Показать события этого кубика">События</a>
           {{if .HasMemory}}<a class="action" href="{{.MemoryURL}}">Память</a>{{else}}<span class="action disabled" title="Память пока пуста">Память</span>{{end}}
         </span>
       </li>{{end}}

@@ -24,7 +24,7 @@ func testInput(t *testing.T) Input {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Input{WorkflowJSON: bytes.ReplaceAll(data, []byte(`"metrics"`), []byte(`"../metrics"`)), Task: "  Проверить проект\n", Comment: "Не менять код", CWD: t.TempDir(), InitiatorThreadID: "initiator"}
+	return Input{WorkflowJSON: bytes.ReplaceAll(data, []byte(`"metrics"`), []byte(`"../metrics"`)), Task: "  Проверить проект\n", Comment: "Не менять код", CWD: t.TempDir()}
 }
 
 // TestCreateErrorDiagnostics проверяет, что обёрнутая ошибка ОС остаётся
@@ -143,7 +143,7 @@ func TestParentRun(t *testing.T) {
 	input := testInput(t)
 	input.ParentRunID = parent.Meta.RunID
 	child, err := Create(root, input)
-	if err != nil || child.Meta.ParentRunID != parent.Meta.RunID || child.Meta.Version != 2 {
+	if err != nil || child.Meta.ParentRunID != parent.Meta.RunID || child.Meta.Version != 3 {
 		t.Fatalf("связь с родителем не сохранена: %+v, %v", child.Meta, err)
 	}
 	loaded, err := Load(root, child.Meta.RunID)
@@ -176,17 +176,18 @@ func TestParentRun(t *testing.T) {
 	}
 }
 
-// TestLegacyMetadataVersion подтверждает чтение прежних snapshot v1. У них не
+// TestHistoricalMetadataVersion подтверждает чтение прежних snapshot v1. У них не
 // было parentRunId, поэтому dashboard считает такие run корнями дерева.
-func TestLegacyMetadataVersion(t *testing.T) {
+func TestHistoricalMetadataVersion(t *testing.T) {
 	root := t.TempDir()
 	snapshot, err := Create(root, testInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := snapshot.Meta
-	legacy.Version = 1
-	data, err := json.Marshal(legacy)
+	historical := snapshot.Meta
+	historical.Version = 1
+	historical.InitiatorThreadID = "historical-controller"
+	data, err := json.Marshal(historical)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -469,7 +470,6 @@ func TestInvalidInputHasNoSideEffects(t *testing.T) {
 		"workflow":   func(in *Input) { in.WorkflowJSON = []byte(`{"id":"x","steps":[]}`) },
 		"постановка": func(in *Input) { in.Task = " \n" },
 		"Unicode":    func(in *Input) { in.Comment = "\xff" },
-		"инициатор":  func(in *Input) { in.InitiatorThreadID = "" },
 		"cwd":        func(in *Input) { in.CWD = "" },
 		"нет cwd":    func(in *Input) { in.CWD = filepath.Join(in.CWD, "missing") },
 		"cwd-файл":   func(in *Input) { in.CWD = "../../examples/review.json" },
@@ -520,20 +520,6 @@ func TestMetadataStates(t *testing.T) {
 			m.Steps[0].CodexThreadID = "existing-chat"
 			check(t, m, false)
 		}
-		// Намеренно создаём теоретический крайний случай: корректный код записи
-		// не подставляет чат управления вместо исполнителя. Это не воспроизведение
-		// реального инцидента. Отдельная ошибка нужна при любом состоянии: даже
-		// для Pending совпадение с инициатором точнее общей ошибки непустого ID.
-		m.Steps[0].CodexThreadID = m.InitiatorThreadID
-		t.Run("чат инициатора вместо исполнителя/"+string(state), func(t *testing.T) {
-			err := check(t, m, true)
-			if !errors.Is(err, ErrInitiatorAsExecutor) {
-				t.Fatalf("обработчик не сможет распознать конфликт чатов: %v", err)
-			}
-			if !strings.Contains(err.Error(), m.RunID) || !strings.Contains(err.Error(), m.Steps[0].ID) {
-				t.Fatalf("в ошибке не хватает запуска или шага для диагностики: %v", err)
-			}
-		})
 	}
 	for name, mutate := range map[string]func(*Metadata){
 		"версия":                func(m *Metadata) { m.Version++ },
@@ -542,7 +528,7 @@ func TestMetadataStates(t *testing.T) {
 		"путь вместо родителя":  func(m *Metadata) { m.ParentRunID = "../parent" },
 		"cwd":                   func(m *Metadata) { m.CWD = "relative" },
 		"нулевой байт cwd":      func(m *Metadata) { m.CWD += "\x00" },
-		"инициатор":             func(m *Metadata) { m.InitiatorThreadID = "" },
+		"инициатор в v3":        func(m *Metadata) { m.InitiatorThreadID = "unexpected-controller" },
 		"пропуск шага":          func(m *Metadata) { m.Steps = m.Steps[1:] },
 		"подмена шага":          func(m *Metadata) { m.Steps[0].ID = "missing" },
 		"дубликат шага":         func(m *Metadata) { m.Steps[0].ID = m.Steps[1].ID },
