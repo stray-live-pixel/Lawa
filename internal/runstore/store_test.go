@@ -130,6 +130,108 @@ func TestCreateLoad(t *testing.T) {
 	}
 }
 
+// TestParentRun сохраняет устойчивую связь только с уже опубликованным run того
+// же хранилища. Новый случайный runId ещё не существует, поэтому при создании
+// ребёнка self-link и цикл конструктивно невозможны; Load отдельно защищает от
+// таких повреждений meta.json.
+func TestParentRun(t *testing.T) {
+	root := t.TempDir()
+	parent, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := testInput(t)
+	input.ParentRunID = parent.Meta.RunID
+	child, err := Create(root, input)
+	if err != nil || child.Meta.ParentRunID != parent.Meta.RunID || child.Meta.Version != 2 {
+		t.Fatalf("связь с родителем не сохранена: %+v, %v", child.Meta, err)
+	}
+	loaded, err := Load(root, child.Meta.RunID)
+	if err != nil || loaded.Meta.ParentRunID != parent.Meta.RunID {
+		t.Fatalf("связь потеряна после чтения: %+v, %v", loaded.Meta, err)
+	}
+
+	before, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	corruptedParent := parent.Meta
+	corruptedParent.ParentRunID = child.Meta.RunID
+	data, err := json.Marshal(corruptedParent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, parent.Meta.RunID, "meta.json"), data)
+	input.ParentRunID = child.Meta.RunID
+	if _, err = Create(root, input); err == nil || !strings.Contains(err.Error(), "образуют цикл") {
+		t.Fatalf("принята циклическая цепочка родителей: %v", err)
+	}
+	input.ParentRunID = strings.Repeat("0", 32)
+	if _, err = Create(root, input); err == nil || !strings.Contains(err.Error(), "родительский run") {
+		t.Fatalf("принят отсутствующий родитель: %v", err)
+	}
+	after, err := os.ReadDir(root)
+	if err != nil || len(after) != len(before) {
+		t.Fatalf("ошибка родителя создала run: до=%d после=%d, %v", len(before), len(after), err)
+	}
+}
+
+// TestLegacyMetadataVersion подтверждает чтение прежних snapshot v1. У них не
+// было parentRunId, поэтому dashboard считает такие run корнями дерева.
+func TestLegacyMetadataVersion(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := snapshot.Meta
+	legacy.Version = 1
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, snapshot.Meta.RunID, "meta.json"), data)
+	if loaded, err := Load(root, snapshot.Meta.RunID); err != nil || loaded.Meta.ParentRunID != "" {
+		t.Fatalf("старый snapshot перестал читаться: %+v, %v", loaded.Meta, err)
+	}
+}
+
+// TestReadDashboardFiles проверяет узкую read-only границу web-сервера. Доступны
+// только память известного кубика и фиксированный PNG, а симлинк не позволяет
+// прочитать произвольный соседний файл даже внутри временного тестового root.
+func TestReadDashboardFiles(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runDir := filepath.Join(root, snapshot.Meta.RunID)
+	threadID := snapshot.Meta.Steps[0].ThreadID
+	memoryPath := filepath.Join(runDir, "memory", threadID+".md")
+	mustWrite(t, memoryPath, []byte("память"))
+	mustWrite(t, filepath.Join(runDir, "workflow-status.png"), []byte("png"))
+	if data, err := ReadMemory(root, snapshot.Meta.RunID, threadID); err != nil || string(data) != "память" {
+		t.Fatalf("не прочитана память: %q, %v", data, err)
+	}
+	if data, err := ReadStatusImage(root, snapshot.Meta.RunID); err != nil || string(data) != "png" {
+		t.Fatalf("не прочитан PNG: %q, %v", data, err)
+	}
+	if _, err := ReadMemory(root, snapshot.Meta.RunID, strings.Repeat("0", 32)); err == nil {
+		t.Fatal("прочитана память неизвестного кубика")
+	}
+	secret := filepath.Join(t.TempDir(), "secret")
+	mustWrite(t, secret, []byte("секрет"))
+	if err := os.Remove(memoryPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(secret, memoryPath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadMemory(root, snapshot.Meta.RunID, threadID); err == nil {
+		t.Fatal("dashboard прочитал память через симлинк")
+	}
+}
+
 // TestRemoveUnstarted ограничивает компенсирующий откат точным новым run. Пока
 // все шаги Pending, каталог удаляется; после первой сохранённой резервации
 // исполнителя тот же вызов обязан оставить историю без изменений.
@@ -397,6 +499,8 @@ func TestMetadataStates(t *testing.T) {
 	for name, mutate := range map[string]func(*Metadata){
 		"версия":                func(m *Metadata) { m.Version++ },
 		"runId":                 func(m *Metadata) { m.RunID = newID() },
+		"родитель равен run":    func(m *Metadata) { m.ParentRunID = m.RunID },
+		"путь вместо родителя":  func(m *Metadata) { m.ParentRunID = "../parent" },
 		"cwd":                   func(m *Metadata) { m.CWD = "relative" },
 		"нулевой байт cwd":      func(m *Metadata) { m.CWD += "\x00" },
 		"инициатор":             func(m *Metadata) { m.InitiatorThreadID = "" },
