@@ -3,6 +3,7 @@
 package runstore
 
 import (
+	"crypto/sha256"
 	"encoding/json/v2"
 	"errors"
 	"fmt"
@@ -300,6 +301,53 @@ func (r *LockedRun) ClaimAppCreation(stepID string) (bool, error) {
 		}
 		if err = r.syncDirectory(); err != nil {
 			r.failed = fmt.Errorf("синхронизация claim запуска %q: %w", r.runID, err)
+			return false, r.failed
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("нет шага %q", stepID)
+}
+
+// ClaimAppContinuation выдаёт право ровно на одно сообщение continue для
+// конкретного interrupted turn. Маркер публикуется до внешнего app-вызова:
+// потеря ответа send_message_to_thread поэтому оставляет только необходимость
+// перечитать тот же чат, а не риск отправить второе продолжение. Новый turn имеет
+// другой digest и может быть отдельно восстановлен после нового наблюдения.
+func (r *LockedRun) ClaimAppContinuation(stepID, turnID string) (bool, error) {
+	if !validText(turnID) {
+		return false, errors.New("app-продолжение требует непустой turn-id UTF-8")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.check(); err != nil {
+		return false, err
+	}
+	s, err := load(r.dir, r.runID)
+	if err != nil {
+		return false, err
+	}
+	for _, step := range s.Meta.Steps {
+		if step.ID != stepID {
+			continue
+		}
+		if step.State != scheduler.Cancelled || step.CodexThreadID == "" {
+			return false, fmt.Errorf("шаг %q не содержит привязанный interrupted turn", stepID)
+		}
+		digest := sha256.Sum256([]byte(turnID))
+		name := fmt.Sprintf("app-continue-%s-%x", step.ThreadID, digest[:])
+		f, createErr := r.dir.OpenFile(name, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if errors.Is(createErr, os.ErrExist) {
+			return false, nil
+		}
+		if createErr != nil {
+			return false, createErr
+		}
+		if err = errors.Join(f.Sync(), f.Close()); err != nil {
+			r.failed = fmt.Errorf("сохранение claim продолжения запуска %q: %w", r.runID, err)
+			return false, r.failed
+		}
+		if err = r.syncDirectory(); err != nil {
+			r.failed = fmt.Errorf("синхронизация claim продолжения запуска %q: %w", r.runID, err)
 			return false, r.failed
 		}
 		return true, nil

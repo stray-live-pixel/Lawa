@@ -21,7 +21,7 @@ func TestAppDriverParallelWorkflowAndRecovery(t *testing.T) {
 }`)
 
 	first := next(t, root, snapshot.Meta.RunID)
-	if first.Kind != "launch" || first.Launch.StepID != "first" || first.Launch.CodexThreadID != "" {
+	if first.Kind != "launch" || first.Launch.StepID != "first" || first.Launch.CodexThreadID != "" || first.Launch.CWD == "" || first.Launch.SectionID != CodexTasksSection {
 		t.Fatalf("первый app-next = %#v", first)
 	}
 	// Повтор до create_thread обязан вернуть тот же зарезервированный кубик. Если
@@ -55,7 +55,7 @@ func TestAppDriverParallelWorkflowAndRecovery(t *testing.T) {
 		t.Fatal("после app-bind сброс claim должен быть запрещён")
 	}
 	recovery := next(t, root, snapshot.Meta.RunID)
-	if recovery.Launch == nil || recovery.Launch.CodexThreadID != "codex-first" || recovery.Launch.Prompt != first.Launch.Prompt {
+	if recovery.Launch == nil || recovery.Launch.CodexThreadID != "codex-first" || recovery.Launch.Prompt != first.Launch.Prompt || recovery.Launch.CWD != first.Launch.CWD {
 		t.Fatalf("восстановление после bind = %#v", recovery)
 	}
 	update(t, root, snapshot.Meta.RunID, "first", "running", nil)
@@ -117,6 +117,26 @@ func TestAppDriverKeepsFailedTaskIdentityForManualContinuation(t *testing.T) {
 	update(t, root, snapshot.Meta.RunID, "work", "succeeded", []byte("recovered"))
 	if after := next(t, root, snapshot.Meta.RunID); after.Launch == nil || after.Launch.StepID != "after" {
 		t.Fatalf("после ручного продолжения = %#v", after)
+	}
+}
+
+func TestAppDriverClaimsEachInterruptedTurnOnce(t *testing.T) {
+	root, snapshot := createTestRun(t, `{
+  "id":"interrupted",
+  "steps":[{"id":"work","type":"agent","prompt":"work","dependsOn":[]}]
+}`)
+	_ = next(t, root, snapshot.Meta.RunID)
+	bind(t, root, snapshot.Meta.RunID, "work", "same-task")
+	update(t, root, snapshot.Meta.RunID, "work", "cancelled", nil)
+	claimed, err := ClaimContinuation(root, snapshot.Meta.RunID, "work", "turn-one")
+	if err != nil || !claimed {
+		t.Fatalf("первый interrupted turn не получил claim: %t, %v", claimed, err)
+	}
+	if claimed, err = ClaimContinuation(root, snapshot.Meta.RunID, "work", "turn-one"); err != nil || claimed {
+		t.Fatalf("тот же turn получил второй continue: %t, %v", claimed, err)
+	}
+	if claimed, err = ClaimContinuation(root, snapshot.Meta.RunID, "work", "turn-two"); err != nil || !claimed {
+		t.Fatalf("новый interrupted turn не отличён от прежнего: %t, %v", claimed, err)
 	}
 }
 

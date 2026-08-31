@@ -112,6 +112,42 @@ func TestSeriesLifecycleAndStopBarrier(t *testing.T) {
 	}
 }
 
+// TestAppSeriesTemplateSurvivesControllerRestart фиксирует главное отличие
+// app-native серии от legacy: завершение создавшего её turn освобождает lock, а
+// следующий heartbeat восстанавливает неизменяемый вход и продолжает тот же ID.
+func TestAppSeriesTemplateSurvivesControllerRestart(t *testing.T) {
+	root := t.TempDir()
+	want := AppTemplate{
+		WorkflowJSON: `{"id":"repeat","steps":[{"id":"work","type":"agent","prompt":"work","dependsOn":[]}]}`,
+		Task:         "постановка", Comment: "комментарий", CWD: t.TempDir(),
+		InitiatorThreadID: "controller", ParentRunID: "parent",
+	}
+	owner, err := CreateApp(root, Config{Mode: After, Delay: "10m"}, want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seriesID := owner.Snapshot().SeriesID
+	if _, err = Open(root, seriesID); !errors.Is(err, ErrSeriesLocked) {
+		t.Fatalf("второй контроллер не увидел занятый lock: %v", err)
+	}
+	if err = owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LoadAppTemplate(root, seriesID)
+	if err != nil || got != want {
+		t.Fatalf("шаблон после перезапуска = %+v, %v", got, err)
+	}
+	reopened, err := Open(root, seriesID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	snapshot := reopened.Snapshot()
+	if snapshot.Version != 2 || snapshot.Driver != AppDriver || snapshot.State != Waiting {
+		t.Fatalf("неверно восстановлена app-серия: %+v", snapshot)
+	}
+}
+
 // TestSeriesParentSync проверяет протокол N2 на настоящих каталогах. Прежде чем
 // Create вернёт владельца, каждое имя от root до series/<id> должно быть сохранено
 // в родителе; относительный root обязан давать тот же абсолютный порядок.

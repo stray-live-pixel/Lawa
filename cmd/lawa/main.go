@@ -35,8 +35,14 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
       Создать run для задач, которыми владеет Codex App; основной режим скилла /lawa.
   lawa app-next <run-id>
       Получить JSON следующего действия: launch, observe, complete или blocked.
+  lawa app-series-next <series-id>
+      Атомарно продолжить app-native серию: run, wait, complete или stopped.
+  lawa app-series-fail <series-id> --run <run-id> --reason-file <путь>
+      Зафиксировать наблюдённый failed/interrupted и остановить app-native серию.
   lawa app-claim <run-id> --step <id>
       Атомарно получить право на единственную попытку создания задачи Codex App.
+  lawa app-continue-claim <run-id> --step <id> --turn-id <id>
+      Атомарно получить право один раз продолжить конкретный interrupted turn.
   lawa app-reset-claim <run-id> --step <id> --confirm-reset <id>
       После подтверждения пользователя разрешить повтор неопределённого create_thread.
   lawa app-bind <run-id> --step <id> --thread-id <id>
@@ -48,7 +54,7 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
   lawa resume <run-id>
       Продолжить сохранённый run и учесть ручную работу в прежних чатах.
   lawa serve [--root <путь>] [--listen <адрес>]
-      Показать дерево workflow; по умолчанию http://127.0.0.1:60800.
+      Показать workflow, тикеты и локальные журналы; по умолчанию http://127.0.0.1:60800.
   lawa series-status <series-id>
       Показать режим, прогресс, текущий run и время следующего запуска.
   lawa series-stop <series-id>
@@ -80,7 +86,8 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
   --timezone <IANA-зона>       Явная зона cron, например Europe/Moscow.
   --max-runs <N>               Положительный лимит; без него серия бесконечна.
 
-app-run принимает обычные параметры run, кроме --codex и повторяющихся серий.
+app-run принимает обычные параметры run, кроме --codex. С --repeat он создаёт
+app-native серию для heartbeat Codex App и возвращает seriesId вместе с действием.
 Workflow со speed пока требует legacy run: task API Codex App не принимает service tier.
 app-next/app-claim/app-reset-claim/app-bind/app-update предназначены для управляющего чата и печатают
 машиночитаемый JSON либо короткое подтверждение; они не запускают app-server.
@@ -270,8 +277,14 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return appRunCommand(ctx, args[1:], out, deps)
 	case "app-next":
 		return appNextCommand(ctx, args[1:], out, deps)
+	case "app-series-next":
+		return appSeriesNextCommand(ctx, args[1:], out, deps)
+	case "app-series-fail":
+		return appSeriesFailCommand(args[1:], out, deps)
 	case "app-claim":
 		return appClaimCommand(args[1:], out, deps)
+	case "app-continue-claim":
+		return appContinueClaimCommand(args[1:], out, deps)
 	case "app-reset-claim":
 		return appResetClaimCommand(args[1:], out, deps)
 	case "app-bind":
