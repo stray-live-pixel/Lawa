@@ -50,6 +50,23 @@ func TestAppCommandsDriveRunWithoutCodexServer(t *testing.T) {
 	if action.Kind != "launch" || action.Launch == nil || action.Launch.StepID != "work" {
 		t.Fatalf("app-next = %#v", action)
 	}
+	if !appClaimResult(t, deps, root, started.RunID, "work") {
+		t.Fatal("первая попытка должна получить claim")
+	}
+	if appClaimResult(t, deps, root, started.RunID, "work") {
+		t.Fatal("повтор без подтверждённого reset не должен получить claim")
+	}
+	var resetOutput bytes.Buffer
+	err = executeContext(context.Background(), []string{
+		"app-reset-claim", started.RunID, "--root", root, "--step", "work", "--confirm-reset", "other",
+	}, &resetOutput, &resetOutput, deps)
+	if err == nil || !strings.Contains(err.Error(), "дубликат") {
+		t.Fatalf("нет защиты от случайного reset: %v", err)
+	}
+	runAppCommand(t, deps, "app-reset-claim", started.RunID, "--root", root, "--step", "work", "--confirm-reset", "work")
+	if !appClaimResult(t, deps, root, started.RunID, "work") {
+		t.Fatal("подтверждённый reset не разрешил одну новую попытку")
+	}
 	runAppCommand(t, deps, "app-bind", started.RunID, "--root", root, "--step", "work", "--thread-id", "child-task")
 	runAppCommand(t, deps, "app-update", started.RunID, "--root", root, "--step", "work", "--state", "running", "--revision", "0")
 	resultPath := filepath.Join(t.TempDir(), "result.md")
@@ -97,6 +114,23 @@ func appCommandAction(t *testing.T, deps dependencies, root, runID string) appdr
 		t.Fatalf("прочитать app-next %q: %v", output.String(), err)
 	}
 	return action
+}
+
+func appClaimResult(t *testing.T, deps dependencies, root, runID, stepID string) bool {
+	t.Helper()
+	var output bytes.Buffer
+	if err := executeContext(context.Background(), []string{
+		"app-claim", runID, "--root", root, "--step", stepID,
+	}, &output, &output, deps); err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		MayCreate bool `json:"mayCreate"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(output.Bytes()), &result); err != nil {
+		t.Fatalf("прочитать app-claim %q: %v", output.String(), err)
+	}
+	return result.MayCreate
 }
 
 func runAppCommand(t *testing.T, deps dependencies, args ...string) {

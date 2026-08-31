@@ -19,7 +19,7 @@ import (
 )
 
 // appRunCommand создаёт только устойчивое состояние run. Жизненным циклом задач
-// владеет вызывающий чат Codex App через app-next/app-claim/app-bind/app-update; поэтому
+// владеет вызывающий чат Codex App через app-next/app-claim/app-reset-claim/app-bind/app-update; поэтому
 // здесь нет проверки и запуска отдельного app-server. Повторяющиеся серии пока
 // остаются у legacy run: их фоновый процесс не имеет app-инструментов Desktop.
 func appRunCommand(ctx context.Context, args []string, out io.Writer, deps dependencies) error {
@@ -109,6 +109,24 @@ func appClaimCommand(args []string, out io.Writer, deps dependencies) error {
 	return writeJSON(out, struct {
 		MayCreate bool `json:"mayCreate"`
 	}{claimed})
+}
+
+func appResetClaimCommand(args []string, out io.Writer, deps dependencies) error {
+	runID, root, values, err := parseAppMutation("app-reset-claim", args, deps, map[string]bool{
+		"step": true, "confirm-reset": true,
+	})
+	if err != nil {
+		return err
+	}
+	stepID := strings.TrimSpace(values["step"])
+	if stepID == "" || values["confirm-reset"] != stepID {
+		return errors.New("app-reset-claim требует --step <id> и точное --confirm-reset <id>; повтор может создать дубликат задачи")
+	}
+	if err = appdriver.ResetClaim(root, runID, stepID); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintln(out, "ok")
+	return err
 }
 
 func appBindCommand(ctx context.Context, args []string, out io.Writer, deps dependencies) error {

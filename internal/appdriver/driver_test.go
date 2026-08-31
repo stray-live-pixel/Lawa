@@ -30,6 +30,9 @@ func TestAppDriverParallelWorkflowAndRecovery(t *testing.T) {
 	if repeated.Launch == nil || repeated.Launch.StepID != "first" || repeated.Launch.Title != first.Launch.Title {
 		t.Fatalf("повтор app-next = %#v", repeated)
 	}
+	if err := ResetClaim(root, snapshot.Meta.RunID, "first"); err == nil {
+		t.Fatal("нельзя сбросить claim, который ещё не выдавался")
+	}
 	claimed, err := Claim(root, snapshot.Meta.RunID, "first")
 	if err != nil || !claimed {
 		t.Fatalf("первый координатор не получил claim: %t, %v", claimed, err)
@@ -37,8 +40,20 @@ func TestAppDriverParallelWorkflowAndRecovery(t *testing.T) {
 	if claimed, err = Claim(root, snapshot.Meta.RunID, "first"); err != nil || claimed {
 		t.Fatalf("второй координатор получил повторный claim: %t, %v", claimed, err)
 	}
+	// Если после нескольких поисков пользователь подтвердил, что хочет рискнуть
+	// повтором, явный reset возвращает право ровно на одну новую попытку. Само
+	// отсутствие title не вызывает reset автоматически.
+	if err = ResetClaim(root, snapshot.Meta.RunID, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err = Claim(root, snapshot.Meta.RunID, "first"); err != nil || !claimed {
+		t.Fatalf("после подтверждённого reset новая попытка не разрешена: %t, %v", claimed, err)
+	}
 
 	bind(t, root, snapshot.Meta.RunID, "first", "codex-first")
+	if err = ResetClaim(root, snapshot.Meta.RunID, "first"); err == nil {
+		t.Fatal("после app-bind сброс claim должен быть запрещён")
+	}
 	recovery := next(t, root, snapshot.Meta.RunID)
 	if recovery.Launch == nil || recovery.Launch.CodexThreadID != "codex-first" || recovery.Launch.Prompt != first.Launch.Prompt {
 		t.Fatalf("восстановление после bind = %#v", recovery)

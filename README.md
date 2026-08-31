@@ -431,6 +431,7 @@ lawa app-run <workflow.json> --cwd <проект> \
   --initiator-thread-id <id> [--parent-run <run-id>]
 lawa app-next <run-id>
 lawa app-claim <run-id> --step <id>
+lawa app-reset-claim <run-id> --step <id> --confirm-reset <id>
 lawa app-bind <run-id> --step <id> --thread-id <id>
 lawa app-update <run-id> --step <id> --state <state> --revision <N> [--result-file <путь>]
 
@@ -453,6 +454,11 @@ lawa help
 Для многострочной постановки и текста со специальными символами используйте
 `--task-file` и `--comment-file`: содержимое файлов не интерпретируется оболочкой.
 Полный список параметров всегда доступен через `lawa help`.
+
+`app-reset-claim` — аварийная операция после неопределённого `create_thread`.
+Она допустима только для непривязанного кубика и только после явного согласия
+пользователя: прежняя задача могла быть создана, поэтому повтор несёт риск дубля.
+Обычный reconnect ищет стабильный title и никогда не сбрасывает claim автоматически.
 
 `--parent-run` связывает новый run с уже существующим run того же хранилища.
 Связь необязательна, сохраняется в `meta.json` и используется только для дерева

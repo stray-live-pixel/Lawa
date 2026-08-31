@@ -119,6 +119,19 @@ func Claim(root, runID, stepID string) (claimed bool, err error) {
 	return run.ClaimAppCreation(stepID)
 }
 
+// ResetClaim выполняет только подтверждённый пользователем аварийный сброс.
+// Обычное восстановление всегда ищет прежнюю задачу по title и не вызывает этот
+// метод: отсутствие задачи в одном снимке list_threads не доказывает, что внешний
+// create_thread не был принят Codex App.
+func ResetClaim(root, runID, stepID string) (err error) {
+	run, err := runstore.OpenLocked(root, runID)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, run.Close()) }()
+	return run.ResetAppCreationClaim(stepID)
+}
+
 // Bind сохраняет identity сразу после атомарного создания app-задачи с уникальными
 // title и первым prompt. Если ответ create потерян, управляющий чат сначала находит
 // задачу по title и привязывает её вместо повторного создания. Повтор с тем же ID

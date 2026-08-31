@@ -298,17 +298,71 @@ func (r *LockedRun) ClaimAppCreation(stepID string) (bool, error) {
 			r.failed = fmt.Errorf("сохранение claim запуска %q: %w", r.runID, err)
 			return false, r.failed
 		}
-		dir, syncErr := r.dir.Open(".")
-		if syncErr == nil {
-			syncErr = errors.Join(dir.Sync(), dir.Close())
-		}
-		if syncErr != nil {
-			r.failed = fmt.Errorf("синхронизация claim запуска %q: %w", r.runID, syncErr)
+		if err = r.syncDirectory(); err != nil {
+			r.failed = fmt.Errorf("синхронизация claim запуска %q: %w", r.runID, err)
 			return false, r.failed
 		}
 		return true, nil
 	}
 	return false, fmt.Errorf("нет шага %q", stepID)
+}
+
+// ResetAppCreationClaim удаляет защитный маркер только по явному решению
+// пользователя повторить неопределённую попытку create_thread. Автоматически
+// вызывать этот метод нельзя: задача могла быть создана, а её ответ — потерян,
+// поэтому новый create способен породить дубль. Перед вызовом управляющий чат
+// обязан повторно искать детерминированный title и объяснить пользователю риск.
+//
+// Сброс допустим только для Starting без сохранённого CodexThreadID. После bind
+// identity считается установленной навсегда, даже если позднее задача завершилась.
+func (r *LockedRun) ResetAppCreationClaim(stepID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.check(); err != nil {
+		return err
+	}
+	s, err := load(r.dir, r.runID)
+	if err != nil {
+		return err
+	}
+	for _, step := range s.Meta.Steps {
+		if step.ID != stepID {
+			continue
+		}
+		if step.State != scheduler.Starting || step.CodexThreadID != "" {
+			return fmt.Errorf("шаг %q: claim можно сбросить только до app-bind", stepID)
+		}
+		name := "app-create-" + step.ThreadID
+		info, statErr := r.dir.Lstat(name)
+		if statErr != nil {
+			if errors.Is(statErr, os.ErrNotExist) {
+				return fmt.Errorf("шаг %q: claim ещё не выдавался", stepID)
+			}
+			return statErr
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("шаг %q: маркер claim должен быть обычным файлом", stepID)
+		}
+		if err = r.dir.Remove(name); err != nil {
+			return fmt.Errorf("удалить claim шага %q: %w", stepID, err)
+		}
+		if err = r.syncDirectory(); err != nil {
+			r.failed = fmt.Errorf("синхронизация сброса claim запуска %q: %w", r.runID, err)
+			return r.failed
+		}
+		return nil
+	}
+	return fmt.Errorf("нет шага %q", stepID)
+}
+
+// syncDirectory сохраняет создание или удаление служебного имени в каталоге run.
+// Открытый дескриптор всегда закрывается, в том числе после ошибки Sync.
+func (r *LockedRun) syncDirectory() error {
+	dir, err := r.dir.Open(".")
+	if err != nil {
+		return err
+	}
+	return errors.Join(dir.Sync(), dir.Close())
 }
 
 // update принимает Sync явно для проверки отказов до и после публикации meta

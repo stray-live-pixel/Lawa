@@ -37,6 +37,8 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
       Получить JSON следующего действия: launch, observe, complete или blocked.
   lawa app-claim <run-id> --step <id>
       Атомарно получить право на единственную попытку создания задачи Codex App.
+  lawa app-reset-claim <run-id> --step <id> --confirm-reset <id>
+      После подтверждения пользователя разрешить повтор неопределённого create_thread.
   lawa app-bind <run-id> --step <id> --thread-id <id>
       Сохранить identity сразу после создания задачи Codex App.
   lawa app-update <run-id> --step <id> --state <state> --revision <N> [--result-file <путь>]
@@ -80,7 +82,7 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
 
 app-run принимает обычные параметры run, кроме --codex и повторяющихся серий.
 Workflow со speed пока требует legacy run: task API Codex App не принимает service tier.
-app-next/app-claim/app-bind/app-update предназначены для управляющего чата и печатают
+app-next/app-claim/app-reset-claim/app-bind/app-update предназначены для управляющего чата и печатают
 машиночитаемый JSON либо короткое подтверждение; они не запускают app-server.
 
 Параметры resume:
@@ -270,6 +272,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return appNextCommand(ctx, args[1:], out, deps)
 	case "app-claim":
 		return appClaimCommand(args[1:], out, deps)
+	case "app-reset-claim":
+		return appResetClaimCommand(args[1:], out, deps)
 	case "app-bind":
 		return appBindCommand(ctx, args[1:], out, deps)
 	case "app-update":
