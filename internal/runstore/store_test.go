@@ -130,6 +130,42 @@ func TestCreateLoad(t *testing.T) {
 	}
 }
 
+// TestRemoveUnstarted ограничивает компенсирующий откат точным новым run. Пока
+// все шаги Pending, каталог удаляется; после первой сохранённой резервации
+// исполнителя тот же вызов обязан оставить историю без изменений.
+func TestRemoveUnstarted(t *testing.T) {
+	root := t.TempDir()
+	fresh, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = RemoveUnstarted(root, fresh.Meta.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = Load(root, fresh.Meta.RunID); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("незапущенный run не удалён: %v", err)
+	}
+	started, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locked, err := OpenLocked(root, started.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = locked.Reserve([]string{started.Meta.Steps[0].ID})
+	err = errors.Join(err, locked.Close())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = RemoveUnstarted(root, started.Meta.RunID); err == nil {
+		t.Fatal("откат удалил run после начала исполнения")
+	}
+	if _, err = Load(root, started.Meta.RunID); err != nil {
+		t.Fatalf("запущенный run потерян после запрещённого отката: %v", err)
+	}
+}
+
 // TestStorageParentSync проверяет порядок сохранения имён каталогов: прежде чем
 // создавать дочернюю папку, имя родителя должно быть сохранено в его родителе.
 // Это проверка протокола Sync на реальных каталогах, а не имитация потери питания.

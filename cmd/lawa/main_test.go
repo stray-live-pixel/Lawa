@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -18,6 +19,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/series"
 	"github.com/stray-live-pixel/Lawa/internal/statusreport"
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
@@ -87,6 +89,37 @@ type failingWriter struct{ err error }
 
 // Write имитирует отказ приёмника до записи первого байта.
 func (w failingWriter) Write([]byte) (int, error) { return 0, w.err }
+
+// failOnWriteWriter пропускает служебные сообщения до заданной записи. Он нужен
+// для воспроизведения отказа после публикации seriesId и создания первого run.
+type failOnWriteWriter struct {
+	writes, failAt int
+	err            error
+}
+
+// Write возвращает настроенную ошибку ровно на выбранной операции вывода.
+func (w *failOnWriteWriter) Write(p []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, w.err
+	}
+	return len(p), nil
+}
+
+// failOnTextWriter имитирует отказ только на сообщении с заданным текстом. Так
+// тест финальной сводки не зависит от числа промежуточных heartbeat-записей.
+type failOnTextWriter struct {
+	text string
+	err  error
+}
+
+// Write пропускает служебный вывод и отказывает на выбранной сводке.
+func (w failOnTextWriter) Write(p []byte) (int, error) {
+	if strings.Contains(string(p), w.text) {
+		return 0, w.err
+	}
+	return len(p), nil
+}
 
 // cliRendererFunc подставляет renderer в сквозные CLI-тесты без внешнего PlantUML.
 type cliRendererFunc func(context.Context, []byte) ([]byte, error)
@@ -312,6 +345,7 @@ type cliFakeClient struct {
 	runs      map[string]int
 	continues map[string]int
 	inspect   map[string]codex.WorkStatus
+	onRun     func()
 }
 
 type cliFakeObserver struct{ client *cliFakeClient }
@@ -327,6 +361,9 @@ func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Res
 	c.mu.Lock()
 	c.runs[stepID]++
 	c.mu.Unlock()
+	if c.onRun != nil {
+		c.onRun()
+	}
 	if err := command.OnThread(threadID); err != nil {
 		return codex.Result{ThreadID: threadID, CreationAttempted: true}, err
 	}
@@ -390,10 +427,224 @@ func cliTestDependencies(client coordinator.Client, check func(context.Context, 
 		refreshInterval: coordinator.DefaultRefreshInterval,
 		chatInterval:    defaultChatInterval,
 		now:             time.Now,
+		waitUntil:       series.WaitUntil,
 		renderer:        successfulCLIRenderer(),
 		userHomeDir: func() (string, error) {
 			return "", errors.New("home не должен использоваться при --root")
 		},
+	}
+}
+
+// TestRecurringRunModesWithControlledClock проходит публичный CLI для всех
+// режимов. Управляемые часы доказывают точный лимит, отсчёт after от завершения
+// и отсутствие очереди cron-точек, пропущенных во время долгого run.
+func TestRecurringRunModesWithControlledClock(t *testing.T) {
+	cases := []struct {
+		name        string
+		flags       []string
+		start       time.Time
+		runDuration time.Duration
+		wantTargets []time.Time
+	}{
+		{
+			name: "immediate", flags: []string{"--repeat", "immediate", "--max-runs", "3"},
+			start:       time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC),
+			wantTargets: []time.Time{time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC), time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC), time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC)},
+		},
+		{
+			name: "after", flags: []string{"--repeat", "after", "--repeat-delay", "1h", "--max-runs", "2"},
+			start: time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC), runDuration: 15 * time.Minute,
+			wantTargets: []time.Time{time.Date(2026, 8, 31, 10, 0, 0, 0, time.UTC), time.Date(2026, 8, 31, 11, 15, 0, 0, time.UTC)},
+		},
+		{
+			name: "cron", flags: []string{"--repeat", "cron", "--cron", "0 10 * * *", "--timezone", "Europe/Moscow", "--max-runs", "2"},
+			start: time.Date(2026, 8, 31, 6, 59, 0, 0, time.UTC), runDuration: 2 * time.Hour,
+			wantTargets: []time.Time{time.Date(2026, 8, 31, 7, 0, 0, 0, time.UTC), time.Date(2026, 9, 1, 7, 0, 0, 0, time.UTC)},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, cwd := filepath.Join(t.TempDir(), "runs"), t.TempDir()
+			workflowPath := filepath.Join(t.TempDir(), "workflow.json")
+			if err := os.WriteFile(workflowPath, []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var clockMu sync.Mutex
+			current := tc.start
+			now := func() time.Time {
+				clockMu.Lock()
+				defer clockMu.Unlock()
+				return current
+			}
+			client := newCLIFakeClient()
+			client.onRun = func() {
+				clockMu.Lock()
+				current = current.Add(tc.runDuration)
+				clockMu.Unlock()
+			}
+			deps := cliTestDependencies(client, func(context.Context, codex.Connection) error { return nil })
+			deps.now = now
+			var targets []time.Time
+			deps.waitUntil = func(_ context.Context, target time.Time, _ func() time.Time, _ func() (bool, error)) error {
+				targets = append(targets, target)
+				clockMu.Lock()
+				current = target
+				clockMu.Unlock()
+				return nil
+			}
+			args := []string{"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator", "--root", root}
+			args = append(args, tc.flags...)
+			var out bytes.Buffer
+			if err := executeContext(t.Context(), args, &out, io.Discard, deps); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(targets, tc.wantTargets) {
+				t.Fatalf("точки запуска: %v; ожидались %v", targets, tc.wantTargets)
+			}
+			if got := strings.Count(out.String(), "runId:"); got != len(tc.wantTargets) {
+				t.Fatalf("создано %d run вместо %d: %q", got, len(tc.wantTargets), out.String())
+			}
+			seriesEntries, err := os.ReadDir(filepath.Join(root, "series"))
+			if err != nil || len(seriesEntries) != 1 {
+				t.Fatalf("не найдена одна серия: %v, %v", seriesEntries, err)
+			}
+			snapshot, err := series.Load(root, seriesEntries[0].Name())
+			if err != nil || snapshot.State != series.Completed || snapshot.RunsStarted != len(tc.wantTargets) || snapshot.RunsFinished != len(tc.wantTargets) {
+				t.Fatalf("неверный прогресс серии: %+v, %v", snapshot, err)
+			}
+		})
+	}
+}
+
+// TestRecurringRunWithoutLimitStopsExplicitly проверяет публичный бесконечный
+// режим: отсутствие --max-runs не завершает серию само, а series-stop перед
+// третьей итерацией оставляет ровно два законченных обычных run.
+func TestRecurringRunWithoutLimitStopsExplicitly(t *testing.T) {
+	parent, cwd := t.TempDir(), t.TempDir()
+	root, workflowPath := filepath.Join(parent, "runs"), filepath.Join(parent, "workflow.json")
+	if err := os.WriteFile(workflowPath, []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
+	waits := 0
+	deps.waitUntil = func(ctx context.Context, _ time.Time, _ func() time.Time, _ func() (bool, error)) error {
+		waits++
+		if waits != 3 {
+			return nil
+		}
+		entries, err := os.ReadDir(filepath.Join(root, "series"))
+		if err != nil {
+			return fmt.Errorf("найти серию для остановки: %w", err)
+		}
+		if len(entries) != 1 {
+			return fmt.Errorf("для остановки ожидалась одна серия, найдено %d", len(entries))
+		}
+		return executeContext(ctx, []string{"series-stop", entries[0].Name(), "--root", root}, io.Discard, io.Discard, deps)
+	}
+	var out bytes.Buffer
+	err := executeContext(t.Context(), []string{
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator",
+		"--root", root, "--repeat", "immediate",
+	}, &out, io.Discard, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "series"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("не найдена остановленная серия: %v, %v", entries, err)
+	}
+	snapshot, err := series.Load(root, entries[0].Name())
+	if err != nil || snapshot.State != series.Stopped || snapshot.Config.MaxRuns != 0 || snapshot.RunsStarted != 2 || snapshot.RunsFinished != 2 || !snapshot.StopRequested || strings.Count(out.String(), "runId:") != 2 {
+		t.Fatalf("серия без лимита завершилась не по явному stop: %+v, waits=%d out=%q err=%v", snapshot, waits, out.String(), err)
+	}
+}
+
+// TestRecurringRunOutputFailureKeepsCurrentRun воспроизводит R1 через публичный
+// CLI: run уже создан, но его ID не удалось вывести. Серия должна показать этот
+// незавершённый run оператору, а не засчитать ложный терминал.
+func TestRecurringRunOutputFailureKeepsCurrentRun(t *testing.T) {
+	parent, cwd := t.TempDir(), t.TempDir()
+	root := filepath.Join(parent, "runs")
+	workflowPath := filepath.Join(parent, "workflow.json")
+	if err := os.WriteFile(workflowPath, []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("stdout закрыт")
+	out := &failOnWriteWriter{failAt: 2, err: failure}
+	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
+	err := executeContext(t.Context(), []string{
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator",
+		"--root", root, "--repeat", "immediate", "--max-runs", "1",
+	}, out, io.Discard, deps)
+	if !errors.Is(err, failure) {
+		t.Fatalf("ошибка вывода потеряна: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "series"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("не найдена созданная серия: %v, %v", entries, err)
+	}
+	snapshot, err := series.Load(root, entries[0].Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != series.Failed || snapshot.RunsStarted != 1 || snapshot.RunsFinished != 0 || snapshot.CurrentRunID == "" || snapshot.LastError != failure.Error() {
+		t.Fatalf("ошибка вывода ложно завершила run: %+v", snapshot)
+	}
+	run, err := runstore.Load(root, snapshot.CurrentRunID)
+	if err != nil || run.Meta.Steps[0].State != scheduler.Pending {
+		t.Fatalf("series-status ссылается не на незавершённый run: %+v, %v", run.Meta.Steps, err)
+	}
+}
+
+// TestRecurringRunFinalOutputFailureFinishesCurrentRun закрывает N1 через
+// публичный CLI. Оператор видит ошибку финального stdout, но series-status больше
+// не предлагает resume для run, каждый шаг которого уже сохранён как Succeeded.
+func TestRecurringRunFinalOutputFailureFinishesCurrentRun(t *testing.T) {
+	parent, cwd := t.TempDir(), t.TempDir()
+	root := filepath.Join(parent, "runs")
+	workflowPath := filepath.Join(parent, "workflow.json")
+	if err := os.WriteFile(workflowPath, []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	failure := errors.New("финальный stdout закрыт")
+	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
+	err := executeContext(t.Context(), []string{
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--initiator-thread-id", "initiator",
+		"--root", root, "--repeat", "immediate", "--max-runs", "1",
+	}, failOnTextWriter{text: "успешно завершён", err: failure}, io.Discard, deps)
+	if !errors.Is(err, failure) {
+		t.Fatalf("ошибка финального вывода потеряна: %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(root, "series"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("не найдена созданная серия: %v, %v", entries, err)
+	}
+	snapshot, err := series.Load(root, entries[0].Name())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.State != series.Failed || snapshot.RunsStarted != 1 || snapshot.RunsFinished != 1 || snapshot.CurrentRunID != "" || !strings.Contains(snapshot.LastError, failure.Error()) {
+		t.Fatalf("терминальный run не учтён после ошибки вывода: %+v", snapshot)
+	}
+	rootEntries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runID string
+	for _, entry := range rootEntries {
+		if entry.IsDir() && entry.Name() != "series" {
+			if runID != "" {
+				t.Fatalf("после одного повтора найдено несколько run: %q и %q", runID, entry.Name())
+			}
+			runID = entry.Name()
+		}
+	}
+	if runID == "" {
+		t.Fatal("обычный run не найден")
+	}
+	run, err := runstore.Load(root, runID)
+	if err != nil || len(run.Meta.Steps) != 1 || run.Meta.Steps[0].State != scheduler.Succeeded {
+		t.Fatalf("обычный run потерял успешный терминал: %+v, %v", run.Meta.Steps, err)
 	}
 }
 
@@ -512,6 +763,9 @@ func TestArgumentParsingAndExitCodes(t *testing.T) {
 		{"workflow.json", "--unknown", "x"},
 		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--task-file", "/tmp/task", "--initiator-thread-id", "i"},
 		{"first", "second", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i"},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--repeat="},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--repeat", "after", "--repeat-delay="},
+		{"workflow.json", "--cwd", "/tmp", "--task", "x", "--initiator-thread-id", "i", "--max-runs", "2"},
 	} {
 		if _, err := parseRunArguments(args); err == nil {
 			t.Errorf("приняты неверные аргументы: %v", args)

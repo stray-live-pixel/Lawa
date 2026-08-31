@@ -425,6 +425,23 @@ func TestExecuteParallelChain(t *testing.T) {
 	}
 }
 
+// TestExecuteReturnsTerminalFailureForSeries закрепляет выбранную продуктовую
+// политику: обычный run ждёт ручной работы, а серия получает явный терминал и
+// не создаёт следующий run после failed.
+func TestExecuteReturnsTerminalFailureForSeries(t *testing.T) {
+	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"one","type":"agent","prompt":"Один","dependsOn":[]}]}`)
+	client := newFakeClient()
+	client.runStatuses["one"] = []string{"failed"}
+	client.inspectStatuses["chat-one"] = []codex.WorkStatus{codex.WorkFailed}
+	outcome, err := ExecuteWithOutcome(t.Context(), run, Options{Root: root, PollInterval: time.Millisecond, Client: client, ReturnOnFailure: true})
+	if !errors.Is(err, ErrRunUnsuccessful) {
+		t.Fatalf("failed run не остановил серию: %v", err)
+	}
+	if !outcome.Terminal || outcome.Successful {
+		t.Fatalf("failed run получил неверный терминал: %+v", outcome)
+	}
+}
+
 // TestExecuteManualContinuation проверяет главный resume-сценарий MVP: failed
 // не создаёт второй чат, последующий completed открывает зависимый шаг.
 func TestExecuteManualContinuation(t *testing.T) {
@@ -589,7 +606,7 @@ func TestExecuteReleasesUnattemptedCreation(t *testing.T) {
 
 // TestExecuteCancellationInterruptsTurn проверяет локальный контракт сигнала:
 // координатор адресно прерывает активный turn, сохраняет Cancelled и возвращает
-// управление без ожидания искусственного завершения работы агентом.
+// типизированный терминал серии без ожидания искусственного завершения агентом.
 func TestExecuteCancellationInterruptsTurn(t *testing.T) {
 	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"one","type":"agent","prompt":"Один","dependsOn":[]}]}`)
 	client := newFakeClient()
@@ -598,7 +615,7 @@ func TestExecuteCancellationInterruptsTurn(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() {
-		done <- Execute(ctx, run, Options{Root: root, PollInterval: time.Hour, Client: client})
+		done <- Execute(ctx, run, Options{Root: root, PollInterval: time.Hour, Client: client, ReturnOnFailure: true})
 	}()
 	select {
 	case <-client.started:
@@ -608,7 +625,7 @@ func TestExecuteCancellationInterruptsTurn(t *testing.T) {
 	cancel()
 	select {
 	case err := <-done:
-		if !errors.Is(err, context.Canceled) {
+		if !errors.Is(err, context.Canceled) || !errors.Is(err, ErrRunUnsuccessful) {
 			t.Fatalf("неверная ошибка отмены: %v", err)
 		}
 	case <-time.After(time.Second):
@@ -694,5 +711,33 @@ func TestExecuteErrorDrainsTurn(t *testing.T) {
 	snapshot, err := run.Load()
 	if err != nil || snapshot.Meta.Steps[0].State != scheduler.Succeeded {
 		t.Fatalf("терминальный статус не сохранён при ошибке вывода: %+v, %v", snapshot.Meta.Steps, err)
+	}
+}
+
+// TestExecuteWithOutcomeKeepsFinalSuccessOnNotifyError воспроизводит границу N1:
+// финальный снимок уже подтверждает успех run, хотя пользовательский канал не
+// смог его принять. Управляющий цикл получает и терминал, и исходную ошибку.
+func TestExecuteWithOutcomeKeepsFinalSuccessOnNotifyError(t *testing.T) {
+	root, run := createExecutionRun(t, `{"id":"flow","steps":[{"id":"one","type":"agent","prompt":"Один","dependsOn":[]}]}`)
+	client := newFakeClient()
+	failure := errors.New("финальный stdout недоступен")
+	outcome, err := ExecuteWithOutcome(t.Context(), run, Options{
+		Root: root, PollInterval: time.Millisecond, Client: client, ReturnOnFailure: true,
+		Notify: func(status Status) error {
+			if status.Complete {
+				return failure
+			}
+			return nil
+		},
+	})
+	if !errors.Is(err, failure) {
+		t.Fatalf("ошибка финального вывода потеряна: %v", err)
+	}
+	if !outcome.Terminal || !outcome.Successful {
+		t.Fatalf("успешный терминал потерян из-за вывода: %+v", outcome)
+	}
+	snapshot, loadErr := run.Load()
+	if loadErr != nil || snapshot.Meta.Steps[0].State != scheduler.Succeeded {
+		t.Fatalf("run не сохранил успех: %+v, %v", snapshot.Meta.Steps, loadErr)
 	}
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/series"
 	"github.com/stray-live-pixel/Lawa/internal/statusreport"
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
@@ -33,6 +34,10 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
       Создать run, запустить готовые кубики и наблюдать до общего успеха.
   lawa resume <run-id>
       Продолжить сохранённый run и учесть ручную работу в прежних чатах.
+  lawa series-status <series-id>
+      Показать режим, прогресс, текущий run и время следующего запуска.
+  lawa series-stop <series-id>
+      Запретить будущие run серии; уже работающий run спокойно завершается.
   lawa validate <workflow.json>
       Проверить поля, ссылки и отсутствие циклов без создания run.
   lawa skill
@@ -53,6 +58,11 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
   --initiator-thread-id <id>   ID чата, из которого вызван /lawa; обязательно.
   --root <путь>                Хранилище run; по умолчанию ~/.light-ai-workflows.
   --codex <путь>               Исполняемый файл Codex; по умолчанию codex из PATH.
+  --repeat <режим>             immediate, after или cron.
+  --repeat-delay <интервал>    Задержка after от завершения run, например 1h.
+  --cron <расписание>          Стандартные 5 полей: minute hour day month weekday.
+  --timezone <IANA-зона>       Явная зона cron, например Europe/Moscow.
+  --max-runs <N>               Положительный лимит; без него серия бесконечна.
 
 Параметры resume:
   --root <путь>                То же хранилище run.
@@ -171,6 +181,7 @@ type dependencies struct {
 	refreshInterval time.Duration
 	chatInterval    time.Duration
 	now             func() time.Time
+	waitUntil       func(context.Context, time.Time, func() time.Time, func() (bool, error)) error
 	renderer        statusreport.Renderer
 	userHomeDir     func() (string, error)
 	update          updateDependencies
@@ -190,6 +201,7 @@ func productionDependencies() dependencies {
 		refreshInterval: coordinator.DefaultRefreshInterval,
 		chatInterval:    defaultChatInterval,
 		now:             time.Now,
+		waitUntil:       series.WaitUntil,
 		// Pipe-режим не даёт renderer доступ к путям run. Отсутствующий или
 		// сломанный PlantUML станет видимой диагностикой, но не остановит workflow.
 		renderer:    statusreport.CommandRenderer{Executable: "plantuml", Timeout: 30 * time.Second},
@@ -233,6 +245,10 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return runCommand(ctx, args[1:], out, stderr, deps)
 	case "resume":
 		return resumeCommand(ctx, args[1:], out, stderr, deps)
+	case "series-status":
+		return seriesStatusCommand(args[1:], out, deps)
+	case "series-stop":
+		return seriesStopCommand(args[1:], out, deps)
 	case "update":
 		return updateCommand(ctx, args[1:], out, stderr, deps.update)
 	default:
@@ -262,6 +278,7 @@ func validateCommand(args []string, out io.Writer) error {
 // runArguments хранит уже разобранные, но ещё не нормализованные параметры run.
 type runArguments struct {
 	workflow, cwd, task, taskFile, comment, commentFile, initiator, root, executable string
+	repeat, repeatDelay, cron, timezone, maxRuns                                     string
 }
 
 // resumeArguments не содержит cwd: продолжение обязано использовать сохранённый.
@@ -301,21 +318,33 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 	if !utf8.ValidString(parsed.task+parsed.comment+parsed.initiator) || strings.TrimSpace(parsed.task) == "" || strings.TrimSpace(parsed.initiator) == "" {
 		return errors.New("постановка и ID чата должны быть непустым текстом UTF-8; комментарий также должен быть UTF-8")
 	}
+	var config series.Config
+	var schedule series.Schedule
+	if parsed.repeat != "" {
+		config, schedule, err = series.ParseConfig(parsed.repeat, parsed.repeatDelay, parsed.cron, parsed.timezone, parsed.maxRuns)
+		if err != nil {
+			return err
+		}
+	}
 	connection := codex.Connection{Executable: parsed.executable, CWD: parsed.cwd, Stderr: stderr}
 	if err = deps.check(ctx, connection); err != nil {
 		return fmt.Errorf("проверить подключение Codex: %w", err)
 	}
-	snapshot, err := runstore.Create(parsed.root, runstore.Input{
+	input := runstore.Input{
 		WorkflowJSON: workflowJSON,
 		Task:         parsed.task, Comment: parsed.comment, CWD: parsed.cwd, InitiatorThreadID: parsed.initiator,
-	})
+	}
+	if parsed.repeat != "" {
+		return runSeries(ctx, parsed.root, parsed.executable, input, config, schedule, out, stderr, deps)
+	}
+	snapshot, err := runstore.Create(parsed.root, input)
 	if err != nil {
 		return fmt.Errorf("создать запуск: %w", err)
 	}
 	if _, err = fmt.Fprintf(out, "runId: %s\n", snapshot.Meta.RunID); err != nil {
 		return err
 	}
-	return coordinate(ctx, parsed.root, snapshot.Meta.RunID, parsed.executable, out, stderr, deps, false)
+	return coordinate(ctx, parsed.root, snapshot.Meta.RunID, parsed.executable, out, stderr, deps, false, false)
 }
 
 // resumeCommand никогда не создаёт замену отсутствующему или повреждённому run.
@@ -327,36 +356,162 @@ func resumeCommand(ctx context.Context, args []string, out, stderr io.Writer, de
 	if parsed.root, err = resolveRoot(parsed.root, deps.userHomeDir); err != nil {
 		return err
 	}
-	return coordinate(ctx, parsed.root, parsed.runID, parsed.executable, out, stderr, deps, true)
+	return coordinate(ctx, parsed.root, parsed.runID, parsed.executable, out, stderr, deps, true, false)
+}
+
+// runSeries последовательно создаёт обычные run. Блокирующий coordinate служит
+// главным барьером параллельности: следующий run нельзя запланировать, пока
+// предыдущий не вернул терминальный успех или явную неуспешность.
+func runSeries(ctx context.Context, root, executable string, input runstore.Input, config series.Config, schedule series.Schedule, out, stderr io.Writer, deps dependencies) (err error) {
+	owner, err := series.Create(root, config)
+	if err != nil {
+		return fmt.Errorf("создать серию: %w", err)
+	}
+	defer func() { err = errors.Join(err, owner.Close()) }()
+	if _, err = fmt.Fprintf(out, "seriesId: %s\n", owner.Snapshot().SeriesID); err != nil {
+		return err
+	}
+	for {
+		meta := owner.Snapshot()
+		if config.MaxRuns > 0 && meta.RunsStarted >= config.MaxRuns {
+			return owner.FinishSeries(series.Completed)
+		}
+		if stopped, checkErr := owner.StopRequested(); checkErr != nil {
+			return checkErr
+		} else if stopped {
+			return owner.FinishSeries(series.Stopped)
+		}
+		next := schedule.Next(deps.now(), meta.RunsStarted)
+		if err = owner.SetNext(next); err != nil {
+			return fmt.Errorf("сохранить следующий запуск серии: %w", err)
+		}
+		if err = deps.waitUntil(ctx, next, deps.now, owner.StopRequested); err != nil {
+			if errors.Is(err, series.ErrStopped) {
+				return owner.FinishSeries(series.Stopped)
+			}
+			return errors.Join(err, owner.FinishSeries(series.Stopped))
+		}
+		var snapshot runstore.Snapshot
+		started, startErr := owner.StartRun(func() (string, error) {
+			var createErr error
+			snapshot, createErr = runstore.Create(root, input)
+			return snapshot.Meta.RunID, createErr
+		}, func(runID string) error {
+			return runstore.RemoveUnstarted(root, runID)
+		})
+		if startErr != nil {
+			return fmt.Errorf("создать run серии: %w", startErr)
+		}
+		if !started {
+			return owner.FinishSeries(series.Stopped)
+		}
+		if _, err = fmt.Fprintf(out, "runId: %s\n", snapshot.Meta.RunID); err != nil {
+			return errors.Join(err, owner.FailRunControl(err))
+		}
+		outcome, runErr := coordinateWithOutcome(ctx, root, snapshot.Meta.RunID, executable, out, stderr, deps, false, true)
+		// Терминальность берём из сохранённого состояния, а не выводим из ошибки.
+		// Поэтому отказ финальной сводки останавливает серию и остаётся видимым,
+		// но уже успешный run всё равно учитывается и больше не предлагается resume.
+		if outcome.Terminal {
+			if finishErr := owner.FinishRun(runErr); finishErr != nil {
+				return errors.Join(runErr, fmt.Errorf("сохранить завершение run серии: %w", finishErr))
+			}
+		} else if controlErr := owner.FailRunControl(runErr); controlErr != nil {
+			return errors.Join(runErr, fmt.Errorf("сохранить ошибку управления серией: %w", controlErr))
+		}
+		if runErr != nil {
+			return runErr
+		}
+	}
+}
+
+// seriesStatusCommand — read-only диагностика, пригодная и после завершения процесса.
+func seriesStatusCommand(args []string, out io.Writer, deps dependencies) error {
+	seriesID, root, err := parseSeriesArguments(args, deps)
+	if err != nil {
+		return err
+	}
+	snapshot, err := series.Load(root, seriesID)
+	if err != nil {
+		return fmt.Errorf("прочитать серию %q: %w", seriesID, err)
+	}
+	next, current := "-", snapshot.CurrentRunID
+	if snapshot.NextRunAt != nil {
+		next = snapshot.NextRunAt.Format(time.RFC3339)
+	}
+	if current == "" {
+		current = "-"
+	}
+	lastError := ""
+	if snapshot.LastError != "" {
+		lastError = "последняя ошибка: " + snapshot.LastError + "\n"
+	}
+	_, err = fmt.Fprintf(out, "seriesId: %s\nрежим: %s\nсостояние: %s\nзапусков: %d начато, %d завершено\ncurrentRunId: %s\nnextRunAt: %s\nstopRequested: %t\n%s", snapshot.SeriesID, snapshot.Config.Mode, snapshot.State, snapshot.RunsStarted, snapshot.RunsFinished, current, next, snapshot.StopRequested, lastError)
+	return err
+}
+
+// seriesStopCommand публикует идемпотентный stop-маркер. Текущий run намеренно
+// не прерывается: это не оставляет interrupted-чаты и соответствует безопасной остановке.
+func seriesStopCommand(args []string, out io.Writer, deps dependencies) error {
+	seriesID, root, err := parseSeriesArguments(args, deps)
+	if err != nil {
+		return err
+	}
+	if err = series.RequestStop(root, seriesID); err != nil {
+		return fmt.Errorf("остановить серию %q: %w", seriesID, err)
+	}
+	_, err = fmt.Fprintf(out, "Серия %s остановится после текущего run; новые run не создаются.\n", seriesID)
+	return err
+}
+
+func parseSeriesArguments(args []string, deps dependencies) (string, string, error) {
+	positionals, values, err := parseOptions(args, map[string]bool{"root": true})
+	if err != nil || len(positionals) != 1 || strings.TrimSpace(positionals[0]) == "" {
+		if err != nil {
+			return "", "", err
+		}
+		return "", "", errors.New("использование: lawa series-status|series-stop <series-id> [--root <путь>]")
+	}
+	root, err := resolveRoot(values["root"], deps.userHomeDir)
+	return positionals[0], root, err
 }
 
 // coordinate удерживает lock на протяжении preflight, сверки и исполнения.
 // Любая ошибка закрывает только владельца хранилища; сохранённые чаты не удаляются.
 // resume отличает явное продолжение от первого run: только resume имеет право
 // автоматически отправлять continue в interrupted-чаты.
-func coordinate(ctx context.Context, root, runID, executable string, out, stderr io.Writer, deps dependencies, resume bool) (err error) {
+func coordinate(ctx context.Context, root, runID, executable string, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (err error) {
+	_, err = coordinateWithOutcome(ctx, root, runID, executable, out, stderr, deps, resume, returnOnFailure)
+	return err
+}
+
+// coordinateWithOutcome сохраняет результат Execute отдельно от ошибок открытия,
+// вывода и закрытия хранилища. Терминальный Outcome остаётся действительным, если
+// ошибка управления произошла уже после надёжного сохранения состояния run.
+func coordinateWithOutcome(ctx context.Context, root, runID, executable string, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (outcome coordinator.Outcome, err error) {
 	run, err := runstore.OpenLocked(root, runID)
 	if err != nil {
-		return fmt.Errorf("открыть запуск %q: %w", runID, err)
+		return coordinator.Outcome{}, fmt.Errorf("открыть запуск %q: %w", runID, err)
 	}
 	defer func() { err = errors.Join(err, run.Close()) }()
 	snapshot, err := run.Load()
 	if err != nil {
-		return fmt.Errorf("прочитать запуск %q: %w", runID, err)
+		return coordinator.Outcome{}, fmt.Errorf("прочитать запуск %q: %w", runID, err)
 	}
 	if resume {
 		if err = deps.check(ctx, codex.Connection{Executable: executable, CWD: snapshot.Meta.CWD, Stderr: stderr}); err != nil {
-			return fmt.Errorf("проверить подключение Codex: %w", err)
+			return coordinator.Outcome{}, fmt.Errorf("проверить подключение Codex: %w", err)
 		}
 	}
 	if _, err = fmt.Fprintf(out, "Наблюдение за run %s.\n", runID); err != nil {
-		return err
+		return coordinator.Outcome{}, err
 	}
 	publisher := newStatusPublisher(ctx, out, filepath.Join(root, runID), deps.renderer, deps.chatInterval, deps.now)
-	return coordinator.Execute(ctx, run, coordinator.Options{
+	return coordinator.ExecuteWithOutcome(ctx, run, coordinator.Options{
 		Root: root, PollInterval: deps.pollInterval, RefreshInterval: deps.refreshInterval,
 		Client: deps.client(executable, stderr), ContinueInterrupted: resume,
-		Notify: publisher.Publish,
+		ReturnOnFailure: returnOnFailure,
+		Notify:          publisher.Publish,
 	})
 }
 
@@ -366,7 +521,8 @@ func parseRunArguments(args []string) (runArguments, error) {
 	var parsed runArguments
 	positionals, values, err := parseOptions(args, map[string]bool{
 		"cwd": true, "task": true, "task-file": true, "comment": true, "comment-file": true,
-		"initiator-thread-id": true, "root": true, "codex": true,
+		"initiator-thread-id": true, "root": true, "codex": true, "repeat": true,
+		"repeat-delay": true, "cron": true, "timezone": true, "max-runs": true,
 	})
 	if err != nil || len(positionals) != 1 {
 		if err != nil {
@@ -378,18 +534,32 @@ func parseRunArguments(args []string) (runArguments, error) {
 	parsed.taskFile, parsed.comment = values["task-file"], values["comment"]
 	parsed.commentFile, parsed.initiator = values["comment-file"], values["initiator-thread-id"]
 	parsed.root, parsed.executable = values["root"], values["codex"]
+	parsed.repeat, parsed.repeatDelay, parsed.cron = values["repeat"], values["repeat-delay"], values["cron"]
+	parsed.timezone, parsed.maxRuns = values["timezone"], values["max-runs"]
 	_, hasTask := values["task"]
 	_, hasTaskFile := values["task-file"]
 	_, hasComment := values["comment"]
 	_, hasCommentFile := values["comment-file"]
+	_, hasRepeat := values["repeat"]
 	// Взаимоисключение относится к выбранным способам передачи, а не к тексту.
 	// Пустой --comment= допустим сам по себе, но вместе с --comment-file он уже
 	// неоднозначен. Проверка значений пропускала такую пару как будто флага не было.
 	if (hasTask && hasTaskFile) || (hasComment && hasCommentFile) {
 		return runArguments{}, errors.New("используйте только один из --task/--task-file и --comment/--comment-file")
 	}
+	if hasRepeat && strings.TrimSpace(parsed.repeat) == "" {
+		return runArguments{}, errors.New("--repeat требует режим immediate, after или cron")
+	}
+	for _, name := range []string{"repeat-delay", "cron", "timezone", "max-runs"} {
+		if value, present := values[name]; present && strings.TrimSpace(value) == "" {
+			return runArguments{}, fmt.Errorf("--%s требует непустое значение", name)
+		}
+	}
 	if strings.TrimSpace(parsed.cwd) == "" || strings.TrimSpace(parsed.initiator) == "" || strings.TrimSpace(parsed.task) == "" && parsed.taskFile == "" {
 		return runArguments{}, errors.New("run требует --cwd, один из --task/--task-file и --initiator-thread-id")
+	}
+	if parsed.repeat == "" && (parsed.repeatDelay != "" || parsed.cron != "" || parsed.timezone != "" || parsed.maxRuns != "") {
+		return runArguments{}, errors.New("--repeat-delay, --cron, --timezone и --max-runs требуют --repeat")
 	}
 	return parsed, nil
 }
