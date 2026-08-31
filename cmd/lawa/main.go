@@ -31,8 +31,20 @@ import (
 const help = `Lawa — выполнение JSON-workflow через отдельные задачи Codex.
 
 Команды:
+  lawa app-run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>) --initiator-thread-id <id>
+      Создать run для задач, которыми владеет Codex App; основной режим скилла /lawa.
+  lawa app-next <run-id>
+      Получить JSON следующего действия: launch, observe, complete или blocked.
+  lawa app-claim <run-id> --step <id>
+      Атомарно получить право на единственную попытку создания задачи Codex App.
+  lawa app-reset-claim <run-id> --step <id> --confirm-reset <id>
+      После подтверждения пользователя разрешить повтор неопределённого create_thread.
+  lawa app-bind <run-id> --step <id> --thread-id <id>
+      Сохранить identity сразу после создания задачи Codex App.
+  lawa app-update <run-id> --step <id> --state <state> --revision <N> [--result-file <путь>]
+      Сохранить живой или финальный статус; succeeded требует финальный ответ.
   lawa run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>) --initiator-thread-id <id>
-      Создать run, запустить готовые кубики и наблюдать до общего успеха.
+      Legacy: выполнить workflow через отдельные app-server для терминала/автоматизации.
   lawa resume <run-id>
       Продолжить сохранённый run и учесть ручную работу в прежних чатах.
   lawa serve [--root <путь>] [--listen <адрес>]
@@ -67,6 +79,11 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
   --cron <расписание>          Стандартные 5 полей: minute hour day month weekday.
   --timezone <IANA-зона>       Явная зона cron, например Europe/Moscow.
   --max-runs <N>               Положительный лимит; без него серия бесконечна.
+
+app-run принимает обычные параметры run, кроме --codex и повторяющихся серий.
+Workflow со speed пока требует legacy run: task API Codex App не принимает service tier.
+app-next/app-claim/app-reset-claim/app-bind/app-update предназначены для управляющего чата и печатают
+машиночитаемый JSON либо короткое подтверждение; они не запускают app-server.
 
 Параметры resume:
   --root <путь>                То же хранилище run.
@@ -249,6 +266,18 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 	switch args[0] {
 	case "validate":
 		return validateCommand(args[1:], out)
+	case "app-run":
+		return appRunCommand(ctx, args[1:], out, deps)
+	case "app-next":
+		return appNextCommand(ctx, args[1:], out, deps)
+	case "app-claim":
+		return appClaimCommand(args[1:], out, deps)
+	case "app-reset-claim":
+		return appResetClaimCommand(args[1:], out, deps)
+	case "app-bind":
+		return appBindCommand(ctx, args[1:], out, deps)
+	case "app-update":
+		return appUpdateCommand(ctx, args[1:], out, deps)
 	case "run":
 		return runCommand(ctx, args[1:], out, stderr, deps)
 	case "resume":
