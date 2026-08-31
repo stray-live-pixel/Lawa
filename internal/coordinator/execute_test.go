@@ -28,6 +28,7 @@ type fakeClient struct {
 	runs, creations, continues map[string]int
 	interrupts                 map[string]int
 	interruptFailures          map[string]error
+	latestTurns                map[string]string
 	inspects                   map[string]int
 	observerOpens              int
 	observerCloses             int
@@ -48,6 +49,7 @@ func newFakeClient() *fakeClient {
 		continues:          map[string]int{},
 		interrupts:         map[string]int{},
 		interruptFailures:  map[string]error{},
+		latestTurns:        map[string]string{},
 		inspects:           map[string]int{},
 	}
 }
@@ -83,13 +85,18 @@ func (c *fakeClient) Run(ctx context.Context, command codex.Command) (codex.Resu
 		}
 	}
 	if command.OnTurn != nil {
-		command.OnTurn("turn-"+stepID, func(ctx context.Context) error {
+		if err := command.OnTurn("turn-"+stepID, func(ctx context.Context) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			return c.interrupt(stepID)
-		})
+		}); err != nil {
+			return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, CreationAttempted: true, TurnAttempted: true}, err
+		}
 	}
+	c.mu.Lock()
+	c.latestTurns[threadID] = "turn-" + stepID
+	c.mu.Unlock()
 	if command.Notify != nil {
 		if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 			return codex.Result{ThreadID: threadID, CreationAttempted: true, TurnAttempted: true}, err
@@ -134,13 +141,18 @@ func (c *fakeClient) Continue(ctx context.Context, threadID string, command code
 		return codex.Result{ThreadID: threadID}, err
 	}
 	if command.OnTurn != nil {
-		command.OnTurn("continued-"+stepID, func(ctx context.Context) error {
+		if err := command.OnTurn("continued-"+stepID, func(ctx context.Context) error {
 			if err := ctx.Err(); err != nil {
 				return err
 			}
 			return c.interrupt(stepID)
-		})
+		}); err != nil {
+			return codex.Result{ThreadID: threadID, TurnID: "continued-" + stepID, TurnAttempted: true}, err
+		}
 	}
+	c.mu.Lock()
+	c.latestTurns[threadID] = "continued-" + stepID
+	c.mu.Unlock()
 	if command.Notify != nil {
 		if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 			return codex.Result{ThreadID: threadID, TurnID: "continued-" + stepID, TurnAttempted: true}, err
@@ -191,7 +203,11 @@ func (o *fakeObserver) Inspect(threadID string) (codex.Observation, error) {
 			c.inspectStatuses[threadID] = statuses[1:]
 		}
 	}
-	return observationFor(threadID, status), nil
+	observation := observationFor(threadID, status)
+	if latest := c.latestTurns[threadID]; latest != "" {
+		observation.LatestTurnID = latest
+	}
+	return observation, nil
 }
 
 func (o *fakeObserver) Close() error {
@@ -235,7 +251,7 @@ func createExecutionRun(t *testing.T, workflowJSON string) (string, *runstore.Lo
 	t.Helper()
 	root := t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
-		WorkflowJSON: []byte(workflowJSON), Task: "Сделать MVP", CWD: t.TempDir(), InitiatorThreadID: "initiator",
+		WorkflowJSON: []byte(workflowJSON), Task: "Сделать MVP", CWD: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -474,6 +490,9 @@ func TestExecuteReusesObserverAcrossPolling(t *testing.T) {
 	for _, stepID := range stepIDs {
 		threadID := "chat-" + stepID
 		if err := run.Update(stepID, scheduler.Failed, threadID); err != nil {
+			t.Fatal(err)
+		}
+		if err := run.SetTurn(stepID, "turn-1"); err != nil {
 			t.Fatal(err)
 		}
 		client.inspectStatuses[threadID] = []codex.WorkStatus{codex.WorkFailed}

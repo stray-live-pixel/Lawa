@@ -92,10 +92,8 @@ func TestLockedUpdates(t *testing.T) {
 	if err := r.Update(other, scheduler.Starting, ""); err != nil {
 		t.Fatal(err)
 	}
-	for _, chat := range []string{"chat", initial.Meta.InitiatorThreadID} {
-		if err := r.Update(other, scheduler.Running, chat); err == nil {
-			t.Fatalf("принят общий чат %q", chat)
-		}
+	if err := r.Update(other, scheduler.Running, "chat"); err == nil {
+		t.Fatal("принят уже используемый чат")
 	}
 	for _, name := range []string{"meta.json", "coordinator.lock"} {
 		info, err := os.Stat(filepath.Join(root, initial.Meta.RunID, name))

@@ -499,21 +499,33 @@ func startLaunch(run *runstore.LockedRun, client Client, ctx context.Context, la
 	go func() {
 		defer execution.finish()
 		command := launch.Command
-		var threadID string
+		var threadID, turnID string
+		command.OnProcess = func(process codex.ProcessEvent) error {
+			return appendProcessEvent(run, launch.StepID, threadID, turnID, process)
+		}
 		command.OnThread = func(id string) error {
 			threadID = id
 			if err := run.Update(launch.StepID, scheduler.Unknown, id); err != nil {
 				return err
 			}
 			execution.setThread(id)
-			return nil
+			return run.AppendEvent(runstore.RuntimeEvent{StepID: launch.StepID, ThreadID: id, Kind: "thread_started"})
 		}
-		command.OnTurn = execution.setTurn
+		command.OnTurn = func(id string, interrupt func(context.Context) error) error {
+			turnID = id
+			if err := run.SetTurn(launch.StepID, id); err != nil {
+				return err
+			}
+			execution.setTurn(id, interrupt)
+			return run.AppendEvent(runstore.RuntimeEvent{StepID: launch.StepID, ThreadID: threadID, TurnID: id, Kind: "turn_bound"})
+		}
 		command.Notify = func(event codex.Event) error {
 			if event.Method == "turn/started" {
-				return run.Update(launch.StepID, scheduler.Running, threadID)
+				if err := run.Update(launch.StepID, scheduler.Running, threadID); err != nil {
+					return err
+				}
 			}
-			return nil
+			return appendCodexEvent(run, launch.StepID, threadID, turnID, event)
 		}
 		result, err := client.Run(ctx, command)
 		results <- launchResult{stepID: launch.StepID, result: result, err: err}
@@ -527,12 +539,25 @@ func startContinuation(run *runstore.LockedRun, client Client, ctx context.Conte
 	go func() {
 		defer execution.finish()
 		command := continuation.Command
-		command.OnTurn = execution.setTurn
+		turnID := ""
+		command.OnProcess = func(process codex.ProcessEvent) error {
+			return appendProcessEvent(run, continuation.StepID, continuation.ThreadID, turnID, process)
+		}
+		command.OnTurn = func(id string, interrupt func(context.Context) error) error {
+			turnID = id
+			if err := run.SetTurn(continuation.StepID, id); err != nil {
+				return err
+			}
+			execution.setTurn(id, interrupt)
+			return run.AppendEvent(runstore.RuntimeEvent{StepID: continuation.StepID, ThreadID: continuation.ThreadID, TurnID: id, Kind: "turn_bound"})
+		}
 		command.Notify = func(event codex.Event) error {
 			if event.Method == "turn/started" {
-				return run.Update(continuation.StepID, scheduler.Running, continuation.ThreadID)
+				if err := run.Update(continuation.StepID, scheduler.Running, continuation.ThreadID); err != nil {
+					return err
+				}
 			}
-			return nil
+			return appendCodexEvent(run, continuation.StepID, continuation.ThreadID, turnID, event)
 		}
 		result, err := client.Continue(ctx, continuation.ThreadID, command)
 		results <- launchResult{stepID: continuation.StepID, result: result, err: err}
@@ -579,6 +604,16 @@ func saveLaunchResult(run *runstore.LockedRun, completed launchResult) error {
 	}
 	if err := run.Update(completed.stepID, state, result.ThreadID); err != nil {
 		return fmt.Errorf("координатор: сохранить результат шага %q: %w", completed.stepID, err)
+	}
+	event := runstore.RuntimeEvent{
+		StepID: completed.stepID, ThreadID: result.ThreadID, TurnID: result.TurnID,
+		Kind: "step_state", State: string(state),
+	}
+	if runErr != nil {
+		event.Message = runErr.Error()
+	}
+	if err := run.AppendEvent(event); err != nil {
+		return fmt.Errorf("координатор: сохранить событие результата шага %q: %w", completed.stepID, err)
 	}
 	if runErr != nil && state != scheduler.WaitingForApproval {
 		return fmt.Errorf("координатор: шаг %q, чат %q: %w", completed.stepID, result.ThreadID, runErr)
@@ -628,6 +663,20 @@ func reconcile(run *runstore.LockedRun, observer Observer, active map[string]*ac
 		if state != step.State {
 			if err := run.Update(step.ID, state, step.CodexThreadID); err != nil {
 				return fmt.Errorf("координатор: сохранить статус шага %q: %w", step.ID, err)
+			}
+		}
+		turnChanged := observation.LatestTurnID != "" && observation.LatestTurnID != step.TurnID
+		if turnChanged {
+			if err := run.SetTurn(step.ID, observation.LatestTurnID); err != nil {
+				return fmt.Errorf("координатор: сохранить последний turn шага %q: %w", step.ID, err)
+			}
+		}
+		if state != step.State || turnChanged {
+			if err := run.AppendEvent(runstore.RuntimeEvent{
+				StepID: step.ID, ThreadID: step.CodexThreadID, TurnID: observation.LatestTurnID,
+				Kind: "thread_reconciled", State: string(state),
+			}); err != nil {
+				return fmt.Errorf("координатор: сохранить сверку шага %q: %w", step.ID, err)
 			}
 		}
 	}
@@ -698,13 +747,4 @@ func currentStatus(run *runstore.LockedRun) (Status, string, error) {
 	status.Waiting, status.Complete = plan.Waiting, plan.Complete
 	fmt.Fprintf(&signature, "waiting=%s;complete=%t", strings.Join(plan.Waiting, ","), plan.Complete)
 	return status, signature.String(), nil
-}
-
-// CurrentStatus возвращает тот же целостный снимок, который длительный stdio-
-// координатор передаёт statusreport. Короткие app-native команды используют его
-// после каждой устойчивой мутации, чтобы dashboard, Markdown и UML не зависели
-// от того, какой транспорт владеет задачами Codex.
-func CurrentStatus(run *runstore.LockedRun) (Status, error) {
-	status, _, err := currentStatus(run)
-	return status, err
 }

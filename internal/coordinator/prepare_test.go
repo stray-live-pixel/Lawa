@@ -44,7 +44,7 @@ func TestPrepare(t *testing.T) {
 	cwd := t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(`{"id":"demo","model":"gpt-5.6-luna","steps":[{"id":"first","type":"agent","prompt":"Первая задача","dependsOn":[],"model":"gpt-5.6-sol","effort":"high","speed":"fast"},{"id":"second","type":"agent","prompt":"Вторая задача","dependsOn":[],"speed":"normal"}]}`),
-		Task:         "Сделать MVP", Comment: "Проверить границы", CWD: cwd, InitiatorThreadID: "initiator",
+		Task:         "Сделать MVP", Comment: "Проверить границы", CWD: cwd,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -116,7 +116,7 @@ func TestPrepareContinuationKeepsRuntimeSettings(t *testing.T) {
 	root := t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(`{"id":"resume","model":"gpt-5.6-terra","steps":[{"id":"step","type":"agent","prompt":"Задача","dependsOn":[],"effort":"medium","speed":"fast"}]}`),
-		Task:         "Задача", CWD: t.TempDir(), InitiatorThreadID: "initiator",
+		Task:         "Задача", CWD: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -152,7 +152,7 @@ func TestPrepareWaitsForDependencies(t *testing.T) {
 	root := t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(`{"id":"chain","steps":[{"id":"child","type":"agent","prompt":"Итог","dependsOn":["parent"]},{"id":"parent","type":"agent","prompt":"Факты","dependsOn":[]}]}`),
-		Task:         "Задача", CWD: t.TempDir(), InitiatorThreadID: "initiator",
+		Task:         "Задача", CWD: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +181,7 @@ func TestPrepareChecksRoot(t *testing.T) {
 	root := t.TempDir()
 	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Задача","dependsOn":[]}]}`),
-		Task:         "Задача", CWD: t.TempDir(), InitiatorThreadID: "initiator",
+		Task:         "Задача", CWD: t.TempDir(),
 	})
 	if err != nil {
 		t.Fatal(err)

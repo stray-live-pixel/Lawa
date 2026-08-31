@@ -3,10 +3,7 @@ package dashboard
 import (
 	"encoding/json/v2"
 	"html/template"
-	"io/fs"
 	"net/url"
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -124,84 +121,4 @@ func safeWebURL(raw string) template.URL {
 		return ""
 	}
 	return template.URL(parsed.String())
-}
-
-// threadLogIndex связывает UUID задачи Codex с принадлежащим ей локальным raw
-// rollout. Файл является полным машинным журналом событий, а не подготовленным
-// пользовательским транскриптом; dashboard только открывает его в VS Code.
-type threadLogIndex map[string]template.URL
-
-// resolveCodexHome повторяет стандартное правило Codex: явный CODEX_HOME имеет
-// приоритет, иначе используется ~/.codex. Ошибка определения home просто отключает
-// необязательные кнопки журналов и не мешает наблюдать сами workflow.
-func resolveCodexHome() string {
-	home := strings.TrimSpace(os.Getenv("CODEX_HOME"))
-	if home == "" {
-		userHome, err := os.UserHomeDir()
-		if err != nil {
-			return ""
-		}
-		home = filepath.Join(userHome, ".codex")
-	}
-	absolute, err := filepath.Abs(home)
-	if err != nil {
-		return ""
-	}
-	return absolute
-}
-
-// indexThreadLogs выполняет один линейный проход по именам файлов на обновление
-// dashboard. Это дешевле отдельного обхода для каждого шага. WalkDir не следует
-// по симлинкам; в индекс попадают лишь стандартные rollout с точным UUID в имени.
-// Активный sessions имеет приоритет над archived_sessions при неожиданном дубле.
-func indexThreadLogs(codexHome string) threadLogIndex {
-	logs := make(threadLogIndex)
-	if codexHome == "" {
-		return logs
-	}
-	for _, directory := range []string{"sessions", "archived_sessions"} {
-		_ = filepath.WalkDir(filepath.Join(codexHome, directory), func(path string, entry fs.DirEntry, err error) error {
-			if err != nil || entry.IsDir() || entry.Type()&fs.ModeSymlink != 0 {
-				return nil
-			}
-			info, infoErr := entry.Info()
-			if infoErr != nil || !info.Mode().IsRegular() {
-				return nil
-			}
-			threadID, ok := threadIDFromRollout(entry.Name())
-			if !ok || logs[threadID] != "" {
-				return nil
-			}
-			logs[threadID] = vscodeFileURL(path)
-			return nil
-		})
-	}
-	return logs
-}
-
-// threadIDFromRollout принимает только rollout-*.jsonl, заканчивающийся UUID.
-// Проверка формата одновременно документирует текущий локальный layout Codex и
-// не позволяет необычному имени файла создать ссылку для произвольной строки ID.
-func threadIDFromRollout(name string) (string, bool) {
-	const uuidLength = 36
-	if !strings.HasPrefix(name, "rollout-") || !strings.HasSuffix(name, ".jsonl") || len(name) < len("rollout-")+uuidLength+len(".jsonl") {
-		return "", false
-	}
-	idStart := len(name) - len(".jsonl") - uuidLength
-	if idStart == 0 || name[idStart-1] != '-' {
-		return "", false
-	}
-	id := name[idStart : len(name)-len(".jsonl")]
-	for index, char := range id {
-		if index == 8 || index == 13 || index == 18 || index == 23 {
-			if char != '-' {
-				return "", false
-			}
-			continue
-		}
-		if !strings.ContainsRune("0123456789abcdefABCDEF", char) {
-			return "", false
-		}
-	}
-	return id, true
 }
