@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -18,7 +19,7 @@ import (
 )
 
 // appRunCommand создаёт только устойчивое состояние run. Жизненным циклом задач
-// владеет вызывающий чат Codex App через app-next/app-bind/app-update; поэтому
+// владеет вызывающий чат Codex App через app-next/app-claim/app-bind/app-update; поэтому
 // здесь нет проверки и запуска отдельного app-server. Повторяющиеся серии пока
 // остаются у legacy run: их фоновый процесс не имеет app-инструментов Desktop.
 func appRunCommand(ctx context.Context, args []string, out io.Writer, deps dependencies) error {
@@ -93,6 +94,23 @@ func appNextCommand(ctx context.Context, args []string, out io.Writer, deps depe
 	return writeJSON(out, action)
 }
 
+func appClaimCommand(args []string, out io.Writer, deps dependencies) error {
+	runID, root, values, err := parseAppMutation("app-claim", args, deps, map[string]bool{"step": true})
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(values["step"]) == "" {
+		return errors.New("app-claim требует --step")
+	}
+	claimed, err := appdriver.Claim(root, runID, values["step"])
+	if err != nil {
+		return err
+	}
+	return writeJSON(out, struct {
+		MayCreate bool `json:"mayCreate"`
+	}{claimed})
+}
+
 func appBindCommand(ctx context.Context, args []string, out io.Writer, deps dependencies) error {
 	runID, root, values, err := parseAppMutation("app-bind", args, deps, map[string]bool{"step": true, "thread-id": true})
 	if err != nil {
@@ -113,13 +131,17 @@ func appBindCommand(ctx context.Context, args []string, out io.Writer, deps depe
 
 func appUpdateCommand(ctx context.Context, args []string, out io.Writer, deps dependencies) error {
 	runID, root, values, err := parseAppMutation("app-update", args, deps, map[string]bool{
-		"step": true, "state": true, "result-file": true,
+		"step": true, "state": true, "revision": true, "result-file": true,
 	})
 	if err != nil {
 		return err
 	}
-	if strings.TrimSpace(values["step"]) == "" || strings.TrimSpace(values["state"]) == "" {
-		return errors.New("app-update требует --step и --state")
+	if strings.TrimSpace(values["step"]) == "" || strings.TrimSpace(values["state"]) == "" || strings.TrimSpace(values["revision"]) == "" {
+		return errors.New("app-update требует --step, --state и --revision")
+	}
+	revision, err := strconv.ParseUint(values["revision"], 10, 64)
+	if err != nil {
+		return fmt.Errorf("app-update: неверная --revision: %w", err)
 	}
 	var result []byte
 	if path := values["result-file"]; path != "" {
@@ -127,7 +149,7 @@ func appUpdateCommand(ctx context.Context, args []string, out io.Writer, deps de
 			return fmt.Errorf("прочитать финальный ответ: %w", err)
 		}
 	}
-	if err = appdriver.Update(root, runID, values["step"], values["state"], result); err != nil {
+	if err = appdriver.Update(root, runID, values["step"], values["state"], revision, result); err != nil {
 		return err
 	}
 	if err = refreshAppArtifacts(ctx, root, runID, deps); err != nil {

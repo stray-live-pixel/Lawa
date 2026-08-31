@@ -1,6 +1,7 @@
 package appdriver
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -29,6 +30,13 @@ func TestAppDriverParallelWorkflowAndRecovery(t *testing.T) {
 	if repeated.Launch == nil || repeated.Launch.StepID != "first" || repeated.Launch.Title != first.Launch.Title {
 		t.Fatalf("повтор app-next = %#v", repeated)
 	}
+	claimed, err := Claim(root, snapshot.Meta.RunID, "first")
+	if err != nil || !claimed {
+		t.Fatalf("первый координатор не получил claim: %t, %v", claimed, err)
+	}
+	if claimed, err = Claim(root, snapshot.Meta.RunID, "first"); err != nil || claimed {
+		t.Fatalf("второй координатор получил повторный claim: %t, %v", claimed, err)
+	}
 
 	bind(t, root, snapshot.Meta.RunID, "first", "codex-first")
 	recovery := next(t, root, snapshot.Meta.RunID)
@@ -49,7 +57,7 @@ func TestAppDriverParallelWorkflowAndRecovery(t *testing.T) {
 
 	observed := next(t, root, snapshot.Meta.RunID)
 	if observed.Kind != "observe" || len(observed.Tasks) != 1 || observed.Tasks[0].StepID != "first" ||
-		len(observed.Waiting) != 1 || observed.Waiting[0] != "final" {
+		observed.Tasks[0].Revision != 1 || len(observed.Waiting) != 1 || observed.Waiting[0] != "final" {
 		t.Fatalf("наблюдение незавершённой волны = %#v", observed)
 	}
 	update(t, root, snapshot.Meta.RunID, "first", "succeeded", []byte("first result"))
@@ -107,8 +115,35 @@ func TestAppDriverRejectsDuplicateTaskAndSuccessWithoutResult(t *testing.T) {
 	if err := Bind(root, snapshot.Meta.RunID, "only", "duplicate"); err == nil {
 		t.Fatal("другой task id должен быть запрещён")
 	}
-	if err := Update(root, snapshot.Meta.RunID, "only", "succeeded", nil); err == nil {
+	if err := Update(root, snapshot.Meta.RunID, "only", "succeeded", 0, nil); err == nil {
 		t.Fatal("успех без финального ответа должен быть запрещён")
+	}
+}
+
+func TestAppDriverRejectsStaleObservationAndFinalizesSuccess(t *testing.T) {
+	root, snapshot := createTestRun(t, `{
+  "id":"ordered",
+  "steps":[
+    {"id":"work","type":"agent","prompt":"work","dependsOn":[]},
+    {"id":"after","type":"agent","prompt":"after","dependsOn":["work"]}
+  ]
+}`)
+	_ = next(t, root, snapshot.Meta.RunID)
+	bind(t, root, snapshot.Meta.RunID, "work", "task")
+	if err := Update(root, snapshot.Meta.RunID, "work", "running", 0, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(root, snapshot.Meta.RunID, "work", "failed", 0, nil); !errors.Is(err, runstore.ErrRevisionConflict) {
+		t.Fatalf("старое наблюдение принято: %v", err)
+	}
+	if err := Update(root, snapshot.Meta.RunID, "work", "succeeded", 1, []byte("done")); err != nil {
+		t.Fatal(err)
+	}
+	if err := Update(root, snapshot.Meta.RunID, "work", "running", 2, nil); err == nil {
+		t.Fatal("финализированный app-native кубик снова открыт")
+	}
+	if after := next(t, root, snapshot.Meta.RunID); after.Launch == nil || after.Launch.StepID != "after" {
+		t.Fatalf("успех не открыл зависимость: %#v", after)
 	}
 }
 
@@ -142,7 +177,18 @@ func bind(t *testing.T, root, runID, stepID, threadID string) {
 
 func update(t *testing.T, root, runID, stepID, state string, result []byte) {
 	t.Helper()
-	if err := Update(root, runID, stepID, state, result); err != nil {
+	snapshot, err := runstore.Load(root, runID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var revision uint64
+	for _, step := range snapshot.Meta.Steps {
+		if step.ID == stepID {
+			revision = step.Revision
+			break
+		}
+	}
+	if err = Update(root, runID, stepID, state, revision, result); err != nil {
 		t.Fatal(err)
 	}
 }

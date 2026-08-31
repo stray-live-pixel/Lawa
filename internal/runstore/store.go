@@ -69,12 +69,16 @@ type Metadata struct {
 }
 
 // Step связывает ID из графа с отдельным файлом памяти и чатом Codex.
-// Произвольный ID из workflow никогда не используется как имя файла.
+// Произвольный ID из workflow никогда не используется как имя файла. Revision
+// монотонно растёт после каждого принятого app-update и позволяет отклонять
+// запоздавшие наблюдения параллельных управляющих чатов. Старый coordinator не
+// передаёт ожидаемую ревизию, поэтому для его запусков поле может оставаться нулём.
 type Step struct {
 	ID            string          `json:"id"`
 	ThreadID      string          `json:"threadId"`
 	CodexThreadID string          `json:"codexThreadId"`
 	State         scheduler.State `json:"state"`
+	Revision      uint64          `json:"revision,omitempty"`
 }
 
 // Snapshot содержит сохранённый вход и последний известный снимок состояний.

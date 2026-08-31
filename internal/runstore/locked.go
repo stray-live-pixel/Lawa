@@ -19,6 +19,10 @@ import (
 // снятия чужой блокировки и удаления lock-файла при этом не происходит.
 var ErrRunLocked = errors.New("запуск уже управляется другим координатором")
 
+// ErrRevisionConflict означает, что app-наблюдатель пытался сохранить результат
+// для уже изменившегося снимка. Старое событие нужно отбросить и перечитать task.
+var ErrRevisionConflict = errors.New("устаревшая ревизия app-задачи")
+
 // LockedRun удерживает flock до Close или выхода процесса. Методы сериализованы;
 // значение нельзя копировать. Блокировка рассчитана на локальную ФС macOS/Linux
 // и сотрудничающие процессы Lawa, не заменяет права доступа агентов Codex.
@@ -129,6 +133,13 @@ func (r *LockedRun) Load() (Snapshot, error) {
 // быть видна: откат к старой версии способен потерять связь с работающим чатом.
 func (r *LockedRun) Update(stepID string, state scheduler.State, codexThreadID string) error {
 	return r.update(stepID, state, codexThreadID, (*os.File).Sync)
+}
+
+// UpdateIfRevision применяет app-native статус только к снимку, который наблюдал
+// вызывающий координатор. Успех финализирует кубик: поздний turn остаётся обычным
+// чатом Codex App, но не откатывает уже запущенные зависимости workflow.
+func (r *LockedRun) UpdateIfRevision(stepID string, state scheduler.State, codexThreadID string, revision uint64) error {
+	return r.updateRevision(stepID, state, codexThreadID, &revision, (*os.File).Sync)
 }
 
 // Reserve атомарно переводит целую волну готовых Pending-шагов в Starting одним
@@ -256,9 +267,57 @@ func (r *LockedRun) WriteMemory(stepID string, data []byte) error {
 	return nil
 }
 
+// ClaimAppCreation атомарно выдаёт право ровно на одну внешнюю попытку создания
+// app-задачи. Маркер намеренно остаётся после bind: при потере ответа или запуске
+// второго координатора повторный create запрещён, а связь восстанавливается по title.
+func (r *LockedRun) ClaimAppCreation(stepID string) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.check(); err != nil {
+		return false, err
+	}
+	s, err := load(r.dir, r.runID)
+	if err != nil {
+		return false, err
+	}
+	for _, step := range s.Meta.Steps {
+		if step.ID != stepID {
+			continue
+		}
+		if step.State != scheduler.Starting || step.CodexThreadID != "" {
+			return false, fmt.Errorf("шаг %q не ожидает создания app-задачи", stepID)
+		}
+		f, createErr := r.dir.OpenFile("app-create-"+step.ThreadID, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if errors.Is(createErr, os.ErrExist) {
+			return false, nil
+		}
+		if createErr != nil {
+			return false, createErr
+		}
+		if err = errors.Join(f.Sync(), f.Close()); err != nil {
+			r.failed = fmt.Errorf("сохранение claim запуска %q: %w", r.runID, err)
+			return false, r.failed
+		}
+		dir, syncErr := r.dir.Open(".")
+		if syncErr == nil {
+			syncErr = errors.Join(dir.Sync(), dir.Close())
+		}
+		if syncErr != nil {
+			r.failed = fmt.Errorf("синхронизация claim запуска %q: %w", r.runID, syncErr)
+			return false, r.failed
+		}
+		return true, nil
+	}
+	return false, fmt.Errorf("нет шага %q", stepID)
+}
+
 // update принимает Sync явно для проверки отказов до и после публикации meta
 // без глобальных подмен или повреждения диска; обычные вызовы используют File.Sync.
 func (r *LockedRun) update(stepID string, state scheduler.State, chat string, syncFile func(*os.File) error) error {
+	return r.updateRevision(stepID, state, chat, nil, syncFile)
+}
+
+func (r *LockedRun) updateRevision(stepID string, state scheduler.State, chat string, expected *uint64, syncFile func(*os.File) error) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := r.check(); err != nil {
@@ -278,6 +337,12 @@ func (r *LockedRun) update(stepID string, state scheduler.State, chat string, sy
 		return fmt.Errorf("нет шага %q", stepID)
 	}
 	old := s.Meta.Steps[index]
+	if expected != nil && old.Revision != *expected {
+		return fmt.Errorf("шаг %q: %w: ожидалась %d, сохранена %d", stepID, ErrRevisionConflict, *expected, old.Revision)
+	}
+	if expected != nil && old.State == scheduler.Succeeded {
+		return fmt.Errorf("шаг %q уже финализирован для app-native workflow", stepID)
+	}
 	if old.State == scheduler.Pending && (state != scheduler.Pending && state != scheduler.Starting || chat != "") {
 		return fmt.Errorf("шаг %q: сначала сохраните Starting без ID чата", stepID)
 	}
@@ -287,6 +352,9 @@ func (r *LockedRun) update(stepID string, state scheduler.State, chat string, sy
 		return fmt.Errorf("шаг %q: нельзя сбросить запуск или изменить известный ID чата", stepID)
 	}
 	s.Meta.Steps[index].State, s.Meta.Steps[index].CodexThreadID = state, chat
+	if expected != nil {
+		s.Meta.Steps[index].Revision++
+	}
 	if err = s.validate(r.runID); err != nil {
 		return err
 	}

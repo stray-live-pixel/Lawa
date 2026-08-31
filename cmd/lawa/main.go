@@ -35,9 +35,11 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
       Создать run для задач, которыми владеет Codex App; основной режим скилла /lawa.
   lawa app-next <run-id>
       Получить JSON следующего действия: launch, observe, complete или blocked.
+  lawa app-claim <run-id> --step <id>
+      Атомарно получить право на единственную попытку создания задачи Codex App.
   lawa app-bind <run-id> --step <id> --thread-id <id>
       Сохранить identity сразу после создания задачи Codex App.
-  lawa app-update <run-id> --step <id> --state <state> [--result-file <путь>]
+  lawa app-update <run-id> --step <id> --state <state> --revision <N> [--result-file <путь>]
       Сохранить живой или финальный статус; succeeded требует финальный ответ.
   lawa run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>) --initiator-thread-id <id>
       Legacy: выполнить workflow через отдельные app-server для терминала/автоматизации.
@@ -78,7 +80,7 @@ const help = `Lawa — выполнение JSON-workflow через отдел�
 
 app-run принимает обычные параметры run, кроме --codex и повторяющихся серий.
 Workflow со speed пока требует legacy run: task API Codex App не принимает service tier.
-app-next/app-bind/app-update предназначены для управляющего чата и печатают
+app-next/app-claim/app-bind/app-update предназначены для управляющего чата и печатают
 машиночитаемый JSON либо короткое подтверждение; они не запускают app-server.
 
 Параметры resume:
@@ -266,6 +268,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return appRunCommand(ctx, args[1:], out, deps)
 	case "app-next":
 		return appNextCommand(ctx, args[1:], out, deps)
+	case "app-claim":
+		return appClaimCommand(args[1:], out, deps)
 	case "app-bind":
 		return appBindCommand(ctx, args[1:], out, deps)
 	case "app-update":

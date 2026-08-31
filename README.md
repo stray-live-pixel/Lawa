@@ -430,8 +430,9 @@ lawa app-run <workflow.json> --cwd <проект> \
   (--task <текст> | --task-file <путь>) \
   --initiator-thread-id <id> [--parent-run <run-id>]
 lawa app-next <run-id>
+lawa app-claim <run-id> --step <id>
 lawa app-bind <run-id> --step <id> --thread-id <id>
-lawa app-update <run-id> --step <id> --state <state> [--result-file <путь>]
+lawa app-update <run-id> --step <id> --state <state> --revision <N> [--result-file <путь>]
 
 # Legacy для терминала и повторяющихся серий: отдельные app-server.
 lawa run <workflow.json> --cwd <проект> \

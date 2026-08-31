@@ -51,12 +51,12 @@ func TestAppCommandsDriveRunWithoutCodexServer(t *testing.T) {
 		t.Fatalf("app-next = %#v", action)
 	}
 	runAppCommand(t, deps, "app-bind", started.RunID, "--root", root, "--step", "work", "--thread-id", "child-task")
-	runAppCommand(t, deps, "app-update", started.RunID, "--root", root, "--step", "work", "--state", "running")
+	runAppCommand(t, deps, "app-update", started.RunID, "--root", root, "--step", "work", "--state", "running", "--revision", "0")
 	resultPath := filepath.Join(t.TempDir(), "result.md")
 	if err = os.WriteFile(resultPath, []byte("finished in Codex App"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runAppCommand(t, deps, "app-update", started.RunID, "--root", root, "--step", "work", "--state", "succeeded", "--result-file", resultPath)
+	runAppCommand(t, deps, "app-update", started.RunID, "--root", root, "--step", "work", "--state", "succeeded", "--revision", "1", "--result-file", resultPath)
 	if done := appCommandAction(t, deps, root, started.RunID); done.Kind != "complete" {
 		t.Fatalf("финальное действие = %#v", done)
 	}

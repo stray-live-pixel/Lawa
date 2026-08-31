@@ -38,14 +38,18 @@ type Launch struct {
 	CodexThreadID string `json:"codexThreadId,omitempty"`
 	Model         string `json:"model,omitempty"`
 	Effort        string `json:"effort,omitempty"`
+	Revision      uint64 `json:"revision"`
 }
 
 // Task — сохранённая identity задачи, которую управляющий чат передаёт
 // read_thread/wait_threads. State — состояние Lawa, не статус UI Codex App.
+// Revision надо без изменений вернуть в app-update: только так хранилище может
+// отличить наблюдение этого снимка от запоздавшего результата другого наблюдателя.
 type Task struct {
 	StepID        string          `json:"stepId"`
 	CodexThreadID string          `json:"codexThreadId"`
 	State         scheduler.State `json:"state"`
+	Revision      uint64          `json:"revision"`
 }
 
 // Next удерживает lock только на время локального решения. Сначала возвращается
@@ -69,14 +73,14 @@ func Next(root, runID string) (action Action, err error) {
 		if buildErr != nil {
 			return Action{}, buildErr
 		}
-		return Action{Kind: "launch", RunID: runID, Launch: actionLaunch(launch, step.CodexThreadID)}, nil
+		return Action{Kind: "launch", RunID: runID, Launch: actionLaunch(launch, step.CodexThreadID, step.Revision)}, nil
 	}
 	prepared, err := coordinator.PrepareNextForApp(run, root)
 	if err != nil {
 		return Action{}, err
 	}
 	if len(prepared.Launches) == 1 {
-		return Action{Kind: "launch", RunID: runID, Launch: actionLaunch(prepared.Launches[0], "")}, nil
+		return Action{Kind: "launch", RunID: runID, Launch: actionLaunch(prepared.Launches[0], "", 0)}, nil
 	}
 	if prepared.Complete {
 		return Action{Kind: "complete", RunID: runID}, nil
@@ -85,7 +89,7 @@ func Next(root, runID string) (action Action, err error) {
 		if step.CodexThreadID == "" || step.State == scheduler.Pending || step.State == scheduler.Succeeded {
 			continue
 		}
-		action.Tasks = append(action.Tasks, Task{StepID: step.ID, CodexThreadID: step.CodexThreadID, State: step.State})
+		action.Tasks = append(action.Tasks, Task{StepID: step.ID, CodexThreadID: step.CodexThreadID, State: step.State, Revision: step.Revision})
 	}
 	action.RunID, action.Waiting = runID, prepared.Waiting
 	if len(action.Tasks) != 0 {
@@ -96,11 +100,23 @@ func Next(root, runID string) (action Action, err error) {
 	return action, nil
 }
 
-func actionLaunch(launch coordinator.Launch, threadID string) *Launch {
+func actionLaunch(launch coordinator.Launch, threadID string, revision uint64) *Launch {
 	return &Launch{
 		StepID: launch.StepID, Title: launch.Command.Title, Prompt: launch.Command.Text,
-		CodexThreadID: threadID, Model: launch.Command.Model, Effort: launch.Command.Effort,
+		CodexThreadID: threadID, Model: launch.Command.Model, Effort: launch.Command.Effort, Revision: revision,
 	}
+}
+
+// Claim выдаёт одному управляющему чату устойчивое право вызвать create_thread.
+// False означает, что попытка уже могла уйти в Codex App и разрешён только поиск
+// задачи по детерминированному title — даже если list_threads пока ничего не вернул.
+func Claim(root, runID, stepID string) (claimed bool, err error) {
+	run, err := runstore.OpenLocked(root, runID)
+	if err != nil {
+		return false, err
+	}
+	defer func() { err = errors.Join(err, run.Close()) }()
+	return run.ClaimAppCreation(stepID)
 }
 
 // Bind сохраняет identity сразу после атомарного создания app-задачи с уникальными
@@ -139,7 +155,7 @@ func Bind(root, runID, stepID, threadID string) (err error) {
 // финальный ответ обязателен и сначала атомарно становится памятью кубика; лишь
 // затем состояние разрешает запуск зависимостей. Это сохраняет порядок данных
 // после сбоя между двумя записями: лишняя память безопаснее преждевременного успеха.
-func Update(root, runID, stepID, state string, result []byte) (err error) {
+func Update(root, runID, stepID, state string, revision uint64, result []byte) (err error) {
 	next, err := parseState(state)
 	if err != nil {
 		return err
@@ -159,22 +175,28 @@ func Update(root, runID, stepID, state string, result []byte) (err error) {
 	if err != nil {
 		return err
 	}
-	threadID := ""
+	threadID, savedState, savedRevision := "", scheduler.State(""), uint64(0)
 	for _, step := range snapshot.Meta.Steps {
 		if step.ID == stepID {
-			threadID = step.CodexThreadID
+			threadID, savedState, savedRevision = step.CodexThreadID, step.State, step.Revision
 			break
 		}
 	}
 	if threadID == "" {
 		return fmt.Errorf("app driver: шаг %q ещё не привязан к задаче", stepID)
 	}
+	if savedRevision != revision {
+		return fmt.Errorf("app driver: шаг %q: %w: ожидалась %d, сохранена %d", stepID, runstore.ErrRevisionConflict, revision, savedRevision)
+	}
+	if savedState == scheduler.Succeeded {
+		return fmt.Errorf("app driver: шаг %q уже финализирован", stepID)
+	}
 	if len(result) != 0 {
 		if err = run.WriteMemory(stepID, result); err != nil {
 			return err
 		}
 	}
-	return run.Update(stepID, next, threadID)
+	return run.UpdateIfRevision(stepID, next, threadID, revision)
 }
 
 func parseState(value string) (scheduler.State, error) {
