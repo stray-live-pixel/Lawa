@@ -35,12 +35,21 @@ var pageTemplate = template.Must(template.New("dashboard").Parse(pageHTML))
 type page struct {
 	Title, Refresh string
 	Preview        bool
-	Roots          []*runNode
+	Groups         []runGroup
 	Problems       []problem
 }
 
 // problem — безопасная короткая диагностика одного каталога, не скрывающая дерево.
 type problem struct{ Name, Message string }
+
+// runGroup — сворачиваемая секция корневых workflow с одинаковым итоговым
+// состоянием. Дочерние workflow остаются рядом с родителем: перенос каждого
+// узла в собственную секцию разрушил бы сохранённое дерево связанных запусков.
+type runGroup struct {
+	ID, Title, Tone string
+	Open            bool
+	Roots           []*runNode
+}
 
 // runNode — готовая к HTML структура одного workflow и его потомков. Все URL
 // строит сервер из проверенных ID, поэтому template.URL не содержит сырого ввода.
@@ -86,7 +95,8 @@ type handler struct{ root string }
 // live перечитывает хранилище на каждый polling-запрос.
 func (h handler) live(w http.ResponseWriter, _ *http.Request) {
 	view := page{Title: "Lawa workflows", Refresh: "3"}
-	view.Roots, view.Problems = loadTree(h.root)
+	roots, problems := loadTree(h.root)
+	view.Groups, view.Problems = groupRuns(roots), problems
 	render(w, view)
 }
 
@@ -148,7 +158,7 @@ func loadTree(root string) ([]*runNode, []problem) {
 		if !entry.IsDir() || entry.Name() == "series" {
 			continue
 		}
-		snapshot, loadErr := runstore.Load(root, entry.Name())
+		snapshot, loadErr := runstore.LoadForDashboard(root, entry.Name())
 		if loadErr != nil {
 			problems = append(problems, problem{Name: entry.Name(), Message: diagnostic(loadErr)})
 			continue
@@ -261,6 +271,35 @@ func sortNodes(nodes []*runNode) {
 	}
 }
 
+// groupRuns сохраняет порядок корней внутри каждой секции после sortNodes.
+// Pending относится к работе: workflow ещё не завершён, даже если ни один шаг
+// пока не стартовал. Пустые секции не показываем, чтобы dashboard не занимал
+// место заголовками без запусков.
+func groupRuns(roots []*runNode) []runGroup {
+	groups := []runGroup{
+		{ID: "active", Title: "В работе", Tone: "running", Open: true},
+		{ID: "failed", Title: "Сломавшиеся", Tone: "failed"},
+		{ID: "succeeded", Title: "Успешные", Tone: "succeeded"},
+	}
+	for _, root := range roots {
+		group := 0
+		switch root.State {
+		case "failed":
+			group = 1
+		case "succeeded":
+			group = 2
+		}
+		groups[group].Roots = append(groups[group].Roots, root)
+	}
+	visible := make([]runGroup, 0, len(groups))
+	for _, group := range groups {
+		if len(group.Roots) > 0 {
+			visible = append(visible, group)
+		}
+	}
+	return visible
+}
+
 // tone переводит техническое состояние в ограниченный CSS-словарь.
 func tone(state string) string {
 	switch state {
@@ -363,5 +402,7 @@ func previewPage() page {
 	maintenance := run("preview-maintenance", "nightly-maintenance", "pending",
 		step("collect", "pending", false), step("cleanup-skipped-artifacts", "cancelled", false))
 	maintenance.Open = false
-	return page{Title: "Lawa workflows — preview", Preview: true, Roots: []*runNode{release, maintenance}}
+	failed := run("preview-failed", "failed-nightly-cleanup", "failed", step("cleanup", "failed", true))
+	succeeded := run("preview-succeeded", "previous-release", "succeeded", step("publish", "succeeded", true))
+	return page{Title: "Lawa workflows — preview", Preview: true, Groups: groupRuns([]*runNode{release, maintenance, failed, succeeded})}
 }

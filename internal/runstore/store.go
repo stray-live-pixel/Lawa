@@ -227,6 +227,25 @@ func Load(root, runID string) (Snapshot, error) {
 	return load(dir, runID)
 }
 
+// LoadForDashboard читает валидный snapshot для read-only интерфейса, но
+// пропускает неизвестные поля JSON. Это позволяет уже запущенному dashboard
+// пережить добавление необязательного поля более новой Lawa: старый интерфейс
+// покажет известную ему часть данных до собственного перезапуска.
+//
+// Послабление относится только к лишним членам JSON. Версия формата, известные
+// поля, связи workflow, состояния и безопасные имена файлов проходят ту же
+// проверку, что и в Load. Координатору этот режим не подходит: при исполнении
+// неизвестное поле может содержать семантику, которую старый процесс обязан не
+// игнорировать, поэтому все изменяющие run операции используют строгий load.
+func LoadForDashboard(root, runID string) (Snapshot, error) {
+	dir, err := openRun(root, runID)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	defer dir.Close()
+	return loadForDashboard(dir, runID)
+}
+
 // ReadMemory возвращает память только существующего кубика из валидного run.
 // os.Root удерживает чтение внутри каталога даже при конкурентной подмене пути;
 // проверка обычного файла не позволяет использовать симлинк на чужие данные.
@@ -236,7 +255,7 @@ func ReadMemory(root, runID, threadID string) ([]byte, error) {
 		return nil, err
 	}
 	defer dir.Close()
-	snapshot, err := load(dir, runID)
+	snapshot, err := loadForDashboard(dir, runID)
 	if err != nil {
 		return nil, err
 	}
@@ -258,7 +277,7 @@ func ReadStatusImage(root, runID string) ([]byte, error) {
 		return nil, err
 	}
 	defer dir.Close()
-	if _, err = load(dir, runID); err != nil {
+	if _, err = loadForDashboard(dir, runID); err != nil {
 		return nil, err
 	}
 	return readFile(dir, StatusImageFilename)
@@ -303,15 +322,33 @@ func openRun(root, runID string) (*os.Root, error) {
 	return base.OpenRoot(runID)
 }
 
-// load читает самостоятельный снимок из уже открытого каталога. Координатор
-// вызывает её под блокировкой; обычный Load может увидеть старую или новую meta.
+// load читает самостоятельный снимок из уже открытого каталога и отклоняет
+// неизвестные поля. Координатор вызывает её под блокировкой; обычный Load может
+// увидеть старую или новую атомарно опубликованную meta.
 func load(dir *os.Root, runID string) (Snapshot, error) {
+	return loadSnapshot(dir, runID, true)
+}
+
+// loadForDashboard отличается от load только совместимостью с добавочными
+// полями JSON. Вся содержательная validate ниже остаётся общей и строгой.
+func loadForDashboard(dir *os.Root, runID string) (Snapshot, error) {
+	return loadSnapshot(dir, runID, false)
+}
+
+// loadSnapshot сосредотачивает общий путь чтения, чтобы dashboard не получил
+// упрощённую копию проверок безопасности при поддержке новых полей.
+func loadSnapshot(dir *os.Root, runID string, rejectUnknownMembers bool) (Snapshot, error) {
 	var s Snapshot
 	meta, err := readFile(dir, "meta.json")
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if err = json.Unmarshal(meta, &s.Meta, json.RejectUnknownMembers(true)); err != nil {
+	if rejectUnknownMembers {
+		err = json.Unmarshal(meta, &s.Meta, json.RejectUnknownMembers(true))
+	} else {
+		err = json.Unmarshal(meta, &s.Meta)
+	}
+	if err != nil {
 		return Snapshot{}, fmt.Errorf("meta.json: %w", err)
 	}
 	data, err := readFile(dir, "workflow.json")

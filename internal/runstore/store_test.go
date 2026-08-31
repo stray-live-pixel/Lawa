@@ -196,6 +196,45 @@ func TestLegacyMetadataVersion(t *testing.T) {
 	}
 }
 
+// TestDashboardMetadataCompatibility воспроизводит обновление Lawa при уже
+// запущенном старом dashboard. Read-only интерфейс использует только известные
+// поля, но координатор не должен молча исполнять snapshot с неизвестной ему
+// семантикой. Известные поля при этом остаются обязательными и валидируются.
+func TestDashboardMetadataCompatibility(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	metaPath := filepath.Join(root, snapshot.Meta.RunID, "meta.json")
+	data, err := os.ReadFile(metaPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	withFutureFields := bytes.Replace(data, []byte(`"steps":[{`), []byte(`"futureRunField":true,"steps":[{"futureStepField":{"revision":1},`), 1)
+	if bytes.Equal(data, withFutureFields) {
+		t.Fatal("тест не добавил будущие поля в meta.json")
+	}
+	mustWrite(t, metaPath, withFutureFields)
+
+	if _, err = Load(root, snapshot.Meta.RunID); err == nil {
+		t.Fatal("строгий Load принял неизвестные поля")
+	}
+	loaded, err := LoadForDashboard(root, snapshot.Meta.RunID)
+	if err != nil || !reflect.DeepEqual(loaded.Meta, snapshot.Meta) {
+		t.Fatalf("dashboard не прочитал известную часть новых metadata: %+v, %v", loaded.Meta, err)
+	}
+
+	invalidKnownField := bytes.Replace(withFutureFields, []byte(`"state":"pending"`), []byte(`"state":"future-state"`), 1)
+	if bytes.Equal(withFutureFields, invalidKnownField) {
+		t.Fatal("тест не повредил известное поле state")
+	}
+	mustWrite(t, metaPath, invalidKnownField)
+	if _, err = LoadForDashboard(root, snapshot.Meta.RunID); err == nil {
+		t.Fatal("dashboard проигнорировал неверное известное состояние")
+	}
+}
+
 // TestReadDashboardFiles проверяет узкую read-only границу web-сервера. Доступны
 // только память известного кубика и фиксированный PNG, а симлинк не позволяет
 // прочитать произвольный соседний файл даже внутри временного тестового root.

@@ -13,6 +13,7 @@
     details{margin:4px 0}summary{display:flex;align-items:center;gap:8px;min-height:30px;cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}summary:before{content:'›';color:var(--muted);width:9px;transition:transform .12s}details[open]>summary:before{transform:rotate(90deg)}
     .node{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.name{font-weight:600}.id,.updated,.state{color:var(--muted);font-size:12px}.actions{display:flex;gap:10px;margin-left:auto;padding-left:12px;white-space:nowrap}.disabled{color:#555;cursor:not-allowed}
     .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto}.tone-running{background:var(--link)}.tone-failed{background:var(--red)}.tone-succeeded{background:var(--green)}
+    .groups{display:grid;gap:12px}.status-group{margin:0;border:1px solid var(--line);border-radius:8px;background:var(--surface)}.status-group>summary{min-height:42px;padding:5px 12px}.status-group>.tree{padding:0 12px 10px 28px}.group-title{font:600 14px/1.3 system-ui,sans-serif}
     .step{display:flex;align-items:center;gap:8px;min-height:28px;padding-left:17px}.step .actions{font-size:12px}.problem{border:1px solid #532423;background:#1b0d0d;padding:10px 12px;margin:8px 0;color:#ffb4ae}.empty{border:1px dashed var(--line);color:var(--muted);padding:24px;text-align:center}.badge{color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}
     @media(max-width:720px){main{padding:20px 12px}.updated,.id{display:none}.actions{gap:7px}.children{margin-left:8px;padding-left:8px}}
   </style>
@@ -21,15 +22,26 @@
   <h1>{{.Title}} {{if .Preview}}<span class="badge">fake data</span>{{end}}</h1>
   <p class="subtitle">Связанные workflow и память кубиков{{if .Refresh}} · обновление каждые {{.Refresh}} сек.{{end}}</p>
   {{range .Problems}}<div class="problem"><strong>{{.Name}}</strong> — {{.Message}}</div>{{end}}
-  {{if .Roots}}<ul class="tree">{{range .Roots}}{{template "run" .}}{{end}}</ul>{{else}}<div class="empty">Запусков пока нет. Создайте workflow командой <code>lawa run</code>.</div>{{end}}
+  {{if .Groups}}<div class="groups">{{range .Groups}}
+    <details class="status-group" data-group="{{.ID}}" {{if .Open}}open{{end}}>
+      <summary>
+        <span class="dot tone-{{.Tone}}" aria-hidden="true"></span>
+        <span class="group-title">{{.Title}}</span>
+        <span class="badge">{{len .Roots}}</span>
+      </summary>
+      <ul class="tree">{{range .Roots}}{{template "run" .}}{{end}}</ul>
+    </details>
+  {{end}}</div>{{else}}<div class="empty">Запусков пока нет. Создайте workflow командой <code>lawa run</code>.</div>{{end}}
 </main>
 <script>
   const key='lawa-dashboard-open:';
-  document.querySelectorAll('details[data-node]').forEach(node=>{
-    const saved=localStorage.getItem(key+node.dataset.node);
+  const remember=(node,id)=>{
+    const saved=localStorage.getItem(key+id);
     if(saved!==null) node.open=saved==='1';
-    node.addEventListener('toggle',()=>localStorage.setItem(key+node.dataset.node,node.open?'1':'0'));
-  });
+    node.addEventListener('toggle',()=>localStorage.setItem(key+id,node.open?'1':'0'));
+  };
+  document.querySelectorAll('details[data-node]').forEach(node=>remember(node,node.dataset.node));
+  document.querySelectorAll('details[data-group]').forEach(node=>remember(node,'group:'+node.dataset.group));
   if(location.pathname==='/preview') document.querySelectorAll('a[href="#preview"]').forEach(a=>a.addEventListener('click',e=>e.preventDefault()));
 </script></body></html>{{end}}
 
