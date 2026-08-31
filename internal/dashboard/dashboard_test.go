@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bytes"
 	"context"
 	"encoding/json/v2"
 	"errors"
@@ -36,6 +37,25 @@ func quoted(value string) string {
 	return string(data)
 }
 
+// addFutureMetadataFields имитирует meta.json, записанный следующей Lawa. Поля
+// добавлены и на верхнем уровне, и внутрь шага — именно второй случай ломал
+// старый dashboard после появления revision.
+func addFutureMetadataFields(t *testing.T, root, runID string) {
+	t.Helper()
+	path := filepath.Join(root, runID, "meta.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := bytes.Replace(data, []byte(`"steps":[{`), []byte(`"futureRunField":true,"steps":[{"futureStepField":"ignored",`), 1)
+	if bytes.Equal(data, updated) {
+		t.Fatal("тест не добавил будущие поля в meta.json")
+	}
+	if err = os.WriteFile(path, updated, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func setState(t *testing.T, root string, snapshot runstore.Snapshot, state scheduler.State) {
 	t.Helper()
 	run, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
@@ -61,6 +81,10 @@ func TestDashboard(t *testing.T) {
 	parent := createRun(t, root, `<release>&`, "")
 	setState(t, root, parent, scheduler.Running)
 	child := createRun(t, root, "child-workflow", parent.Meta.RunID)
+	failed := createRun(t, root, "failed-workflow", "")
+	setState(t, root, failed, scheduler.Failed)
+	succeeded := createRun(t, root, "succeeded-workflow", "")
+	setState(t, root, succeeded, scheduler.Succeeded)
 	memory := filepath.Join(root, child.Meta.RunID, "memory", child.Meta.Steps[0].ThreadID+".md")
 	if err := os.WriteFile(memory, []byte(`<script>alert("memory")</script>`), 0o600); err != nil {
 		t.Fatal(err)
@@ -72,6 +96,8 @@ func TestDashboard(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(root, "broken-run"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	addFutureMetadataFields(t, root, parent.Meta.RunID)
+	addFutureMetadataFields(t, root, child.Meta.RunID)
 
 	dashboard := Handler(root)
 	recorder := httptest.NewRecorder()
@@ -79,6 +105,7 @@ func TestDashboard(t *testing.T) {
 	html := recorder.Body.String()
 	for _, fragment := range []string{
 		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "codex://threads/", "vscode://file/",
+		"failed-workflow", "succeeded-workflow", "В работе", "Сломавшиеся", "Успешные",
 		"/uml/" + parent.Meta.RunID, "/memory/" + child.Meta.RunID + "/" + child.Meta.Steps[0].ThreadID,
 	} {
 		if !strings.Contains(html, fragment) {
@@ -87,6 +114,13 @@ func TestDashboard(t *testing.T) {
 	}
 	if strings.Index(html, parent.Meta.RunID) > strings.Index(html, child.Meta.RunID) {
 		t.Fatal("дочерний workflow показан вне родителя")
+	}
+	active, broken, successful := strings.Index(html, `data-group="active" open`), strings.Index(html, `data-group="failed"`), strings.Index(html, `data-group="succeeded"`)
+	if active < 0 || broken < active || successful < broken {
+		t.Fatalf("секции отсутствуют или нарушен порядок: active=%d failed=%d succeeded=%d", active, broken, successful)
+	}
+	if strings.Contains(html, `data-group="failed" open`) || strings.Contains(html, `data-group="succeeded" open`) {
+		t.Fatal("сломавшиеся или успешные workflow раскрыты по умолчанию")
 	}
 
 	recorder = httptest.NewRecorder()
@@ -129,6 +163,7 @@ func TestPreview(t *testing.T) {
 	for _, fragment := range []string{
 		"fake data", "release-v0.3.0", "repair-failed-macos-build", "nightly-maintenance",
 		"prepare-release-notes-with-a-deliberately-long-name", "tone-running", "tone-failed", "tone-succeeded", "skipped", "#preview",
+		"В работе", "Сломавшиеся", "Успешные", "failed-nightly-cleanup", "previous-release",
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("preview не показывает %q", fragment)
@@ -141,6 +176,21 @@ func TestPreview(t *testing.T) {
 	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/", nil))
 	if !strings.Contains(live.Body.String(), "Запусков пока нет") || !strings.Contains(live.Body.String(), `http-equiv="refresh"`) {
 		t.Fatal("пустой live dashboard не показывает подсказку или polling")
+	}
+}
+
+// TestGroupRuns фиксирует продуктовую классификацию и не позволяет случайно
+// перенести ожидающий workflow в завершённые либо изменить порядок секций.
+func TestGroupRuns(t *testing.T) {
+	roots := []*runNode{
+		{ID: "pending", State: "pending"}, {ID: "running", State: "running"},
+		{ID: "failed", State: "failed"}, {ID: "succeeded", State: "succeeded"},
+	}
+	groups := groupRuns(roots)
+	if len(groups) != 3 || groups[0].ID != "active" || !groups[0].Open || len(groups[0].Roots) != 2 ||
+		groups[1].ID != "failed" || groups[1].Open || len(groups[1].Roots) != 1 ||
+		groups[2].ID != "succeeded" || groups[2].Open || len(groups[2].Roots) != 1 {
+		t.Fatalf("неверная группировка workflow: %+v", groups)
 	}
 }
 
