@@ -490,8 +490,12 @@ func TestRecurringRunModesWithControlledClock(t *testing.T) {
 				t.Fatalf("не найдена одна серия: %v, %v", seriesEntries, err)
 			}
 			snapshot, err := series.Load(root, seriesEntries[0].Name())
-			if err != nil || snapshot.State != series.Completed || snapshot.RunsStarted != len(tc.wantTargets) || snapshot.RunsFinished != len(tc.wantTargets) {
+			if err != nil || snapshot.WorkflowID != "one" || snapshot.State != series.Completed || snapshot.RunsStarted != len(tc.wantTargets) || snapshot.RunsFinished != len(tc.wantTargets) {
 				t.Fatalf("неверный прогресс серии: %+v, %v", snapshot, err)
+			}
+			var status bytes.Buffer
+			if err = executeContext(t.Context(), []string{"series-status", snapshot.SeriesID, "--root", root}, &status, io.Discard, deps); err != nil || !strings.Contains(status.String(), "workflow: one\n") {
+				t.Fatalf("series-status не показал workflow серии: %q, %v", status.String(), err)
 			}
 		})
 	}

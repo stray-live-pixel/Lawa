@@ -20,6 +20,7 @@ import (
 	"syscall"
 	"time"
 	_ "time/tzdata"
+	"unicode/utf8"
 
 	"github.com/robfig/cron/v3"
 )
@@ -62,12 +63,14 @@ type Config struct {
 	MaxRuns  int    `json:"maxRuns,omitempty"`
 }
 
-// Metadata позволяет оператору понять режим, прогресс и ближайшее действие.
-// RunsFinished включает успешные и неуспешные терминальные run; LastError
-// объясняет, почему политика stop-on-failure остановила серию.
+// Metadata позволяет оператору понять workflow, режим, прогресс и ближайшее
+// действие даже до первого cron-run. RunsFinished включает успешные и
+// неуспешные терминальные run; LastError объясняет, почему политика
+// stop-on-failure остановила серию.
 type Metadata struct {
 	Version      int        `json:"version"`
 	SeriesID     string     `json:"seriesId"`
+	WorkflowID   string     `json:"workflowId,omitempty"`
 	Driver       Driver     `json:"driver,omitempty"` // Только совместимость с историческим v2.
 	Config       Config     `json:"config"`
 	State        State      `json:"state"`
@@ -211,16 +214,21 @@ type LockedSeries struct {
 }
 
 // Create создаёт приватный каталог серии, публикует начальное состояние и сразу
-// захватывает пожизненную блокировку владельца. Частично созданный каталог удаляется.
-func Create(root string, config Config) (*LockedSeries, error) {
-	return create(root, config, syncDirectory)
+// захватывает пожизненную блокировку владельца. WorkflowID сохраняется отдельно от
+// будущих run: cron-серия ещё не имеет ни одного run, но уже должна быть понятна в
+// series-status и dashboard. Частично созданный каталог удаляется.
+func Create(root string, config Config, workflowID string) (*LockedSeries, error) {
+	return create(root, config, workflowID, syncDirectory)
 }
 
 // create принимает синхронизацию каталогов явно, чтобы тесты могли проверить
 // порядок сохранения имён и отказ диска без глобальной подмены для других серий.
-func create(root string, config Config, syncParent func(string) error) (_ *LockedSeries, err error) {
+func create(root string, config Config, workflowID string, syncParent func(string) error) (_ *LockedSeries, err error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, errors.New("нужна папка хранения root")
+	}
+	if strings.TrimSpace(workflowID) == "" || !utf8.ValidString(workflowID) {
+		return nil, errors.New("нужен непустой workflow-id UTF-8")
 	}
 	// Абсолютный путь позволяет рекурсивно найти существующего предка и для
 	// относительного root. Иначе filepath.Dir("runs") вернул бы ".", а порядок
@@ -232,7 +240,7 @@ func create(root string, config Config, syncParent func(string) error) (_ *Locke
 	if err = mkdirAllSynced(base, syncParent); err != nil {
 		return nil, err
 	}
-	owner := &LockedSeries{meta: Metadata{Version: 3, SeriesID: newID(), Config: config, State: Waiting}}
+	owner := &LockedSeries{meta: Metadata{Version: 3, SeriesID: newID(), WorkflowID: workflowID, Config: config, State: Waiting}}
 	owner.dir = filepath.Join(base, owner.meta.SeriesID)
 	if err = os.Mkdir(owner.dir, 0o700); err != nil {
 		return nil, err

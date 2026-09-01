@@ -337,7 +337,8 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 	if err != nil {
 		return fmt.Errorf("открыть workflow: %w", err)
 	}
-	if _, err = workflow.Decode(strings.NewReader(string(workflowJSON))); err != nil {
+	definition, err := workflow.Decode(strings.NewReader(string(workflowJSON)))
+	if err != nil {
 		return fmt.Errorf("проверить %q: %w", parsed.workflow, err)
 	}
 	if parsed.taskFile != "" {
@@ -375,7 +376,7 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 		ParentRunID: parsed.parentRun,
 	}
 	if parsed.repeat != "" {
-		return runSeries(ctx, parsed.root, parsed.executable, input, config, schedule, pool, out, stderr, deps)
+		return runSeries(ctx, parsed.root, parsed.executable, input, definition.ID, config, schedule, pool, out, stderr, deps)
 	}
 	snapshot, err := runstore.Create(parsed.root, input)
 	if err != nil {
@@ -429,8 +430,8 @@ func serveCommand(ctx context.Context, args []string, out, stderr io.Writer, dep
 // runSeries последовательно создаёт обычные run. Блокирующий coordinate служит
 // главным барьером параллельности: следующий run нельзя запланировать, пока
 // предыдущий не вернул терминальный успех или явную неуспешность.
-func runSeries(ctx context.Context, root, executable string, input runstore.Input, config series.Config, schedule series.Schedule, pool *capacity.Pool, out, stderr io.Writer, deps dependencies) (err error) {
-	owner, err := series.Create(root, config)
+func runSeries(ctx context.Context, root, executable string, input runstore.Input, workflowID string, config series.Config, schedule series.Schedule, pool *capacity.Pool, out, stderr io.Writer, deps dependencies) (err error) {
+	owner, err := series.Create(root, config, workflowID)
 	if err != nil {
 		return fmt.Errorf("создать серию: %w", err)
 	}
@@ -513,7 +514,11 @@ func seriesStatusCommand(args []string, out io.Writer, deps dependencies) error 
 	if snapshot.LastError != "" {
 		lastError = "последняя ошибка: " + runstore.SafeTerminalText(snapshot.LastError) + "\n"
 	}
-	_, err = fmt.Fprintf(out, "seriesId: %s\nрежим: %s\nсостояние: %s\nзапусков: %d начато, %d завершено\ncurrentRunId: %s\nnextRunAt: %s\nstopRequested: %t\n%s", snapshot.SeriesID, snapshot.Config.Mode, snapshot.State, snapshot.RunsStarted, snapshot.RunsFinished, current, next, snapshot.StopRequested, lastError)
+	workflowID := snapshot.WorkflowID
+	if workflowID == "" {
+		workflowID = "-"
+	}
+	_, err = fmt.Fprintf(out, "seriesId: %s\nworkflow: %s\nрежим: %s\nсостояние: %s\nзапусков: %d начато, %d завершено\ncurrentRunId: %s\nnextRunAt: %s\nstopRequested: %t\n%s", snapshot.SeriesID, workflowID, snapshot.Config.Mode, snapshot.State, snapshot.RunsStarted, snapshot.RunsFinished, current, next, snapshot.StopRequested, lastError)
 	return err
 }
 
