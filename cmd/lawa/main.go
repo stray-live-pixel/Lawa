@@ -102,6 +102,8 @@ Run и resume печатают краткую статистику и VS Code-с
 обновляются локально при изменениях и не реже раза в минуту.
 Max-parallel сохраняется для root и суммарно ограничивает отдельные процессы run
 и resume; без сохранённого значения собственного лимита нет.
+Кубики могут запускать дочерние workflow через встроенные run_child/run_children;
+Lawa возвращает runId после сохранения и ждёт всё созданное дерево.
 Для PNG нужна команда plantuml с поддержкой -pipe; её ошибка не останавливает workflow.
 
 Lawa использует только Codex App Server и не создаёт нативные задачи Codex Desktop.
@@ -561,6 +563,15 @@ func coordinate(ctx context.Context, root, runID, executable string, pool *capac
 // вывода и закрытия хранилища. Терминальный Outcome остаётся действительным, если
 // ошибка управления произошла уже после надёжного сохранения состояния run.
 func coordinateWithOutcome(ctx context.Context, root, runID, executable string, pool *capacity.Pool, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (outcome coordinator.Outcome, err error) {
+	manager := newChildRunManager(ctx, root, executable, pool, stderr, deps)
+	outcome, err = coordinateRunWithOutcome(ctx, root, runID, executable, pool, out, stderr, deps, resume, returnOnFailure, manager)
+	return outcome, errors.Join(err, manager.wait())
+}
+
+// coordinateRunWithOutcome выполняет ровно один сохранённый run. Верхний вызов
+// владеет manager и ждёт всё дерево, а дочерние вызовы переиспользуют его без
+// рекурсивного ожидания самих себя.
+func coordinateRunWithOutcome(ctx context.Context, root, runID, executable string, pool *capacity.Pool, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool, manager *childRunManager) (outcome coordinator.Outcome, err error) {
 	run, err := runstore.OpenLocked(root, runID)
 	if err != nil {
 		return coordinator.Outcome{}, fmt.Errorf("открыть запуск %q: %w", runID, err)
@@ -582,9 +593,10 @@ func coordinateWithOutcome(ctx context.Context, root, runID, executable string, 
 	return coordinator.ExecuteWithOutcome(ctx, run, coordinator.Options{
 		Root: root, PollInterval: deps.pollInterval, RefreshInterval: deps.refreshInterval,
 		Client: deps.client(executable, stderr), ContinueInterrupted: resume,
-		ReturnOnFailure: returnOnFailure,
-		Notify:          publisher.Publish,
-		Capacity:        pool,
+		ReturnOnFailure:  returnOnFailure,
+		Notify:           publisher.Publish,
+		Capacity:         pool,
+		ConfigureCommand: manager.configure,
 	})
 }
 

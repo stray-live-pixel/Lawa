@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -291,6 +292,8 @@ func TestSkillInstruction(t *testing.T) {
 		"lawa validate <workflow.json>",
 		"lawa run workflow.json",
 		"--max-parallel",
+		"run_child",
+		"run_children",
 		"Не добавляй `--mode`",
 		"lawa status <run-id>",
 		"lawa logs <run-id>",
@@ -312,6 +315,7 @@ type cliFakeClient struct {
 	inspect   map[string]codex.WorkStatus
 	latest    map[string]string
 	onRun     func()
+	onCommand func(codex.Command) error
 }
 
 type cliFakeObserver struct{ client *cliFakeClient }
@@ -343,6 +347,11 @@ func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Res
 	c.mu.Unlock()
 	if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 		return codex.Result{ThreadID: threadID, CreationAttempted: true, TurnAttempted: true}, err
+	}
+	if c.onCommand != nil {
+		if err := c.onCommand(command); err != nil {
+			return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, CreationAttempted: true, TurnAttempted: true}, err
+		}
 	}
 	return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, Status: "completed", CreationAttempted: true, TurnAttempted: true}, nil
 }
@@ -735,6 +744,128 @@ func TestRunCommand(t *testing.T) {
 	}
 	if !strings.Contains(statusOutput.String(), "завершён, signal terminated") || strings.Contains(statusOutput.String(), "действие:") {
 		t.Fatalf("status потерял завершение процесса или оставил завершённое действие: %q", statusOutput.String())
+	}
+}
+
+// TestNativeParentStartsRegisteredChild проходит весь внутренний путь задачи #60:
+// параллельные родительские turn вызывают run_child, получают один ID только после
+// публикации runstore, а координатор ждёт дочерний workflow. Точный повтор остаётся
+// идемпотентным, а новый запрос после успеха запускает тот же вход заново.
+func TestNativeParentStartsRegisteredChild(t *testing.T) {
+	root, cwd := filepath.Join(t.TempDir(), "runs"), t.TempDir()
+	parentPath, childPath := filepath.Join(cwd, "parent.json"), filepath.Join(cwd, "child.json")
+	if err := os.WriteFile(parentPath, []byte(`{"id":"parent","steps":[{"id":"root-1","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-2","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-3","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-4","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-5","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-6","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-7","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-8","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childPath, []byte(`{"id":"child","steps":[{"id":"worker","type":"agent","prompt":"Выполни","dependsOn":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := newCLIFakeClient()
+	var firstRunID, secondRunID string
+	workerStarted, releaseWorker := make(chan struct{}), make(chan struct{})
+	var workerStartedOnce, releaseWorkerOnce sync.Once
+	var parentReady sync.WaitGroup
+	parentReady.Add(8)
+	type childCallResult struct {
+		runID string
+		err   error
+	}
+	initialResults := make(chan childCallResult, 8)
+	client.onCommand = func(command codex.Command) error {
+		if strings.Contains(command.Title, "Lawa: child / worker [") {
+			workerStartedOnce.Do(func() { close(workerStarted) })
+			<-releaseWorker
+			return nil
+		}
+		if !strings.Contains(command.Title, "Lawa: parent / root-") {
+			return nil
+		}
+		if len(command.DynamicTools) != 2 || command.CallDynamicTool == nil {
+			return errors.New("родитель не получил встроенные child tools")
+		}
+		open := strings.LastIndex(command.Title, "[")
+		parentRunID := strings.TrimSuffix(command.Title[open+1:], "]")
+		arguments := json.RawMessage(fmt.Sprintf(`{"workflow":"child.json","cwd":".","task":"Дочерняя задача","parentRun":"%s"}`, parentRunID))
+		callChild := func(callID string) (string, error) {
+			result, err := command.CallDynamicTool(t.Context(), codex.DynamicToolCall{
+				ThreadID: command.Title, TurnID: "turn-parent", CallID: callID, Tool: "run_child", Arguments: arguments,
+			})
+			if err != nil {
+				return "", err
+			}
+			var decoded struct {
+				RunID string `json:"runId"`
+			}
+			if err := json.Unmarshal([]byte(result), &decoded); err != nil || decoded.RunID == "" {
+				return "", fmt.Errorf("run_child вернул неверный результат %q: %w", result, err)
+			}
+			if _, err := runstore.Load(root, decoded.RunID); err != nil {
+				return "", fmt.Errorf("runId возвращён до надёжной регистрации: %w", err)
+			}
+			return decoded.RunID, nil
+		}
+		parentReady.Done()
+		parentReady.Wait()
+		initialRunID, err := callChild(command.Title)
+		initialResults <- childCallResult{runID: initialRunID, err: err}
+		if !strings.Contains(command.Title, "Lawa: parent / root-1 [") {
+			return err
+		}
+		defer releaseWorkerOnce.Do(func() { close(releaseWorker) })
+		for range 8 {
+			result := <-initialResults
+			if result.err != nil {
+				return result.err
+			}
+			if firstRunID == "" {
+				firstRunID = result.runID
+			} else if result.runID != firstRunID {
+				return fmt.Errorf("параллельная занятая задача создала дубль %q вместо %q", result.runID, firstRunID)
+			}
+		}
+		<-workerStarted
+		releaseWorkerOnce.Do(func() { close(releaseWorker) })
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			child, loadErr := runstore.Load(root, firstRunID)
+			if loadErr == nil && child.Meta.Steps[0].State == scheduler.Succeeded {
+				break
+			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("первый дочерний run не завершился вовремя: %+v, %w", child.Meta, loadErr)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if repeatedRunID, repeatErr := callChild(command.Title); repeatErr != nil || repeatedRunID != firstRunID {
+			return fmt.Errorf("точный повтор потерял runId %q: %q, %w", firstRunID, repeatedRunID, repeatErr)
+		}
+		if secondRunID, err = callChild(command.Title + "-after-success"); err != nil || secondRunID == firstRunID {
+			return fmt.Errorf("новый запрос после успеха не создал новый run: %q, %q, %w", firstRunID, secondRunID, err)
+		}
+		return nil
+	}
+	deps := cliTestDependencies(client, func(context.Context, codex.Connection) error { return nil })
+	if err := executeContext(t.Context(), []string{
+		"run", parentPath, "--cwd", cwd, "--task", "Корневая задача", "--root", root,
+	}, io.Discard, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 3 {
+		t.Fatalf("ожидались родитель и два последовательных ребёнка: %v, %v", entries, err)
+	}
+	for _, runID := range []string{firstRunID, secondRunID} {
+		child, loadErr := runstore.Load(root, runID)
+		if loadErr != nil || child.Workflow.ID != "child" || child.Meta.ParentRunID == "" ||
+			len(child.Meta.Steps) != 1 || child.Meta.Steps[0].State != scheduler.Succeeded {
+			t.Fatalf("дочерний workflow %s не завершён: %+v, %v", runID, child, loadErr)
+		}
+	}
+	client.mu.Lock()
+	workerRuns := client.runs["worker"]
+	client.mu.Unlock()
+	if workerRuns != 2 {
+		t.Fatalf("дочерний шаг запущен %d раз вместо двух последовательных запусков", workerRuns)
 	}
 }
 

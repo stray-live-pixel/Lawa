@@ -61,6 +61,14 @@ func Prepare(run *runstore.LockedRun, root string) (Preparation, error) {
 // одним Sync резервирует только поместившуюся часть готовой волны. Остальные
 // Pending-шаги остаются доступными следующему циклу после освобождения слота.
 func prepare(run *runstore.LockedRun, root string, pool *capacity.Pool) (Preparation, error) {
+	return prepareConfigured(run, root, pool, nil)
+}
+
+// prepareConfigured добавляет к обычной подготовке только переданный вызывающим
+// кодом контракт команды. Конфигуратор не меняет планирование и вызывается после
+// настроек workflow, чтобы встроенные инструменты одинаково получали новые и
+// продолженные turn без дублирования логики координатора.
+func prepareConfigured(run *runstore.LockedRun, root string, pool *capacity.Pool, configure func(runstore.Snapshot, *codex.Command)) (Preparation, error) {
 	if run == nil {
 		return Preparation{}, fmt.Errorf("координатор: нужен открытый запуск")
 	}
@@ -131,6 +139,9 @@ func prepare(run *runstore.LockedRun, root string, pool *capacity.Pool) (Prepara
 			Permissions: stepPermissions(runDir, ownMemory, saved.ThreadID),
 		}
 		applyRuntimeSettings(&command, snapshot.Workflow.Model, workflowStep)
+		if configure != nil {
+			configure(snapshot, &command)
+		}
 		prepared.Launches = append(prepared.Launches, Launch{
 			StepID:  stepID,
 			Command: command,
@@ -167,6 +178,10 @@ func validateMemories(snapshot runstore.Snapshot, root string) error {
 // interrupted не превращается в бесконечный цикл, но следующий явный resume снова
 // получает право продолжить незавершённую работу.
 func prepareContinuations(snapshot runstore.Snapshot, root string, enabled bool, already map[string]bool) ([]Continuation, error) {
+	return prepareContinuationsConfigured(snapshot, root, enabled, already, nil)
+}
+
+func prepareContinuationsConfigured(snapshot runstore.Snapshot, root string, enabled bool, already map[string]bool, configure func(runstore.Snapshot, *codex.Command)) ([]Continuation, error) {
 	if !enabled {
 		return nil, nil
 	}
@@ -197,6 +212,9 @@ func prepareContinuations(snapshot runstore.Snapshot, root string, enabled bool,
 			Permissions: stepPermissions(runDir, memory, step.ThreadID),
 		}
 		applyRuntimeSettings(&command, snapshot.Workflow.Model, workflowSteps[step.ID])
+		if configure != nil {
+			configure(snapshot, &command)
+		}
 		continuations = append(continuations, Continuation{
 			StepID: step.ID, ThreadID: step.CodexThreadID,
 			Command: command,
@@ -246,6 +264,7 @@ func buildPrompt(snapshot runstore.Snapshot, step workflow.Step, savedStep runst
 		"Перед началом прочитай свою память: %s",
 		"По ходу работы обновляй только этот файл. Чужую память можно читать, но нельзя изменять.",
 		"Не изменяй workflow.json, task.md, meta.json и coordinator.lock в папке запуска.",
+		"Если задача требует динамически запустить дочерний workflow, используй только встроенные run_child/run_children, а не shell-команду lawa run.",
 		"Перед завершением запиши в свою память итог, пути к результатам и оставшиеся ограничения.",
 	})
 }

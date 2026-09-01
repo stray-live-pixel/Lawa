@@ -38,6 +38,23 @@ type PermissionProfile struct {
 	ReadPaths, WritePaths []string
 }
 
+// DynamicTool описывает одну функцию, которую Lawa объявляет новому Codex
+// thread через experimental dynamicTools. InputSchema обязан быть JSON Schema
+// объекта. Само объявление не исполняет команду: каждый вызов отдельно приходит
+// клиенту как item/tool/call и проходит CallDynamicTool.
+type DynamicTool struct {
+	Name, Description string
+	InputSchema       json.RawMessage
+}
+
+// DynamicToolCall — проверенный адрес и аргументы одного item/tool/call.
+// CallID стабилен для повторной доставки того же вызова и позволяет обработчику
+// не создавать второй внешний ресурс, если ответ потерялся после первого раза.
+type DynamicToolCall struct {
+	ThreadID, TurnID, CallID, Tool string
+	Arguments                      json.RawMessage
+}
+
 // Event сохраняет неизвестные поля Params: версии Codex могут добавлять события.
 // ID непустой только у запроса сервера; его нельзя путать с ID нашего RPC.
 type Event struct {
@@ -76,7 +93,11 @@ type ProcessEvent struct {
 // чатом: второй app-server не нужен и не конкурирует за writer хранилища Codex.
 // Notify и Respond синхронны, должны учитывать отмену и не вызывать Run или
 // Continue рекурсивно для повтора той же задачи.
-// Respond получает каждый запрос сервера, кроме служебного currentTime/read.
+// DynamicTools и CallDynamicTool задают только явно разрешённые структурированные
+// функции. Клиент проверяет thread, turn, имя функции и JSON-аргументы, а ошибка
+// обработчика возвращается модели как неуспешный результат инструмента и не
+// разрывает протокол App Server.
+// Respond получает каждый прочий запрос сервера, кроме служебного currentTime/read.
 // Обработчик обязан выбрать форму ответа по Event.Method и проверить Event.Params.
 // Для неподдерживаемого метода он может вернуть InteractionRequired. Nil Respond
 // делает это для любого такого запроса, не отправляя молчаливое согласие.
@@ -91,6 +112,8 @@ type Command struct {
 	OnTurn                                func(string, func(context.Context) error) error
 	Notify                                func(Event) error
 	Respond                               func(context.Context, Event) (any, error)
+	DynamicTools                          []DynamicTool
+	CallDynamicTool                       func(context.Context, DynamicToolCall) (string, error)
 }
 
 // Result сохраняет уже полученные ID даже при ошибке. Флаги попыток выставляются
@@ -191,6 +214,9 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 	// поддерживает создание и resume через thread/read, тогда как paginated доступен не во
 	// всех версиях app-server и пока не гарантирует полный жизненный цикл чата.
 	params := map[string]any{"cwd": command.CWD, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
+	if len(command.DynamicTools) != 0 {
+		params["dynamicTools"] = dynamicToolSpecs(command.DynamicTools)
+	}
 	addRuntimeOverrides(params, command, false)
 	if command.Permissions != nil {
 		params["permissions"] = command.Permissions.Name
@@ -281,6 +307,9 @@ func prepareTurn(command Command) ([]map[string]any, error) {
 			return nil, err
 		}
 	}
+	if err := validateDynamicTools(command); err != nil {
+		return nil, err
+	}
 	info, err := os.Stat(command.CWD)
 	if err != nil {
 		return nil, fmt.Errorf("проверить cwd: %w", err)
@@ -298,6 +327,46 @@ func prepareTurn(command Command) ([]map[string]any, error) {
 		inputs = append(inputs, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
 	}
 	return append([]map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}, inputs...), nil
+}
+
+// validateDynamicTools запрещает публиковать функцию без обработчика и
+// неоднозначные повторные имена. Схема должна описывать объект: Lawa ожидает
+// именованные поля и не принимает позиционные или скалярные аргументы.
+func validateDynamicTools(command Command) error {
+	if len(command.DynamicTools) == 0 {
+		return nil
+	}
+	if command.CallDynamicTool == nil {
+		return errors.New("dynamicTools требуют обработчик CallDynamicTool")
+	}
+	seen := make(map[string]bool, len(command.DynamicTools))
+	for _, tool := range command.DynamicTools {
+		if tool.Name == "" || strings.Trim(tool.Name, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-") != "" || seen[tool.Name] {
+			return fmt.Errorf("dynamicTools: неверное или повторное имя %q", tool.Name)
+		}
+		if !validProtocolText(tool.Description) {
+			return fmt.Errorf("dynamicTools %q: нужно непустое описание UTF-8", tool.Name)
+		}
+		var schema map[string]any
+		if err := json.Unmarshal(tool.InputSchema, &schema); err != nil || schema["type"] != "object" {
+			return fmt.Errorf("dynamicTools %q: inputSchema должна быть JSON Schema объекта", tool.Name)
+		}
+		seen[tool.Name] = true
+	}
+	return nil
+}
+
+// dynamicToolSpecs переводит внутреннее описание в точную форму thread/start.
+// RawMessage уже проверен выше и кодируется как JSON, а не строка со схемой.
+func dynamicToolSpecs(tools []DynamicTool) []map[string]any {
+	specs := make([]map[string]any, 0, len(tools))
+	for _, tool := range tools {
+		specs = append(specs, map[string]any{
+			"type": "function", "name": tool.Name,
+			"description": tool.Description, "inputSchema": tool.InputSchema,
+		})
+	}
+	return specs
 }
 
 // resumeThread загружает существующий thread в текущий app-server. Явные cwd,
@@ -546,6 +615,8 @@ func (c *client) read() (message envelope, err error) {
 		var answer any
 		if message.Method == "currentTime/read" {
 			answer = map[string]int64{"currentTimeAt": time.Now().Unix()}
+		} else if message.Method == "item/tool/call" && len(c.command.DynamicTools) != 0 {
+			answer = c.respondDynamicTool(message.Params)
 		} else if c.command.Respond == nil {
 			return message, &InteractionRequired{message.Event}
 		} else if answer, err = c.command.Respond(c.ctx, message.Event); err != nil {
@@ -577,4 +648,59 @@ func (c *client) read() (message envelope, err error) {
 		err = c.command.Notify(message.Event)
 	}
 	return message, err
+}
+
+// respondDynamicTool проверяет, что вызов относится именно к текущему turn и к
+// опубликованной функции. Любая ошибка становится success=false: модель видит
+// понятный отказ и может исправить аргументы, а stdio-сессия остаётся валидной.
+func (c *client) respondDynamicTool(raw json.RawMessage) any {
+	var params struct {
+		ThreadID  string          `json:"threadId"`
+		TurnID    string          `json:"turnId"`
+		CallID    string          `json:"callId"`
+		Namespace *string         `json:"namespace"`
+		Tool      string          `json:"tool"`
+		Arguments json.RawMessage `json:"arguments"`
+	}
+	var result string
+	var err error
+	if decodeErr := json.Unmarshal(raw, &params); decodeErr != nil {
+		err = fmt.Errorf("прочитать item/tool/call: %w", decodeErr)
+	} else if params.ThreadID != c.result.ThreadID || params.TurnID != c.result.TurnID {
+		err = errors.New("item/tool/call относится к другому thread или turn")
+	} else if params.CallID == "" || params.Tool == "" || params.Namespace != nil {
+		err = errors.New("item/tool/call содержит неверный callId, tool или namespace")
+	} else if !c.hasDynamicTool(params.Tool) {
+		err = fmt.Errorf("dynamic tool %q не объявлен", params.Tool)
+	} else {
+		var object map[string]any
+		if decodeErr := json.Unmarshal(params.Arguments, &object); decodeErr != nil || object == nil {
+			err = errors.New("arguments dynamic tool должны быть JSON-объектом")
+		} else {
+			result, err = c.command.CallDynamicTool(c.ctx, DynamicToolCall{
+				ThreadID: params.ThreadID, TurnID: params.TurnID, CallID: params.CallID,
+				Tool: params.Tool, Arguments: params.Arguments,
+			})
+			if err == nil && !validProtocolText(result) {
+				err = errors.New("dynamic tool вернул пустой или неверный UTF-8 результат")
+			}
+		}
+	}
+	success := err == nil
+	if err != nil {
+		result = err.Error()
+	}
+	return map[string]any{
+		"contentItems": []map[string]string{{"type": "inputText", "text": result}},
+		"success":      success,
+	}
+}
+
+func (c *client) hasDynamicTool(name string) bool {
+	for _, tool := range c.command.DynamicTools {
+		if tool.Name == name {
+			return true
+		}
+	}
+	return false
 }
