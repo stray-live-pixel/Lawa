@@ -147,6 +147,10 @@ type Options struct {
 	// Capacity ограничивает суммарные активные turn для общего root. Nil сохраняет
 	// прежнее поведение внутренних вызовов без настроенного --max-parallel.
 	Capacity *capacity.Pool
+	// ConfigureCommand добавляет встроенные возможности к каждому новому и
+	// продолженному turn. Координатор передаёт сохранённый snapshot, поэтому
+	// обработчик может надёжно связать действие с текущим run, не разбирая prompt.
+	ConfigureCommand func(runstore.Snapshot, *codex.Command)
 }
 
 // ErrRunUnsuccessful отличает терминальный failed/interrupted от сбоя самого
@@ -330,7 +334,7 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 		if err = rejectAmbiguous(snapshot, active); err != nil {
 			return outcome, err
 		}
-		continuations, err := prepareContinuations(snapshot, options.Root, options.ContinueInterrupted, continued)
+		continuations, err := prepareContinuationsConfigured(snapshot, options.Root, options.ContinueInterrupted, continued, options.ConfigureCommand)
 		if err != nil {
 			return outcome, err
 		}
@@ -352,7 +356,7 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 			active[continuation.StepID] = execution
 			startContinuation(run, options.Client, turnCtx, continuation, execution, results)
 		}
-		prepared, err := prepare(run, options.Root, options.Capacity)
+		prepared, err := prepareConfigured(run, options.Root, options.Capacity, options.ConfigureCommand)
 		if err != nil {
 			return outcome, err
 		}

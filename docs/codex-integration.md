@@ -52,8 +52,10 @@ workflow требует дополнительных модельных turn у�
 3. Thread ID сохраняется до `turn/start`.
 4. Turn ID сохраняется сразу после ответа `turn/start`, до ожидания событий.
 5. Один read-only App Server переиспользуется для `thread/read` при reconcile.
-6. На SIGINT/SIGTERM Lawa отправляет `turn/interrupt` через исходную stdio-сессию.
-7. `resume` продолжает только подтверждённо interrupted thread.
+6. Новый thread получает структурированные `run_child` и `run_children` через
+   официальный `dynamicTools`; встречный `item/tool/call` обрабатывает Lawa.
+7. На SIGINT/SIGTERM Lawa отправляет `turn/interrupt` через исходную stdio-сессию.
+8. `resume` продолжает только подтверждённо interrupted thread.
 
 Отдельная сессия на активный turn изолирует сбой процесса и RPC-ID одного кубика
 от остальных. Настраиваемый `--max-parallel N` ограничивает суммарное число turn
@@ -172,10 +174,27 @@ CLI дополнительно экранирует управляющие C0/C1
 
 ## Approvals
 
-Lawa запускает turn с `approvalPolicy: on-request` и
-`approvalsReviewer: auto_review`. Managed restrictions остаются обязательными.
+Lawa запускает сам процесс App Server с `approval_policy="on-request"` и
+`approvals_reviewer="auto_review"`, а также повторяет эти значения в RPC thread и
+turn. Managed restrictions остаются обязательными.
 Неизвестный встречный запрос App Server без обработчика превращается в
 `waiting_for_approval`; Lawa не отправляет молчаливое согласие.
+
+## Нативные дочерние run
+
+`run_child` и `run_children` — единственные встроенные действия Lawa, доступные
+агенту. Они принимают структурированные `workflow`, `cwd`, `task`/`taskFile` и
+`parentRun`, проверяют связь с текущим run и не исполняют shell. Дочерний cwd
+ограничен workspace родителя; входные файлы можно читать только из workspace или
+read-only папки родительского run.
+
+После валидации процесс Lawa вызывает обычный `runstore.Create`. Возвращаемый
+`runId` уже переживёт crash, потому что `meta.json` опубликован и каталоги
+синхронизированы. Одинаковый повтор сначала ищет совпадающий опубликованный child
+в существующем хранилище и возвращает его ID. Затем дочерний координатор работает
+в том же процессе, получает общий root-level capacity pool и может тем же способом
+создавать потомков. Верхняя команда ждёт всё дерево, поэтому daemon или новое
+хранилище не нужны.
 
 ## Форматы и миграция
 

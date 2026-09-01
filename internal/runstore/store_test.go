@@ -176,6 +176,33 @@ func TestParentRun(t *testing.T) {
 	}
 }
 
+// TestFindMatchingChild доказывает durable-идемпотентность встроенного запуска:
+// после потери in-memory callId обычные опубликованные файлы позволяют найти тот
+// же смысловой вход без нового индекса. Отличающаяся задача остаётся новым входом.
+func TestFindMatchingChild(t *testing.T) {
+	root := t.TempDir()
+	parent, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := testInput(t)
+	input.ParentRunID = parent.Meta.RunID
+	child, err := Create(root, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Пробелы JSON не меняют разобранный workflow и не должны создавать дубль.
+	input.WorkflowJSON = append([]byte(" \n"), input.WorkflowJSON...)
+	found, ok, err := FindMatchingChild(root, input)
+	if err != nil || !ok || found.Meta.RunID != child.Meta.RunID {
+		t.Fatalf("опубликованный child не найден: %+v, %t, %v", found.Meta, ok, err)
+	}
+	input.Task += " другое"
+	if found, ok, err = FindMatchingChild(root, input); err != nil || ok || found.Meta.RunID != "" {
+		t.Fatalf("другой вход принят за занятый: %+v, %t, %v", found.Meta, ok, err)
+	}
+}
+
 // TestHistoricalMetadataVersion подтверждает чтение прежних snapshot v1. У них не
 // было parentRunId, поэтому dashboard считает такие run корнями дерева.
 func TestHistoricalMetadataVersion(t *testing.T) {

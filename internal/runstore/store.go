@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 
@@ -148,7 +149,7 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 			return Snapshot{}, err
 		}
 	}
-	s := Snapshot{Workflow: w, Task: fmt.Sprintf("# Постановка задачи\n\n%s\n\n# Комментарий пользователя\n\n%s\n", in.Task, in.Comment)}
+	s := Snapshot{Workflow: w, Task: formattedTask(in.Task, in.Comment)}
 	s.Meta = Metadata{Version: 3, RunID: newID(), ParentRunID: in.ParentRunID, CWD: cwd}
 	for _, step := range w.Steps {
 		s.Meta.Steps = append(s.Meta.Steps, Step{ID: step.ID, ThreadID: newID(), State: scheduler.Pending})
@@ -198,6 +199,53 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 		return Snapshot{}, err
 	}
 	return s, nil
+}
+
+// FindMatchingChild ищет уже опубликованный дочерний run с тем же фактическим
+// входом. Это даёт повторному item/tool/call после перезапуска Lawa прежний
+// runId вместо дубля и не требует отдельной базы или marker-файла. Сравниваются
+// разобранный workflow, cwd, задача, комментарий и родитель: различие любого
+// пользовательского входа означает новый запуск.
+//
+// Каталоги незавершённого Create и повреждённые посторонние run пропускаются:
+// без целого опубликованного snapshot невозможно доказать, что именно эта задача
+// уже зарегистрирована. Одновременные вызовы для одного родителя дополнительно
+// сериализует lock родительского координатора и mutex вызывающего процесса.
+func FindMatchingChild(root string, in Input) (Snapshot, bool, error) {
+	w, err := workflow.Decode(bytes.NewReader(in.WorkflowJSON))
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	cwd, err := filepath.Abs(in.CWD)
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	entries, err := os.ReadDir(root)
+	if errors.Is(err, os.ErrNotExist) {
+		return Snapshot{}, false, nil
+	}
+	if err != nil {
+		return Snapshot{}, false, err
+	}
+	wantTask := formattedTask(in.Task, in.Comment)
+	for _, entry := range entries {
+		if !entry.IsDir() || !validID(entry.Name()) {
+			continue
+		}
+		snapshot, loadErr := Load(root, entry.Name())
+		if loadErr != nil {
+			continue
+		}
+		if snapshot.Meta.ParentRunID == in.ParentRunID && snapshot.Meta.CWD == cwd &&
+			snapshot.Task == wantTask && reflect.DeepEqual(snapshot.Workflow, w) {
+			return snapshot, true, nil
+		}
+	}
+	return Snapshot{}, false, nil
+}
+
+func formattedTask(task, comment string) string {
+	return fmt.Sprintf("# Постановка задачи\n\n%s\n\n# Комментарий пользователя\n\n%s\n", task, comment)
 }
 
 // validateParentChain проверяет всю уже сохранённую цепочку до создания ребёнка.
