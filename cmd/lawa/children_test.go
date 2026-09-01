@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
@@ -45,6 +46,12 @@ func TestChildResolutionDoesNotBroadenWorkspace(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "outside.json"), filepath.Join(workspace, "escape.json")); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.Mkdir(filepath.Join(workspace, "nested"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(workspace, "pipe.json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	parent, err := runstore.Create(root, runstore.Input{WorkflowJSON: workflowJSON, Task: "root", CWD: workspace})
 	if err != nil {
 		t.Fatal(err)
@@ -54,12 +61,60 @@ func TestChildResolutionDoesNotBroadenWorkspace(t *testing.T) {
 	if _, err := manager.resolve(parent, valid); err != nil {
 		t.Fatalf("разрешённый child отклонён: %v", err)
 	}
-	for _, request := range []childRequest{
-		{Workflow: "child.json", CWD: outside, Task: "child", ParentRun: parent.Meta.RunID},
-		{Workflow: "escape.json", CWD: ".", Task: "child", ParentRun: parent.Meta.RunID},
+	for _, test := range []struct {
+		request childRequest
+		want    string
+	}{
+		{childRequest{Workflow: "child.json", CWD: outside, Task: "child", ParentRun: parent.Meta.RunID}, "совпадать с workspace"},
+		{childRequest{Workflow: "child.json", CWD: "nested", Task: "child", ParentRun: parent.Meta.RunID}, "совпадать с workspace"},
+		{childRequest{Workflow: "escape.json", CWD: ".", Task: "child", ParentRun: parent.Meta.RunID}, "прочитать workflow"},
+		{childRequest{Workflow: "pipe.json", CWD: ".", Task: "child", ParentRun: parent.Meta.RunID}, "обычным файлом"},
+		{childRequest{Workflow: filepath.Join(outside, "outside.json"), CWD: ".", Task: "child", ParentRun: parent.Meta.RunID}, "файл должен находиться"},
 	} {
-		if _, err := manager.resolve(parent, request); err == nil || !strings.Contains(err.Error(), "workspace") {
-			t.Fatalf("выход из workspace не отклонён: %+v, %v", request, err)
+		if _, err := manager.resolve(parent, test.request); err == nil || !strings.Contains(err.Error(), test.want) {
+			t.Fatalf("опасный путь не отклонён: %+v, %v", test.request, err)
 		}
+	}
+}
+
+// TestReadAllowedFileRejectsDirectoryReplacement воспроизводит существенный
+// порядок гонки: Lawa уже открыла доверенный workspace, после чего агент заменил
+// вложенную папку симлинком наружу. os.Root обязан сохранить границу и не прочитать
+// секрет; переименованный безопасный файл внутри того же root остаётся доступен.
+func TestReadAllowedFileRejectsDirectoryReplacement(t *testing.T) {
+	workspace, runDir, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	slot, saved := filepath.Join(workspace, "slot"), filepath.Join(workspace, "saved")
+	if err := os.Mkdir(slot, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(slot, "task.md"), []byte("безопасная задача"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "task.md"), []byte("секрет снаружи"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	workspaceRoot, err := os.OpenRoot(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = workspaceRoot.Close() })
+	runRoot, err := os.OpenRoot(runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = runRoot.Close() })
+
+	if err = os.Rename(slot, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(outside, slot); err != nil {
+		t.Fatal(err)
+	}
+	if data, readErr := readAllowedFile(workspaceRoot, runRoot, workspace, runDir, "slot/task.md"); readErr == nil {
+		t.Fatalf("после подмены прочитан внешний файл: %q", data)
+	}
+	data, err := readAllowedFile(workspaceRoot, runRoot, workspace, runDir, "saved/task.md")
+	if err != nil || string(data) != "безопасная задача" {
+		t.Fatalf("безопасный файл внутри workspace не прочитан: %q, %v", data, err)
 	}
 }

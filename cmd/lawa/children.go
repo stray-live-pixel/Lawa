@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"unicode/utf8"
 
 	"github.com/stray-live-pixel/Lawa/internal/capacity"
@@ -172,9 +173,9 @@ func decodeChildRequests(tool string, arguments json.RawMessage) ([]childRequest
 }
 
 // resolve читает файлы самим процессом Lawa, но не расширяет доступ агента:
-// child cwd обязан оставаться внутри текущего workspace, а workflow/task-file —
+// child cwd обязан совпадать с текущим workspace, а workflow/task-file —
 // внутри workspace либо доступной только для чтения папки родительского run.
-func (m *childRunManager) resolve(parent runstore.Snapshot, request childRequest) (resolvedChild, error) {
+func (m *childRunManager) resolve(parent runstore.Snapshot, request childRequest) (_ resolvedChild, err error) {
 	if request.ParentRun != parent.Meta.RunID {
 		return resolvedChild{}, fmt.Errorf("parentRun должен быть текущим runId %q", parent.Meta.RunID)
 	}
@@ -197,21 +198,26 @@ func (m *childRunManager) resolve(parent runstore.Snapshot, request childRequest
 	if err != nil {
 		return resolvedChild{}, fmt.Errorf("проверить cwd: %w", err)
 	}
-	info, err := os.Stat(cwd)
-	if err != nil || !info.IsDir() {
-		if err == nil {
-			err = errors.New("не является папкой")
-		}
-		return resolvedChild{}, fmt.Errorf("проверить cwd: %w", err)
+	// exec.Cmd принимает cwd как строку и повторно разрешает путь уже при запуске
+	// App Server. Если разрешить вложенную папку, агент с правом записи в workspace
+	// сможет после этой проверки заменить её симлинком и направить дочерний процесс
+	// наружу. Корень workspace агент переименовать не может без доступа к его
+	// родительской папке, поэтому до запуска через открытый дескриптор принимаем
+	// только его.
+	if cwd != workspace {
+		return resolvedChild{}, errors.New("cwd дочернего workflow должен совпадать с workspace родителя")
 	}
-	if !inside(workspace, cwd) {
-		return resolvedChild{}, errors.New("cwd дочернего workflow должен находиться внутри workspace родителя")
-	}
-	workflowPath, err := resolveReadableFile(workspace, runDir, request.Workflow)
+	workspaceRoot, err := os.OpenRoot(workspace)
 	if err != nil {
-		return resolvedChild{}, fmt.Errorf("прочитать workflow: %w", err)
+		return resolvedChild{}, fmt.Errorf("открыть workspace родителя: %w", err)
 	}
-	workflowJSON, err := os.ReadFile(workflowPath)
+	defer func() { err = errors.Join(err, workspaceRoot.Close()) }()
+	runRoot, err := os.OpenRoot(runDir)
+	if err != nil {
+		return resolvedChild{}, fmt.Errorf("открыть папку родительского run: %w", err)
+	}
+	defer func() { err = errors.Join(err, runRoot.Close()) }()
+	workflowJSON, err := readAllowedFile(workspaceRoot, runRoot, workspace, runDir, request.Workflow)
 	if err != nil {
 		return resolvedChild{}, fmt.Errorf("прочитать workflow: %w", err)
 	}
@@ -220,11 +226,7 @@ func (m *childRunManager) resolve(parent runstore.Snapshot, request childRequest
 	}
 	task := request.Task
 	if request.TaskFile != "" {
-		taskPath, pathErr := resolveReadableFile(workspace, runDir, request.TaskFile)
-		if pathErr != nil {
-			return resolvedChild{}, fmt.Errorf("прочитать taskFile: %w", pathErr)
-		}
-		data, readErr := os.ReadFile(taskPath)
+		data, readErr := readAllowedFile(workspaceRoot, runRoot, workspace, runDir, request.TaskFile)
 		if readErr != nil {
 			return resolvedChild{}, fmt.Errorf("прочитать taskFile: %w", readErr)
 		}
@@ -245,22 +247,49 @@ func resolveExistingPath(base, path string) (string, error) {
 	return filepath.EvalSymlinks(filepath.Clean(path))
 }
 
-func resolveReadableFile(workspace, runDir, path string) (string, error) {
-	resolved, err := resolveExistingPath(workspace, path)
-	if err != nil {
-		return "", err
+// readAllowedFile выбирает один из двух доверенных корней по абсолютному имени,
+// а само открытие выполняет через os.Root. В отличие от пары EvalSymlinks+ReadFile,
+// Root удерживает файловую границу и не позволяет конкурентной подмене симлинка
+// направить чтение наружу. Относительные пути, как и в CLI, относятся к workspace.
+func readAllowedFile(workspaceRoot, runRoot *os.Root, workspace, runDir, path string) ([]byte, error) {
+	root, relative := workspaceRoot, filepath.Clean(path)
+	if filepath.IsAbs(path) {
+		clean := filepath.Clean(path)
+		var base string
+		switch {
+		case inside(workspace, clean):
+			base = workspace
+		case inside(runDir, clean):
+			root, base = runRoot, runDir
+		default:
+			return nil, errors.New("файл должен находиться внутри workspace или родительского run")
+		}
+		var err error
+		if relative, err = filepath.Rel(base, clean); err != nil {
+			return nil, err
+		}
 	}
-	if !inside(workspace, resolved) && !inside(runDir, resolved) {
-		return "", errors.New("файл должен находиться внутри workspace или родительского run")
-	}
-	info, err := os.Stat(resolved)
+	return readRegularFile(root, relative)
+}
+
+// readRegularFile проверяет тип уже открытого объекта и читает тот же дескриптор.
+// O_NONBLOCK не влияет на обычный файл, но не даёт созданному агентом FIFO зависнуть
+// внутри Open до проверки типа. Поэтому между проверкой и чтением нельзя подставить
+// другой объект по тому же пути.
+func readRegularFile(root *os.Root, path string) (_ []byte, err error) {
+	file, err := root.OpenFile(path, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if err != nil {
-		return "", err
+		return nil, err
+	}
+	defer func() { err = errors.Join(err, file.Close()) }()
+	info, err := file.Stat()
+	if err != nil {
+		return nil, err
 	}
 	if !info.Mode().IsRegular() {
-		return "", errors.New("путь не является обычным файлом")
+		return nil, errors.New("путь не является обычным файлом")
 	}
-	return resolved, nil
+	return io.ReadAll(file)
 }
 
 func inside(base, target string) bool {
