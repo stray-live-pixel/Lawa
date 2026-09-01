@@ -147,18 +147,36 @@ TRACKER_CONTEXT_END`)
 	html := recorder.Body.String()
 	for _, fragment := range []string{
 		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "vscode://file/",
-		"failed-workflow", "succeeded-workflow", "0/1 шагов", "1/1 шагов", "Работа агента",
+		"0 из 1 завершено", "Работа агента", "Активные", "Все", "Все состояния", "В работе", "Сломавшиеся", "data-inspector", "folder-icon", "cube-icon",
 		"Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
-		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID, "действие: mcpToolCall",
+		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID, "mcpToolCall",
 		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
 		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",
-		"Flow, кубик, тикет, run/thread ID, текст задачи…",
+		"Поиск по workflow, кубикам и тикетам…", "data-auto-submit", "data-search-input", "top-controls", "tree-scroll", "pin-button", "data-root-target",
+		"html,body{height:100%;overflow:hidden}", "flex:1;min-height:0",
 		"selectionInside", "editableFocusInside", "schedulePanelOpen", "freshMarkup===dashboardMarkup", "traceRenderPending",
 		"/assets/lawa-logo.png", "Расписание запусков", "data-schedule-open", "next-run-time", "scheduled-workflow", "Запуск: " + plannedAt.Local().Format("02.01.2006 15:04:05"), "cron 0 10 * * * · Europe/Moscow",
 		"/uml/" + parent.Meta.RunID, "/memory/" + child.Meta.RunID + "/" + child.Meta.Steps[0].ThreadID,
 	} {
 		if !strings.Contains(html, fragment) {
 			t.Errorf("на странице нет %q", fragment)
+		}
+	}
+	if strings.Contains(html, "failed-workflow") || strings.Contains(html, "succeeded-workflow") {
+		t.Fatal("режим по умолчанию показывает полностью завершённые workflow")
+	}
+	if strings.Contains(html, ">Применить<") {
+		t.Fatal("dashboard снова требует отдельного применения фильтров")
+	}
+	if strings.Contains(html, `class="tree-state"`) {
+		t.Fatal("дерево снова печатает текстовый статус справа от кубика")
+	}
+	allRecorder := httptest.NewRecorder()
+	dashboard.ServeHTTP(allRecorder, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
+	allHTML := allRecorder.Body.String()
+	for _, fragment := range []string{"failed-workflow", "succeeded-workflow", "1 из 1 завершено", `value="all"`} {
+		if !strings.Contains(allHTML, fragment) {
+			t.Errorf("режим «Все» не показывает %q", fragment)
 		}
 	}
 	if strings.Index(html, parent.Meta.RunID) > strings.Index(html, child.Meta.RunID) {
@@ -315,7 +333,7 @@ func TestCorruptedEventsRemainVisible(t *testing.T) {
 // TestPreview гарантирует, что макет использует production-шаблон и остаётся
 // достаточно сложным для визуальной оценки без run-хранилища.
 func TestPreview(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/preview?period=all", nil)
+	request := httptest.NewRequest(http.MethodGet, "/preview?period=all&view=all", nil)
 	recorder := httptest.NewRecorder()
 	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(recorder, request)
 	body := recorder.Body.String()
@@ -323,7 +341,7 @@ func TestPreview(t *testing.T) {
 		"TEST DATA", "Consolas", "nightly-review", "35 мин", "Расписание запусков", "Запуск: ", "sync-project-status", "weekly-report",
 		"release-v0.3.0", "repair-failed-macos-build", "nightly-maintenance",
 		"prepare-release-notes-with-a-deliberately-long-name", "tone-running", "tone-failed", "tone-succeeded", "skipped", "#preview",
-		"Работа агента", "0/2 шагов", "1/2 шагов", "failed-nightly-cleanup", "previous-release", "За последние 24 часа", "За всё время",
+		"Работа агента", "0 из 2 завершено", "1 из 2 завершено", "failed-nightly-cleanup", "previous-release", "За последние 24 часа", "За всё время",
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("preview не показывает %q", fragment)
@@ -340,6 +358,29 @@ func TestPreview(t *testing.T) {
 	}
 	if strings.Contains(body, `data-refresh="3"`) {
 		t.Fatal("статичный preview неожиданно начал polling")
+	}
+	working := httptest.NewRecorder()
+	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(working, httptest.NewRequest(http.MethodGet, "/preview?period=all&view=all&states=working", nil))
+	workingBody := working.Body.String()
+	if !strings.Contains(workingBody, "build-all-platforms") || !strings.Contains(workingBody, "fix-and-rebuild") ||
+		strings.Contains(workingBody, "prepare-release-notes-with-a-deliberately-long-name") || strings.Contains(workingBody, "nightly-maintenance") {
+		t.Fatal("фильтр «В работе» не отделил выполняющиеся кубики и workflow")
+	}
+	focused := httptest.NewRecorder()
+	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(focused, httptest.NewRequest(http.MethodGet, "/preview?period=all&view=all&root=preview-repair", nil))
+	focusedBody := focused.Body.String()
+	if !strings.Contains(focusedBody, `aria-label="Закреплённая папка"`) || !strings.Contains(focusedBody, "release-v0.3.0") ||
+		!strings.Contains(focusedBody, "verify-related-artifacts") || !strings.Contains(focusedBody, "repair-failed-macos-build") ||
+		!strings.Contains(focusedBody, `class="tree-row parent-row"`) || strings.Contains(focusedBody, "focus-up") ||
+		strings.Index(focusedBody, `class="focus-nav"`) > strings.Index(focusedBody, `class="inspector-body"`) || strings.Contains(focusedBody, "nightly-maintenance") {
+		t.Fatal("закреплённый preview не показал путь, ../ или скрыл лишние корни")
+	}
+	failed := httptest.NewRecorder()
+	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(failed, httptest.NewRequest(http.MethodGet, "/preview?period=all&view=all&states=failed", nil))
+	failedBody := failed.Body.String()
+	if !strings.Contains(failedBody, "macos-arm64") || !strings.Contains(failedBody, "failed-nightly-cleanup") ||
+		!strings.Contains(failedBody, "cleanup-skipped-artifacts") || strings.Contains(failedBody, "build-all-platforms") || strings.Contains(failedBody, "linux-amd64") {
+		t.Fatal("фильтр «Сломавшиеся» не отделил аварийные кубики и workflow")
 	}
 	live := httptest.NewRecorder()
 	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/", nil))
