@@ -3,12 +3,14 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 
+	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 )
 
@@ -31,10 +33,10 @@ func TestDecodeChildRequests(t *testing.T) {
 	}
 }
 
-// TestChildResolutionDoesNotBroadenWorkspace проверяет границу прав до создания
-// run. Абсолютный путь и симлинк наружу не должны превращать дочерний cwd или
-// workflow в новый workspace, недоступный родительскому агенту.
-func TestChildResolutionDoesNotBroadenWorkspace(t *testing.T) {
+// TestChildResolutionSeparatesCWDFromInputRoots фиксирует новый контракт: cwd
+// ребёнка может находиться вне workspace, но workflow и taskFile по-прежнему
+// читаются только из workspace родителя или каталога его run.
+func TestChildResolutionSeparatesCWDFromInputRoots(t *testing.T) {
 	root, workspace, outside := filepath.Join(t.TempDir(), "runs"), t.TempDir(), t.TempDir()
 	workflowJSON := []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"work","dependsOn":[]}]}`)
 	if err := os.WriteFile(filepath.Join(workspace, "child.json"), workflowJSON, 0o600); err != nil {
@@ -46,34 +48,80 @@ func TestChildResolutionDoesNotBroadenWorkspace(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "outside.json"), filepath.Join(workspace, "escape.json")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Mkdir(filepath.Join(workspace, "nested"), 0o700); err != nil {
+	if err := syscall.Mkfifo(filepath.Join(workspace, "pipe.json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := syscall.Mkfifo(filepath.Join(workspace, "pipe.json"), 0o600); err != nil {
+	if err := syscall.Mkfifo(filepath.Join(outside, "cwd-pipe"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	parent, err := runstore.Create(root, runstore.Input{WorkflowJSON: workflowJSON, Task: "root", CWD: workspace})
 	if err != nil {
 		t.Fatal(err)
 	}
-	manager := newChildRunManager(context.Background(), root, "codex", nil, nil, dependencies{})
-	valid := childRequest{Workflow: "child.json", CWD: ".", Task: "child", ParentRun: parent.Meta.RunID}
-	if _, err := manager.resolve(parent, valid); err != nil {
+	checks := 0
+	manager := newChildRunManager(context.Background(), root, "codex", nil, nil, dependencies{
+		check: func(_ context.Context, connection codex.Connection) error {
+			checks++
+			if connection.Directory == nil || connection.CWD != connection.Directory.Path() {
+				return errors.New("preflight потерял проверенный каталог")
+			}
+			return nil
+		},
+	})
+	valid := childRequest{Workflow: "child.json", CWD: outside, Task: "child", ParentRun: parent.Meta.RunID}
+	resolved, err := manager.resolve(t.Context(), parent, valid)
+	if err != nil {
 		t.Fatalf("разрешённый child отклонён: %v", err)
+	}
+	t.Cleanup(func() { _ = resolved.directory.Close() })
+	canonicalOutside, canonicalErr := filepath.EvalSymlinks(outside)
+	if canonicalErr != nil || resolved.input.CWD != canonicalOutside || checks != 1 {
+		t.Fatalf("внешний cwd или его preflight потерян: %+v, checks=%d", resolved.input, checks)
 	}
 	for _, test := range []struct {
 		request childRequest
 		want    string
 	}{
-		{childRequest{Workflow: "child.json", CWD: outside, Task: "child", ParentRun: parent.Meta.RunID}, "совпадать с workspace"},
-		{childRequest{Workflow: "child.json", CWD: "nested", Task: "child", ParentRun: parent.Meta.RunID}, "совпадать с workspace"},
-		{childRequest{Workflow: "escape.json", CWD: ".", Task: "child", ParentRun: parent.Meta.RunID}, "прочитать workflow"},
-		{childRequest{Workflow: "pipe.json", CWD: ".", Task: "child", ParentRun: parent.Meta.RunID}, "обычным файлом"},
-		{childRequest{Workflow: filepath.Join(outside, "outside.json"), CWD: ".", Task: "child", ParentRun: parent.Meta.RunID}, "файл должен находиться"},
+		{childRequest{Workflow: "child.json", CWD: "relative", Task: "child", ParentRun: parent.Meta.RunID}, "абсолютным"},
+		{childRequest{Workflow: "child.json", CWD: filepath.Join(outside, "missing"), Task: "child", ParentRun: parent.Meta.RunID}, "открыть cwd"},
+		{childRequest{Workflow: "child.json", CWD: filepath.Join(outside, "outside.json"), Task: "child", ParentRun: parent.Meta.RunID}, "cwd должен быть папкой"},
+		{childRequest{Workflow: "child.json", CWD: filepath.Join(outside, "cwd-pipe"), Task: "child", ParentRun: parent.Meta.RunID}, "cwd должен быть папкой"},
+		{childRequest{Workflow: "escape.json", CWD: outside, Task: "child", ParentRun: parent.Meta.RunID}, "прочитать workflow"},
+		{childRequest{Workflow: "pipe.json", CWD: outside, Task: "child", ParentRun: parent.Meta.RunID}, "обычным файлом"},
+		{childRequest{Workflow: filepath.Join(outside, "outside.json"), CWD: outside, Task: "child", ParentRun: parent.Meta.RunID}, "файл должен находиться"},
 	} {
-		if _, err := manager.resolve(parent, test.request); err == nil || !strings.Contains(err.Error(), test.want) {
+		if child, err := manager.resolve(t.Context(), parent, test.request); err == nil || !strings.Contains(err.Error(), test.want) {
+			_ = child.directory.Close()
 			t.Fatalf("опасный путь не отклонён: %+v, %v", test.request, err)
 		}
+	}
+}
+
+// TestChildResolutionRejectsPolicyDeniedCWD подтверждает порядок операции:
+// managed preflight выполняется до Create, а его понятная ошибка возвращается
+// вызвавшему dynamic tool без зарегистрированного дочернего run.
+func TestChildResolutionRejectsPolicyDeniedCWD(t *testing.T) {
+	root, workspace, denied := filepath.Join(t.TempDir(), "runs"), t.TempDir(), t.TempDir()
+	workflowJSON := []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"work","dependsOn":[]}]}`)
+	if err := os.WriteFile(filepath.Join(workspace, "child.json"), workflowJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	parent, err := runstore.Create(root, runstore.Input{WorkflowJSON: workflowJSON, Task: "root", CWD: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := newChildRunManager(t.Context(), root, "codex", nil, nil, dependencies{
+		check: func(context.Context, codex.Connection) error {
+			return errors.New("managed restriction запрещает каталог")
+		},
+	})
+	request := childRequest{Workflow: "child.json", CWD: denied, Task: "child", ParentRun: parent.Meta.RunID}
+	if _, err = manager.resolve(t.Context(), parent, request); err == nil || !strings.Contains(err.Error(), "cwd недоступен активной политике Codex") {
+		t.Fatalf("отказ политики потерян: %v", err)
+	}
+	entries, readErr := os.ReadDir(root)
+	if readErr != nil || len(entries) != 1 {
+		t.Fatalf("отказ preflight оставил дочерний run: %v, %v", entries, readErr)
 	}
 }
 

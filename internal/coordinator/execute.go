@@ -74,23 +74,35 @@ func (o *sharedObserver) Close() error {
 type ProductionClient struct {
 	Executable string
 	Stderr     io.Writer
+	// Directory, если задан, привязывает все рабочие и наблюдающие App Server
+	// текущего run к одному заранее открытому cwd.
+	Directory *codex.Directory
 }
 
 // Run передаёт настройки процесса, не меняя подготовленный prompt и callbacks.
 func (c ProductionClient) Run(ctx context.Context, command codex.Command) (codex.Result, error) {
-	command.Executable, command.Stderr = c.Executable, c.Stderr
+	command.Executable, command.Stderr, command.Directory = c.Executable, c.Stderr, c.Directory
+	if c.Directory != nil {
+		command.CWD = c.Directory.Path()
+	}
 	return codex.Run(ctx, command)
 }
 
 // Continue запускает один новый turn в уже сохранённом чате.
 func (c ProductionClient) Continue(ctx context.Context, threadID string, command codex.Command) (codex.Result, error) {
-	command.Executable, command.Stderr = c.Executable, c.Stderr
+	command.Executable, command.Stderr, command.Directory = c.Executable, c.Stderr, c.Directory
+	if c.Directory != nil {
+		command.CWD = c.Directory.Path()
+	}
 	return codex.Continue(ctx, threadID, command)
 }
 
 // OpenObserver открывает одну read-only сессию для всех polling-циклов Execute.
 func (c ProductionClient) OpenObserver(ctx context.Context, cwd string) (Observer, error) {
-	return codex.OpenObserver(ctx, codex.Connection{Executable: c.Executable, CWD: cwd, Stderr: c.Stderr})
+	if c.Directory != nil {
+		cwd = c.Directory.Path()
+	}
+	return codex.OpenObserver(ctx, codex.Connection{Executable: c.Executable, CWD: cwd, Stderr: c.Stderr, Directory: c.Directory})
 }
 
 // StepStatus — компактная строка отчёта без prompt, task.md и содержимого памяти.

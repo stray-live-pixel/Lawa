@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -58,8 +59,34 @@ func openSession(ctx context.Context, command Command, result *Result) (*session
 		arguments = append(arguments, "-c", override)
 	}
 	arguments = append(arguments, "--stdio")
-	process := exec.CommandContext(ctx, command.Executable, arguments...)
-	process.Dir, process.Stderr = command.CWD, command.Stderr
+	processExecutable, processArguments := command.Executable, arguments
+	if command.Directory != nil {
+		target, lookErr := exec.LookPath(command.Executable)
+		if lookErr != nil {
+			return nil, fmt.Errorf("найти исполняемый файл Codex: %w", lookErr)
+		}
+		if !filepath.IsAbs(target) {
+			target, lookErr = filepath.Abs(target)
+			if lookErr != nil {
+				return nil, fmt.Errorf("определить исполняемый файл Codex: %w", lookErr)
+			}
+		}
+		helper, helperErr := os.Executable()
+		if helperErr != nil {
+			return nil, fmt.Errorf("найти helper безопасного cwd: %w", helperErr)
+		}
+		processExecutable = helper
+		processArguments = append([]string{directoryHelperArgument, target}, arguments...)
+	}
+	process := exec.CommandContext(ctx, processExecutable, processArguments...)
+	process.Stderr = command.Stderr
+	if command.Directory != nil {
+		if bindErr := command.Directory.bindProcess(process); bindErr != nil {
+			return nil, fmt.Errorf("подготовить безопасный cwd App Server: %w", bindErr)
+		}
+	} else {
+		process.Dir = command.CWD
+	}
 	// Терминальный SIGINT/SIGTERM предназначен координатору. Отдельная группа
 	// не даёт ядру одновременно послать тот же сигнал дочернему app-server;
 	// координатор сам адресует turn/interrupt и получает точный терминальный статус.
