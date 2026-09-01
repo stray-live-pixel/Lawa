@@ -22,8 +22,10 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/stray-live-pixel/Lawa/assets"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/series"
 )
 
 const DefaultAddress = "127.0.0.1:60800"
@@ -40,11 +42,21 @@ type page struct {
 	Filter                       filterView
 	Pagination                   paginationView
 	Roots                        []*runNode
+	Scheduled                    []scheduledRun
 	Problems                     []problem
 }
 
 // problem — безопасная короткая диагностика одного каталога, не скрывающая дерево.
 type problem struct{ Name, Message string }
+
+// scheduledRun — одна реально сохранённая точка следующего запуска серии.
+// nextRunAt остаётся внутренним ключом сортировки, видимые строки строятся на
+// сервере и не требуют повторять календарную семантику series в JavaScript.
+type scheduledRun struct {
+	SeriesID, WorkflowID, Next, Remaining, Schedule, Progress string
+	Overdue                                                   bool
+	nextRunAt                                                 time.Time
+}
 
 // runNode — готовая к HTML структура одного workflow и его потомков. Все URL
 // строит сервер из проверенных ID, поэтому template.URL не содержит сырого ввода.
@@ -77,6 +89,7 @@ func Handler(root string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", h.live)
 	mux.HandleFunc("GET /preview", h.preview)
+	mux.HandleFunc("GET /assets/lawa-logo.png", h.logo)
 	mux.HandleFunc("GET /memory/{run}/{thread}", h.memory)
 	mux.HandleFunc("GET /events/{run}", h.events)
 	mux.HandleFunc("GET /api/trace/{run}", h.trace)
@@ -92,22 +105,138 @@ func Handler(root string) http.Handler {
 	})
 }
 
+// logo отдаёт встроенный фирменный PNG. Короткий cache позволяет браузеру не
+// перечитывать 864-КБ ресурс при polling, но не удерживает старый логотип надолго
+// после обновления установленной версии Lawa.
+func (h handler) logo(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "image/png")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "public, max-age=3600")
+	_, _ = w.Write(assets.LawaLogoPNG)
+}
+
 // handler хранит единственную область чтения Lawa. Dashboard не обходит
 // внутренние каталоги Codex и не раскрывает сырые rollout-файлы.
 type handler struct{ root string }
 
 // live перечитывает хранилище на каждый polling-запрос.
 func (h handler) live(w http.ResponseWriter, r *http.Request) {
-	view := page{Title: "Lawa workflows", Refresh: "3"}
+	view := page{Title: "Lawa", Refresh: "3"}
+	now := time.Now()
 	roots, problems := loadTree(h.root)
-	visible, filter, pagination := applyDashboardView(roots, parseViewParams(r.URL.Query()), time.Now())
-	view.Roots, view.Problems, view.Filter, view.Pagination = visible, problems, filter, pagination
+	scheduled, seriesProblems := loadScheduledRuns(h.root, now)
+	visible, filter, pagination := applyDashboardView(roots, parseViewParams(r.URL.Query()), now)
+	view.Roots, view.Scheduled, view.Problems = visible, scheduled, append(problems, seriesProblems...)
+	view.Filter, view.Pagination = filter, pagination
 	if len(roots) == 0 {
 		view.EmptyMessage = "Запусков пока нет. Создайте workflow командой lawa run."
 	} else {
 		view.EmptyMessage = "Ничего не найдено. Измените период или строку поиска."
 	}
 	render(w, view)
+}
+
+// loadScheduledRuns читает только состояние waiting с опубликованным nextRunAt.
+// Running не имеет будущей точки, а stop-маркер запрещает новый run даже до того,
+// как владелец серии успел переписать состояние в stopped. Просроченная точка не
+// скрывается: она помогает заметить остановившийся или задержанный координатор.
+func loadScheduledRuns(root string, now time.Time) ([]scheduledRun, []problem) {
+	entries, err := os.ReadDir(filepath.Join(root, "series"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, []problem{{Name: "Серии", Message: diagnostic(err)}}
+	}
+	var scheduled []scheduledRun
+	var problems []problem
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		snapshot, loadErr := series.Load(root, entry.Name())
+		if loadErr != nil {
+			problems = append(problems, problem{Name: "Серия " + entry.Name(), Message: diagnostic(loadErr)})
+			continue
+		}
+		if snapshot.HistoricalAppNative || snapshot.StopRequested || snapshot.State != series.Waiting || snapshot.NextRunAt == nil {
+			continue
+		}
+		next := *snapshot.NextRunAt
+		if next.IsZero() {
+			problems = append(problems, problem{Name: "Серия " + entry.Name(), Message: "nextRunAt содержит нулевое время"})
+			continue
+		}
+		workflowID := snapshot.WorkflowID
+		if workflowID == "" {
+			workflowID = "Серия " + snapshot.SeriesID
+		}
+		progress := fmt.Sprintf("запущено: %d", snapshot.RunsStarted)
+		if snapshot.Config.MaxRuns > 0 {
+			progress += fmt.Sprintf(" из %d", snapshot.Config.MaxRuns)
+		}
+		// Next — только готовая подпись для панели. Формат с днём в начале привычен
+		// русскоязычному интерфейсу; календарные вычисления продолжают использовать
+		// исходный time.Time в nextRunAt.
+		scheduled = append(scheduled, scheduledRun{
+			SeriesID: snapshot.SeriesID, WorkflowID: workflowID,
+			Next: next.Local().Format("02.01.2006 15:04:05"), Remaining: remainingLabel(next, now),
+			Schedule: scheduleLabel(snapshot.Config), Progress: progress,
+			Overdue: !next.After(now), nextRunAt: next,
+		})
+	}
+	sort.Slice(scheduled, func(i, j int) bool {
+		if scheduled[i].nextRunAt.Equal(scheduled[j].nextRunAt) {
+			return scheduled[i].SeriesID < scheduled[j].SeriesID
+		}
+		return scheduled[i].nextRunAt.Before(scheduled[j].nextRunAt)
+	})
+	return scheduled, problems
+}
+
+// remainingLabel даёт интерфейсу короткий обратный отсчёт без JavaScript-таймера.
+// Контекст пилюли и панели уже объясняет, что это время до запуска, поэтому строка
+// не повторяет «через». Округление вверх не показывает «0 мин», а polling
+// обновляет подпись при переходе к следующей минуте.
+func remainingLabel(next, now time.Time) string {
+	if !next.After(now) {
+		return "ожидает запуска"
+	}
+	remaining := next.Sub(now)
+	if remaining < time.Minute {
+		return "меньше минуты"
+	}
+	minutes := int((remaining + time.Minute - time.Nanosecond) / time.Minute)
+	if minutes < 60 {
+		return fmt.Sprintf("%d мин", minutes)
+	}
+	hours, restMinutes := minutes/60, minutes%60
+	if hours < 24 {
+		if restMinutes == 0 {
+			return fmt.Sprintf("%d ч", hours)
+		}
+		return fmt.Sprintf("%d ч %d мин", hours, restMinutes)
+	}
+	days, restHours := hours/24, hours%24
+	if restHours == 0 {
+		return fmt.Sprintf("%d д", days)
+	}
+	return fmt.Sprintf("%d д %d ч", days, restHours)
+}
+
+// scheduleLabel переводит сохранённую конфигурацию в короткое описание. Это не
+// вычисление расписания: источником истины для ближайшей точки остаётся NextRunAt.
+func scheduleLabel(config series.Config) string {
+	switch config.Mode {
+	case series.Immediate:
+		return "сразу после предыдущего запуска"
+	case series.After:
+		return "через " + config.Delay + " после завершения"
+	case series.Cron:
+		return "cron " + config.Cron + " · " + config.TimeZone
+	default:
+		return string(config.Mode)
+	}
 }
 
 // preview использует тот же шаблон, но никогда не обращается к runstore.
@@ -598,7 +727,24 @@ func previewPage(params viewParams, now time.Time) page {
 	}
 	visible, filter, pagination := applyDashboardView(roots, params, now)
 	return page{
-		Title: "Lawa workflows — preview", Preview: true, Roots: visible, Filter: filter, Pagination: pagination,
+		Title: "Lawa", Preview: true, Roots: visible, Filter: filter, Pagination: pagination,
+		Scheduled: []scheduledRun{
+			{
+				SeriesID: "preview-series-nightly", WorkflowID: "nightly-review",
+				Next: now.Add(35 * time.Minute).Format("02.01.2006 15:04:05"), Remaining: "35 мин",
+				Schedule: "cron 0 3 * * * · Europe/Moscow", Progress: "запущено: 4 из 30",
+			},
+			{
+				SeriesID: "preview-series-sync", WorkflowID: "sync-project-status",
+				Next: now.Add(2*time.Hour + 10*time.Minute).Format("02.01.2006 15:04:05"), Remaining: "2 ч 10 мин",
+				Schedule: "через 2h после завершения", Progress: "запущено: 8",
+			},
+			{
+				SeriesID: "preview-series-report", WorkflowID: "weekly-report",
+				Next: now.Add(29 * time.Hour).Format("02.01.2006 15:04:05"), Remaining: "1 д 5 ч",
+				Schedule: "cron 0 19 * * 5 · Europe/Moscow", Progress: "запущено: 12 из 52",
+			},
+		},
 		EmptyMessage: "Ничего не найдено. Измените период или строку поиска.",
 	}
 }

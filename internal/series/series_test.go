@@ -60,11 +60,26 @@ func TestParseConfigRejectsAmbiguity(t *testing.T) {
 	}
 }
 
+// TestCreateRejectsMissingWorkflowID не позволяет создать расписание, которое
+// невозможно понятно подписать до появления первого run. Проверка UTF-8 также
+// гарантирует, что series.json и server-rendered dashboard останутся валидными.
+func TestCreateRejectsMissingWorkflowID(t *testing.T) {
+	for _, workflowID := range []string{" \n", string([]byte{0xff})} {
+		owner, err := Create(t.TempDir(), Config{Mode: Immediate}, workflowID)
+		if owner != nil || err == nil {
+			if owner != nil {
+				_ = owner.Close()
+			}
+			t.Fatalf("неверный workflow-id %q принят: owner=%v err=%v", workflowID, owner, err)
+		}
+	}
+}
+
 // TestSeriesLifecycleAndStopBarrier проверяет прогресс, лимитируемые счётчики и
 // главный инвариант: второй run нельзя создать, пока текущий не завершён.
 func TestSeriesLifecycleAndStopBarrier(t *testing.T) {
 	root := t.TempDir()
-	owner, err := Create(root, Config{Mode: Immediate, MaxRuns: 2})
+	owner, err := Create(root, Config{Mode: Immediate, MaxRuns: 2}, "test-workflow")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,12 +132,12 @@ func TestSeriesLifecycleAndStopBarrier(t *testing.T) {
 // и консервативную миграцию опубликованной ранее app-native серии.
 func TestSeriesVersionAndHistoricalAppNativeReadOnly(t *testing.T) {
 	root := t.TempDir()
-	owner, err := Create(root, Config{Mode: After, Delay: "10m"})
+	owner, err := Create(root, Config{Mode: After, Delay: "10m"}, "test-workflow")
 	if err != nil {
 		t.Fatal(err)
 	}
 	seriesID := owner.Snapshot().SeriesID
-	if owner.Snapshot().Version != 3 || owner.Snapshot().Driver != "" {
+	if owner.Snapshot().Version != 3 || owner.Snapshot().WorkflowID != "test-workflow" || owner.Snapshot().Driver != "" {
 		t.Fatalf("новая серия не использует app-server v3: %+v", owner.Snapshot())
 	}
 	if _, err = Open(root, seriesID); !errors.Is(err, ErrSeriesLocked) {
@@ -187,7 +202,7 @@ func TestSeriesParentSync(t *testing.T) {
 			seriesBase := filepath.Join(root, "series")
 			want = append(want, root, seriesBase)
 			var synced []string
-			owner, err := create(inputRoot, Config{Mode: Immediate}, func(path string) error {
+			owner, err := create(inputRoot, Config{Mode: Immediate}, "test-workflow", func(path string) error {
 				synced = append(synced, path)
 				return syncDirectory(path)
 			})
@@ -228,7 +243,7 @@ func TestSeriesParentSyncFailure(t *testing.T) {
 				return syncDirectory(path)
 			}
 			for range 2 {
-				owner, err := create(root, Config{Mode: Immediate}, syncParent)
+				owner, err := create(root, Config{Mode: Immediate}, "test-workflow", syncParent)
 				if owner != nil || !errors.Is(err, failure) {
 					if owner != nil {
 						_ = owner.Close()
@@ -252,7 +267,7 @@ func TestSeriesParentSyncFailure(t *testing.T) {
 
 // TestStartRunRollsBackUnpublishedRun проверяет откат и обе причины двойного сбоя.
 func TestStartRunRollsBackUnpublishedRun(t *testing.T) {
-	owner, err := Create(t.TempDir(), Config{Mode: Immediate})
+	owner, err := Create(t.TempDir(), Config{Mode: Immediate}, "test-workflow")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,7 +291,7 @@ func TestStartRunRollsBackUnpublishedRun(t *testing.T) {
 // через две горутины: stop не может вклиниться внутрь уже начатого StartRun.
 func TestStopIsSerializedWithLaunch(t *testing.T) {
 	root := t.TempDir()
-	owner, err := Create(root, Config{Mode: Immediate})
+	owner, err := Create(root, Config{Mode: Immediate}, "test-workflow")
 	if err != nil {
 		t.Fatal(err)
 	}

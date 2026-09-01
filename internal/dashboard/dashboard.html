@@ -6,23 +6,31 @@
   <title>{{.Title}}</title>
   <style>
     :root{color-scheme:dark;--bg:#080808;--surface:#111;--button:#181818;--button-hover:#222;--line:#292929;--text:#f5f5f5;--muted:#777;--link:#58a6ff;--red:#f85149;--green:#3fb950}
-    *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--text);font:14px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace}
-    main{max-width:1280px;margin:0 auto;padding:28px 22px 60px} h1{font:600 19px/1.3 system-ui,sans-serif;margin:0 0 6px}.subtitle{color:var(--muted);margin:0 0 24px}
+    *{box-sizing:border-box}html,body,button,input,select,textarea{font-family:Consolas,"Courier New",monospace}body{margin:0;background:var(--bg);color:var(--text);font-size:14px;line-height:1.45}button,input,select,textarea{font-size:inherit}button{color:inherit}
+    .app-header{width:100%;border-bottom:1px solid #222;background:#0d0d0d}.app-header-inner{max-width:1280px;min-height:60px;margin:0 auto;padding:10px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px}.brand{display:flex;align-items:center;gap:9px;min-width:0}.app-logo{display:block;width:32px;height:32px;flex:0 0 auto;overflow:hidden;border:1px solid #303030;border-radius:9px;background:#0b0b0b}.app-logo img{display:block;width:100%;height:100%;object-fit:cover}.brand-name{font-size:17px;font-weight:700;letter-spacing:-.02em}.environment-pill{display:inline-flex;align-items:center;min-height:18px;border:1px solid #303030;border-radius:999px;background:#171717;color:#8a8a8a;padding:0 6px;font-size:8px;font-weight:700;letter-spacing:.08em}.environment-pill-text{display:block;transform:translateY(1px)}
+    .next-run-pill{display:flex;align-items:center;gap:8px;min-width:0;max-width:min(620px,68vw);min-height:36px;border:1px solid #303030;border-radius:999px;background:#151515;padding:5px 8px 5px 12px;cursor:pointer;text-align:left;transition:border-color .12s,background .12s}.next-run-pill:hover,.next-run-pill:focus-visible{border-color:#484848;background:#1c1c1c;outline:none}.next-run-workflow{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.next-run-time{flex:0 0 auto;border-radius:999px;background:#0c2033;color:#9bd0ff;padding:3px 7px;font-size:10px;white-space:nowrap}.next-run-arrow{flex:0 0 auto;margin-right:3px;color:var(--muted);font-size:16px;line-height:1}.no-next-run{color:var(--muted);font-size:11px}
+    main{max-width:1280px;margin:0 auto;padding:24px 22px 60px}
     a{color:var(--link);text-decoration:none}.tree,.children{list-style:none;margin:0;padding:0}.children{margin-left:17px;padding-left:14px;border-left:1px solid var(--line)}
     details{margin:5px 0;border-bottom:1px solid #1d1d1d}summary{display:grid;grid-template-columns:9px 8px minmax(0,1fr) auto;align-items:center;gap:8px;min-height:44px;padding:3px 0;cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}summary:before{content:'›';color:var(--muted);width:9px;transition:transform .12s}details[open]>summary:before{transform:rotate(90deg)}
-    .run-main,.step-main{min-width:0}.primary{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}.name{font-weight:600}.ticket-title{display:block;color:#aaa;font:12px/1.35 system-ui,sans-serif;margin-top:2px;white-space:normal}.meta{display:block;color:var(--muted);font-size:10px;line-height:1.35;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .run-main,.step-main{min-width:0}.primary{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}.name{font-weight:600}.ticket-title{display:block;color:#aaa;font-size:12px;line-height:1.35;margin-top:2px;white-space:normal}.meta{display:block;color:var(--muted);font-size:10px;line-height:1.35;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .actions{display:flex;gap:6px;margin-left:auto;padding-left:12px;white-space:nowrap}.action{display:inline-flex;align-items:center;min-height:24px;border:1px solid #30363d;border-radius:6px;background:var(--button);color:var(--link);padding:2px 8px;font-size:11px;line-height:1;text-decoration:none}.action:hover{background:var(--button-hover);border-color:#484f58;text-decoration:none}.action-ticket{border-color:#285783;background:#0c2033}.action.disabled{color:#555;border-color:#252525;background:#111;cursor:not-allowed}
     .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto}.tone-running{background:var(--link)}.tone-failed{background:var(--red)}.tone-succeeded{background:var(--green)}
     .workflows{list-style:none;margin:0;padding:7px 13px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}.compact-steps{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}.compact-step,.step-open{font:inherit;color:inherit;border:0;background:none;text-align:left;cursor:pointer}.compact-step{display:inline-flex;align-items:center;gap:5px;max-width:100%;border:1px solid #244d73;border-radius:999px;background:#0c2033;padding:2px 8px;color:#b9ddff;font-size:10px}.compact-step:hover,.step-open:hover .name{color:var(--link)}
     .step{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-height:38px;padding-left:17px}.step-open{display:grid;grid-template-columns:8px minmax(0,1fr);align-items:center;gap:8px;min-width:0;padding:5px 0}.step .actions{font-size:11px}.problem{border:1px solid #532423;background:#1b0d0d;padding:10px 12px;margin:8px 0;color:#ffb4ae}.empty{border:1px dashed var(--line);color:var(--muted);padding:24px;text-align:center}.badge{color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}
-    .filters{display:grid;grid-template-columns:minmax(220px,1fr) minmax(190px,260px) auto auto;gap:8px;margin:0 0 8px}.control{width:100%;min-height:34px;border:1px solid #30363d;border-radius:7px;background:var(--surface);color:var(--text);padding:6px 9px;font:12px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}.control:focus{border-color:var(--link);outline:1px solid var(--link)}.filters .action{min-height:34px;font:12px/1 system-ui,sans-serif;cursor:pointer}.action-primary{border-color:#285783;background:#0c2033}.result-summary{color:var(--muted);font-size:11px;margin:0 0 16px}.pagination{display:flex;align-items:center;justify-content:center;gap:6px;margin:18px 0}.pagination .action{min-width:28px;justify-content:center}.pagination .current{border-color:var(--link);background:#0c2033;color:var(--text)}.pagination .ellipsis{min-width:22px;color:var(--muted);text-align:center}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
-    .trace-backdrop{position:fixed;inset:0;background:#0008;z-index:20}.trace-panel{position:fixed;z-index:21;top:0;right:0;width:min(720px,92vw);height:100vh;background:#0d0d0d;border-left:1px solid var(--line);box-shadow:-18px 0 50px #000a;display:flex;flex-direction:column}.trace-header{display:flex;align-items:flex-start;gap:12px;padding:16px;border-bottom:1px solid var(--line)}.trace-heading{min-width:0;flex:1}.trace-heading h2{font:600 16px/1.3 system-ui,sans-serif;margin:0}.trace-status,.trace-note{display:block;color:var(--muted);font-size:10px;margin-top:3px}.trace-note{color:#b58b55}.trace-close{font-size:18px;min-width:32px;justify-content:center}.trace-list{padding:13px 16px 40px;overflow:auto;display:flex;flex-direction:column;gap:9px}.trace-item{border:1px solid var(--line);border-radius:7px;background:#131313;padding:9px 11px}.trace-item-header{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:10px;margin-bottom:6px}.trace-item pre{margin:0;color:#ddd;font:12px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;overflow-wrap:anywhere}.trace-empty{color:var(--muted);padding:30px;text-align:center}.hidden{display:none!important}
-    @media(max-width:720px){main{padding:20px 12px}.filters{grid-template-columns:1fr 1fr}.filters .search{grid-column:1/-1}.children{margin-left:8px;padding-left:8px}details>summary{grid-template-columns:9px 8px minmax(0,1fr)}details>summary>.actions{grid-column:3;margin:2px 0 5px;padding:0;flex-wrap:wrap}.step{grid-template-columns:minmax(0,1fr);padding-left:8px}.step>.actions{margin:0 0 5px 16px;padding:0;flex-wrap:wrap}.meta{white-space:normal}.pagination{flex-wrap:wrap}.trace-panel{width:100vw}}
+    .filters{display:grid;grid-template-columns:minmax(220px,1fr) minmax(190px,260px) auto auto;gap:8px;margin:0 0 8px}.control{width:100%;min-height:34px;border:1px solid #30363d;border-radius:7px;background:var(--surface);color:var(--text);padding:6px 9px;font-size:12px;line-height:1.2}.control:focus{border-color:var(--link);outline:1px solid var(--link)}.filters .action{min-height:34px;font-size:12px;cursor:pointer}.action-primary{border-color:#285783;background:#0c2033}.result-summary{color:var(--muted);font-size:11px;margin:0 0 16px}.pagination{display:flex;align-items:center;justify-content:center;gap:6px;margin:18px 0}.pagination .action{min-width:28px;justify-content:center}.pagination .current{border-color:var(--link);background:#0c2033;color:var(--text)}.pagination .ellipsis{min-width:22px;color:var(--muted);text-align:center}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .schedule-backdrop{position:fixed;inset:0;z-index:30;background:#0009}.schedule-panel{position:fixed;z-index:31;top:0;right:0;width:min(460px,100vw);height:100vh;border-left:1px solid #303030;background:#0d0d0d;box-shadow:-18px 0 50px #000b;display:flex;flex-direction:column}.schedule-panel-header{display:flex;align-items:center;gap:12px;padding:17px 18px;border-bottom:1px solid var(--line)}.schedule-heading{min-width:0;flex:1}.schedule-heading h2{margin:0;color:var(--text);font-size:18px;line-height:1.3}.schedule-count{color:var(--muted);font-size:10px}.schedule-close{width:30px;height:30px;min-width:30px;min-height:30px;flex:0 0 30px;padding:0;justify-content:center;font-size:17px;line-height:1}.schedule-list{list-style:none;margin:0;padding:5px 18px 32px;overflow:auto}.schedule-item{padding:14px 0;border-bottom:1px solid #242424}.schedule-item:last-child{border-bottom:0}.schedule-item-top{display:flex;align-items:baseline;justify-content:space-between;gap:14px}.schedule-workflow{min-width:0;overflow-wrap:anywhere;font-size:12px;font-weight:700}.schedule-relative{flex:0 0 auto;color:#9bd0ff;font-size:10px}.schedule-relative.overdue{color:#ffb86b}.schedule-absolute{display:block;margin-top:5px;color:#aaa;font-size:10px}.schedule-details{display:block;margin-top:3px;color:var(--muted);font-size:9px;line-height:1.5;overflow-wrap:anywhere}.drawer-open{overflow:hidden}
+    .trace-backdrop{position:fixed;inset:0;background:#0008;z-index:20}.trace-panel{position:fixed;z-index:21;top:0;right:0;width:min(720px,92vw);height:100vh;background:#0d0d0d;border-left:1px solid var(--line);box-shadow:-18px 0 50px #000a;display:flex;flex-direction:column}.trace-header{display:flex;align-items:flex-start;gap:12px;padding:16px;border-bottom:1px solid var(--line)}.trace-heading{min-width:0;flex:1}.trace-heading h2{font-size:16px;line-height:1.3;margin:0}.trace-status,.trace-note{display:block;color:var(--muted);font-size:10px;margin-top:3px}.trace-note{color:#b58b55}.trace-close{font-size:18px;min-width:32px;justify-content:center}.trace-list{padding:13px 16px 40px;overflow:auto;display:flex;flex-direction:column;gap:9px}.trace-item{border:1px solid var(--line);border-radius:7px;background:#131313;padding:9px 11px}.trace-item-header{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:10px;margin-bottom:6px}.trace-item pre{margin:0;color:#ddd;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}.trace-empty{color:var(--muted);padding:30px;text-align:center}.hidden{display:none!important}
+    @media(max-width:720px){.app-header-inner{padding:9px 12px;gap:10px}.brand{gap:7px}.brand-name{font-size:15px}.environment-pill{display:none}.next-run-pill{max-width:72vw;padding-left:9px}.next-run-workflow{font-size:10px}.next-run-time{font-size:9px}main{padding:20px 12px}.filters{grid-template-columns:1fr 1fr}.filters .search{grid-column:1/-1}.children{margin-left:8px;padding-left:8px}details>summary{grid-template-columns:9px 8px minmax(0,1fr)}details>summary>.actions{grid-column:3;margin:2px 0 5px;padding:0;flex-wrap:wrap}.step{grid-template-columns:minmax(0,1fr);padding-left:8px}.step>.actions{margin:0 0 5px 16px;padding:0;flex-wrap:wrap}.meta{white-space:normal}.pagination{flex-wrap:wrap}.trace-panel{width:100vw}}
   </style>
 </head>
-<body data-refresh="{{.Refresh}}"><main data-dashboard-content>
-  <h1>{{.Title}} {{if .Preview}}<span class="badge">fake data</span>{{end}}</h1>
-  <p class="subtitle">Прогресс workflow и live-вывод Codex App Server{{if .Refresh}} · обновление каждые {{.Refresh}} сек.{{end}}</p>
+<body data-refresh="{{.Refresh}}"><div data-dashboard-content>
+  <header class="app-header">
+    <div class="app-header-inner">
+      <div class="brand"><span class="app-logo"><img src="/assets/lawa-logo.png" width="32" height="32" alt=""></span><span class="brand-name">Lawa</span>{{if .Preview}}<span class="environment-pill"><span class="environment-pill-text">TEST DATA</span></span>{{end}}</div>
+      {{if .Scheduled}}{{with index .Scheduled 0}}<button class="next-run-pill" type="button" data-schedule-open aria-haspopup="dialog" aria-expanded="false"><span class="next-run-workflow">{{.WorkflowID}}</span><span class="next-run-time">{{.Remaining}}</span><span class="next-run-arrow">›</span></button>{{end}}{{else}}<span class="no-next-run">Нет запланированных запусков</span>{{end}}
+    </div>
+  </header>
+<main>
   <form class="filters" method="get">
     <label class="search"><span class="sr-only">Поиск</span><input class="control" type="search" name="q" value="{{.Filter.Query}}" placeholder="Flow, кубик, тикет, run/thread ID, текст задачи…" maxlength="300"></label>
     <label><span class="sr-only">Период</span><select class="control" name="period" aria-label="Период">{{range .Filter.Periods}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}</select></label>
@@ -34,6 +42,12 @@
   {{if .Roots}}<ul class="workflows">{{range .Roots}}{{template "run" .}}{{end}}</ul>{{else}}<div class="empty">{{.EmptyMessage}}</div>{{end}}
   {{template "pagination" .Pagination}}
 </main>
+<div class="schedule-backdrop hidden" data-schedule-backdrop></div>
+<aside class="schedule-panel hidden" data-schedule-panel role="dialog" aria-modal="true" aria-labelledby="schedule-panel-title" aria-hidden="true">
+  <header class="schedule-panel-header"><div class="schedule-heading"><h2 id="schedule-panel-title">Расписание запусков</h2></div><span class="schedule-count">{{len .Scheduled}}</span><button class="action schedule-close" type="button" data-schedule-close aria-label="Закрыть">×</button></header>
+  {{if .Scheduled}}<ol class="schedule-list">{{range .Scheduled}}<li class="schedule-item"><div class="schedule-item-top"><span class="schedule-workflow">{{.WorkflowID}}</span><span class="schedule-relative{{if .Overdue}} overdue{{end}}">{{.Remaining}}</span></div><time class="schedule-absolute">Запуск: {{.Next}}</time><span class="schedule-details">{{.Schedule}} · {{.Progress}}</span></li>{{end}}</ol>{{else}}<div class="trace-empty">Запланированных запусков нет.</div>{{end}}
+</aside>
+</div>
 <div class="trace-backdrop hidden" data-trace-backdrop></div>
 <aside class="trace-panel hidden" data-trace-panel aria-hidden="true">
   <header class="trace-header"><div class="trace-heading"><h2 data-trace-title>Работа агента</h2><span class="trace-status" data-trace-status>Ожидание данных…</span><span class="trace-note">Приватный вывод: сообщения и команды могут содержать секреты.</span></div><button class="action trace-close" type="button" data-trace-close aria-label="Закрыть">×</button></header>
@@ -42,6 +56,28 @@
 <script>
   const key='lawa-dashboard-open:';
   const searchActive={{.Filter.HasActiveQuery}};
+  // Выделение и незавершённый ввод важнее очередного polling. Замена родительского
+  // DOM-узла сбрасывает системное выделение браузера и фокус поля, поэтому такой
+  // блок обновляется только после того, как пользователь закончит взаимодействие.
+  const selectionInside=root=>{
+    const selection=window.getSelection();
+    if(!root||!selection||selection.isCollapsed)return false;
+    return Boolean(
+      (selection.anchorNode&&root.contains(selection.anchorNode))||
+      (selection.focusNode&&root.contains(selection.focusNode))
+    );
+  };
+  const editableFocusInside=root=>{
+    const active=document.activeElement;
+    return Boolean(root&&active&&root.contains(active)&&(active.matches('input,select,textarea')||active.isContentEditable));
+  };
+  // Открытая панель расписания тоже приостанавливает замену: иначе минутное
+  // обновление обратного отсчёта закрыло бы её прямо во время просмотра.
+  const schedulePanelOpen=root=>Boolean(root?.querySelector('[data-schedule-panel]:not(.hidden)'));
+  const userInteractsWith=root=>selectionInside(root)||editableFocusInside(root)||schedulePanelOpen(root);
+  // Сравнение с последним HTML сервера, а не с живым DOM, сохраняет локально
+  // раскрытые details: их open-атрибуты меняются после первоначального рендера.
+  let dashboardMarkup=document.querySelector('[data-dashboard-content]')?.innerHTML||'';
   const remember=(node,id)=>{
     const saved=localStorage.getItem(key+id);
     if(saved!==null) node.open=saved==='1';
@@ -54,6 +90,7 @@
   const traceStatus=document.querySelector('[data-trace-status]');
   let currentTrace=null;
   const traceBlocks=new Map();
+  let traceRenderPending=false;
   const maxTraceBlocks=500;
   const labels={agent_message_delta:'Сообщение агента',reasoning_summary_delta:'Краткое объяснение',command_output_delta:'Вывод команды',plan_updated:'План',item_started:'Действие',item_completed:'Результат',error:'Ошибка'};
   const initialize=root=>{
@@ -78,6 +115,11 @@
     traceBlocks.set(id,{...event,content,time:event.time||previous?.time||''});
   };
   const renderTrace=()=>{
+    // Новые события продолжают накапливаться в traceBlocks, но DOM остаётся
+    // неподвижным, пока пользователь копирует текст. Следующий polling применит
+    // отложенный рендер после снятия выделения.
+    if(selectionInside(traceList)){traceRenderPending=true;return;}
+    traceRenderPending=false;
     const items=[...traceBlocks.values()].sort((a,b)=>String(b.time).localeCompare(String(a.time))).slice(0,200);
     traceList.replaceChildren();
     if(!items.length){const empty=document.createElement('div');empty.className='trace-empty';empty.textContent='Агент ещё не прислал вывод.';traceList.append(empty);return;}
@@ -87,22 +129,56 @@
     const trace=currentTrace;
     if(!trace||trace.busy||trace.preview)return;
     trace.busy=true;
-    try{const target=new URL(trace.url,location.href);target.searchParams.set('after',String(trace.cursor));const response=await fetch(target,{cache:'no-store'});if(!response.ok)throw new Error('HTTP '+response.status);const data=await response.json();if(currentTrace!==trace)return;(data.events||[]).forEach(ingest);trace.cursor=data.next;traceStatus.textContent='Обновлено '+new Date().toLocaleTimeString();renderTrace();}
+    try{const target=new URL(trace.url,location.href);target.searchParams.set('after',String(trace.cursor));const response=await fetch(target,{cache:'no-store'});if(!response.ok)throw new Error('HTTP '+response.status);const data=await response.json();if(currentTrace!==trace)return;const events=data.events||[];events.forEach(ingest);trace.cursor=data.next;traceStatus.textContent='Обновлено '+new Date().toLocaleTimeString();if(events.length||traceRenderPending)renderTrace();}
     catch(error){if(currentTrace===trace)traceStatus.textContent='Не удалось обновить: '+error.message;}
     finally{trace.busy=false;}
   };
   const openTrace=button=>{
-    traceBlocks.clear();traceTitle.textContent=button.dataset.title||'Работа агента';panel.classList.remove('hidden');backdrop.classList.remove('hidden');panel.setAttribute('aria-hidden','false');
+    closeSchedule(false);traceBlocks.clear();traceRenderPending=false;traceTitle.textContent=button.dataset.title||'Работа агента';panel.classList.remove('hidden');backdrop.classList.remove('hidden');panel.setAttribute('aria-hidden','false');
     if(button.dataset.trace==='#preview'){currentTrace={preview:true};[{time:new Date().toISOString(),kind:'agent_message_delta',itemType:'agentMessage',itemId:'preview',content:'Проверяю сборку и результаты тестов…'},{time:new Date(Date.now()-1000).toISOString(),kind:'command_output_delta',itemType:'commandExecution',itemId:'command',content:'go test ./...\nok  github.com/stray-live-pixel/Lawa'}].forEach(ingest);traceStatus.textContent='Демонстрационные данные';renderTrace();return;}
-    currentTrace={url:button.dataset.trace,cursor:0,busy:false};traceStatus.textContent='Подключение…';traceList.innerHTML='<div class="trace-empty">Загрузка вывода…</div>';fetchTrace();
+    currentTrace={url:button.dataset.trace,cursor:0,busy:false};traceRenderPending=true;traceStatus.textContent='Подключение…';traceList.innerHTML='<div class="trace-empty">Загрузка вывода…</div>';fetchTrace();
   };
-  const closeTrace=()=>{currentTrace=null;traceBlocks.clear();panel.classList.add('hidden');backdrop.classList.add('hidden');panel.setAttribute('aria-hidden','true');};
-  document.querySelector('[data-trace-close]').addEventListener('click',closeTrace);backdrop.addEventListener('click',closeTrace);document.addEventListener('keydown',event=>{if(event.key==='Escape')closeTrace();});
+  const closeTrace=()=>{currentTrace=null;traceBlocks.clear();traceRenderPending=false;panel.classList.add('hidden');backdrop.classList.add('hidden');panel.setAttribute('aria-hidden','true');};
+  let scheduleReturnFocus=null;
+  const openSchedule=button=>{
+    const schedulePanel=document.querySelector('[data-schedule-panel]'),scheduleBackdrop=document.querySelector('[data-schedule-backdrop]');
+    if(!schedulePanel||!scheduleBackdrop)return;
+    closeTrace();scheduleReturnFocus=button;schedulePanel.classList.remove('hidden');scheduleBackdrop.classList.remove('hidden');schedulePanel.setAttribute('aria-hidden','false');button.setAttribute('aria-expanded','true');document.body.classList.add('drawer-open');schedulePanel.querySelector('[data-schedule-close]')?.focus();
+  };
+  const closeSchedule=(restoreFocus=true)=>{
+    const schedulePanel=document.querySelector('[data-schedule-panel]'),scheduleBackdrop=document.querySelector('[data-schedule-backdrop]'),button=document.querySelector('[data-schedule-open]');
+    schedulePanel?.classList.add('hidden');scheduleBackdrop?.classList.add('hidden');schedulePanel?.setAttribute('aria-hidden','true');button?.setAttribute('aria-expanded','false');document.body.classList.remove('drawer-open');
+    if(restoreFocus&&scheduleReturnFocus?.isConnected)scheduleReturnFocus.focus();
+    scheduleReturnFocus=null;
+  };
+  document.addEventListener('click',event=>{
+    const openButton=event.target.closest('[data-schedule-open]');
+    if(openButton){openSchedule(openButton);return;}
+    if(event.target.closest('[data-schedule-close]')||event.target.matches('[data-schedule-backdrop]'))closeSchedule();
+  });
+  document.querySelector('[data-trace-close]').addEventListener('click',closeTrace);backdrop.addEventListener('click',closeTrace);document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeTrace();closeSchedule();}});
   initialize(document);
   setInterval(fetchTrace,1000);
   const refreshSeconds=Number(document.body.dataset.refresh||0);
   let refreshing=false;
-  const refreshDashboard=async()=>{if(refreshing)return;refreshing=true;try{const response=await fetch(location.href,{cache:'no-store'});if(!response.ok)return;const page=new DOMParser().parseFromString(await response.text(),'text/html');const fresh=page.querySelector('[data-dashboard-content]'),current=document.querySelector('[data-dashboard-content]');if(fresh&&current){current.replaceWith(fresh);initialize(fresh);}}catch(error){}finally{refreshing=false;}};
+  const refreshDashboard=async()=>{
+    if(refreshing)return;
+    const currentBeforeFetch=document.querySelector('[data-dashboard-content]');
+    if(userInteractsWith(currentBeforeFetch))return;
+    refreshing=true;
+    try{
+      const response=await fetch(location.href,{cache:'no-store'});
+      if(!response.ok)return;
+      const page=new DOMParser().parseFromString(await response.text(),'text/html');
+      const fresh=page.querySelector('[data-dashboard-content]'),current=document.querySelector('[data-dashboard-content]');
+      if(!fresh||!current)return;
+      const freshMarkup=fresh.innerHTML;
+      // Запрос мог начаться до выделения текста, поэтому взаимодействие проверяется
+      // повторно непосредственно перед необратимой заменой DOM.
+      if(freshMarkup===dashboardMarkup||userInteractsWith(current))return;
+      current.replaceWith(fresh);dashboardMarkup=freshMarkup;initialize(fresh);
+    }catch(error){}finally{refreshing=false;}
+  };
   if(refreshSeconds>0)setInterval(refreshDashboard,refreshSeconds*1000);
 </script></body></html>{{end}}
 

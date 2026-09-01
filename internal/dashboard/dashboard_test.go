@@ -15,8 +15,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stray-live-pixel/Lawa/assets"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/series"
 	"github.com/stray-live-pixel/Lawa/internal/statusreport"
 )
 
@@ -116,6 +118,15 @@ TRACKER_CONTEXT_END`)
 	setState(t, root, failed, scheduler.Failed)
 	succeeded := createRun(t, root, "succeeded-workflow", "")
 	setState(t, root, succeeded, scheduler.Succeeded)
+	planned, err := series.Create(root, series.Config{Mode: series.Cron, Cron: "0 10 * * *", TimeZone: "Europe/Moscow", MaxRuns: 10}, "scheduled-workflow")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer planned.Close()
+	plannedAt := time.Now().Add(time.Hour).Truncate(time.Second)
+	if err = planned.SetNext(plannedAt); err != nil {
+		t.Fatal(err)
+	}
 	memory := filepath.Join(root, child.Meta.RunID, "memory", child.Meta.Steps[0].ThreadID+".md")
 	if err := os.WriteFile(memory, []byte(`<script>alert("memory")</script>`), 0o600); err != nil {
 		t.Fatal(err)
@@ -142,6 +153,8 @@ TRACKER_CONTEXT_END`)
 		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
 		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",
 		"Flow, кубик, тикет, run/thread ID, текст задачи…",
+		"selectionInside", "editableFocusInside", "schedulePanelOpen", "freshMarkup===dashboardMarkup", "traceRenderPending",
+		"/assets/lawa-logo.png", "Расписание запусков", "data-schedule-open", "next-run-time", "scheduled-workflow", "Запуск: " + plannedAt.Local().Format("02.01.2006 15:04:05"), "cron 0 10 * * * · Europe/Moscow",
 		"/uml/" + parent.Meta.RunID, "/memory/" + child.Meta.RunID + "/" + child.Meta.Steps[0].ThreadID,
 	} {
 		if !strings.Contains(html, fragment) {
@@ -156,6 +169,11 @@ TRACKER_CONTEXT_END`)
 	}
 	if strings.Contains(html, "codex://") || strings.Contains(html, "Тред JSONL") {
 		t.Fatal("dashboard снова раскрыл нативные ссылки или сырой rollout Codex")
+	}
+	logo := httptest.NewRecorder()
+	dashboard.ServeHTTP(logo, httptest.NewRequest(http.MethodGet, "/assets/lawa-logo.png", nil))
+	if logo.Code != http.StatusOK || logo.Header().Get("Content-Type") != "image/png" || !bytes.Equal(logo.Body.Bytes(), assets.LawaLogoPNG) {
+		t.Fatalf("dashboard не отдал встроенный логотип: status=%d content-type=%q size=%d", logo.Code, logo.Header().Get("Content-Type"), logo.Body.Len())
 	}
 	search := httptest.NewRecorder()
 	dashboard.ServeHTTP(search, httptest.NewRequest(http.MethodGet, "/?period=all&q=thinktwice-592", nil))
@@ -187,6 +205,75 @@ TRACKER_CONTEXT_END`)
 	if err = json.Unmarshal(recorder.Body.Bytes(), &trace); err != nil || recorder.Header().Get("Content-Type") != "application/json; charset=utf-8" ||
 		len(trace.Events) != 1 || trace.Events[0].Content != "github · get_issue" || trace.Next == 0 {
 		t.Fatalf("live-поток не отдан панели: status=%d trace=%+v err=%v", recorder.Code, trace, err)
+	}
+}
+
+// TestScheduledRuns показывает только будущие решения активных серий. Просроченная
+// точка остаётся первой как диагностика задержанного координатора, stop-маркер
+// исключает уже запрещённый запуск, а повреждение одной серии не скрывает остальные.
+func TestScheduledRuns(t *testing.T) {
+	root := t.TempDir()
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	var owners []*series.LockedSeries
+	create := func(workflowID string, config series.Config, next time.Time) *series.LockedSeries {
+		t.Helper()
+		owner, err := series.Create(root, config, workflowID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		owners = append(owners, owner)
+		if err = owner.SetNext(next); err != nil {
+			t.Fatal(err)
+		}
+		return owner
+	}
+	overdue := create("overdue", series.Config{Mode: series.Immediate}, now.Add(-time.Minute))
+	after := create("after", series.Config{Mode: series.After, Delay: "30m", MaxRuns: 5}, now.Add(time.Hour))
+	cron := create("cron", series.Config{Mode: series.Cron, Cron: "0 3 * * *", TimeZone: "Europe/Moscow"}, now.Add(2*time.Hour))
+	stopped := create("stopped", series.Config{Mode: series.After, Delay: "1h"}, now.Add(30*time.Minute))
+	if err := series.RequestStop(root, stopped.Snapshot().SeriesID); err != nil {
+		t.Fatal(err)
+	}
+	for _, owner := range owners {
+		defer owner.Close()
+	}
+	brokenID := strings.Repeat("a", 32)
+	if err := os.MkdirAll(filepath.Join(root, "series", brokenID), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "series", brokenID, "series.json"), []byte("broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	items, problems := loadScheduledRuns(root, now)
+	if len(items) != 3 || items[0].SeriesID != overdue.Snapshot().SeriesID || !items[0].Overdue || items[0].Remaining != "ожидает запуска" ||
+		items[1].SeriesID != after.Snapshot().SeriesID || items[1].Remaining != "1 ч" || items[1].Next != now.Add(time.Hour).Local().Format("02.01.2006 15:04:05") || items[1].Schedule != "через 30m после завершения" || items[1].Progress != "запущено: 0 из 5" ||
+		items[2].SeriesID != cron.Snapshot().SeriesID || items[2].Overdue || len(problems) != 1 || problems[0].Name != "Серия "+brokenID {
+		t.Fatalf("неверные запланированные серии: items=%+v problems=%+v", items, problems)
+	}
+}
+
+// TestRemainingLabel фиксирует короткие подписи интерфейса без лишнего «через»:
+// они округляются вверх, остаются компактными на больших интервалах и отдельно
+// показывают просрочку.
+func TestRemainingLabel(t *testing.T) {
+	now := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		next time.Time
+		want string
+	}{
+		{name: "overdue", next: now.Add(-time.Second), want: "ожидает запуска"},
+		{name: "seconds", next: now.Add(20 * time.Second), want: "меньше минуты"},
+		{name: "minutes round up", next: now.Add(20*time.Minute + time.Second), want: "21 мин"},
+		{name: "hours", next: now.Add(2*time.Hour + 10*time.Minute), want: "2 ч 10 мин"},
+		{name: "days", next: now.Add(29 * time.Hour), want: "1 д 5 ч"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := remainingLabel(tc.next, now); got != tc.want {
+				t.Fatalf("remainingLabel() = %q, ожидалось %q", got, tc.want)
+			}
+		})
 	}
 }
 
@@ -233,13 +320,23 @@ func TestPreview(t *testing.T) {
 	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(recorder, request)
 	body := recorder.Body.String()
 	for _, fragment := range []string{
-		"fake data", "release-v0.3.0", "repair-failed-macos-build", "nightly-maintenance",
+		"TEST DATA", "Consolas", "nightly-review", "35 мин", "Расписание запусков", "Запуск: ", "sync-project-status", "weekly-report",
+		"release-v0.3.0", "repair-failed-macos-build", "nightly-maintenance",
 		"prepare-release-notes-with-a-deliberately-long-name", "tone-running", "tone-failed", "tone-succeeded", "skipped", "#preview",
 		"Работа агента", "0/2 шагов", "1/2 шагов", "failed-nightly-cleanup", "previous-release", "За последние 24 часа", "За всё время",
 	} {
 		if !strings.Contains(body, fragment) {
 			t.Errorf("preview не показывает %q", fragment)
 		}
+	}
+	if strings.Contains(body, "Прогресс workflow и live-вывод") || strings.Contains(body, "<h1") || strings.Contains(body, "fake data") {
+		t.Fatal("preview снова показывает старый заголовок, subtitle или неоформленную тестовую метку")
+	}
+	if strings.Contains(body, "Ближайший") || strings.Contains(body, "через 35 мин") {
+		t.Fatal("пилюля ближайшего запуска снова содержит лишние пояснения")
+	}
+	if strings.Contains(body, "Будущие запуски") || strings.Contains(body, "schedule-eyebrow") {
+		t.Fatal("панель снова показывает двухстрочный заголовок")
 	}
 	if strings.Contains(body, `data-refresh="3"`) {
 		t.Fatal("статичный preview неожиданно начал polling")
