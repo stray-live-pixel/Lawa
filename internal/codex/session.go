@@ -41,7 +41,15 @@ func openSession(ctx context.Context, command Command, result *Result) (*session
 	if command.Executable == "" {
 		command.Executable = "codex"
 	}
-	arguments := []string{"app-server"}
+	// Политика одобрений нужна не только отдельному thread/turn. App Server
+	// обрабатывает часть встречных запросов на уровне процесса, поэтому запуск
+	// сразу фиксирует тот же безопасный режим, который ниже повторяется в RPC.
+	// Каждый override передаётся отдельным argv без shell-интерполяции.
+	arguments := []string{
+		"app-server",
+		"-c", `approval_policy="on-request"`,
+		"-c", `approvals_reviewer="auto_review"`,
+	}
 	if command.Permissions != nil {
 		override, err := permissionOverride(command.Permissions)
 		if err != nil {

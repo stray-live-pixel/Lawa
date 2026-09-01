@@ -176,6 +176,51 @@ func TestParentRun(t *testing.T) {
 	}
 }
 
+// TestFindMatchingChildren разделяет повторную доставку и новый вызов. Точный
+// childRequestId находит прежний run даже после успеха, а другой запрос переиспользует
+// тот же вход только пока задача занята. Один вызов функции проверяет весь batch.
+func TestFindMatchingChildren(t *testing.T) {
+	root := t.TempDir()
+	parent, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := testInput(t)
+	input.WorkflowJSON = []byte(`{"id":"child","steps":[{"id":"step","type":"agent","prompt":"work","dependsOn":[]}]}`)
+	input.ParentRunID, input.ChildRequestID = parent.Meta.RunID, strings.Repeat("1", 32)
+	child, err := Create(root, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRequest := input
+	newRequest.ChildRequestID = strings.Repeat("2", 32)
+	results, found, err := FindMatchingChildren(root, []Input{input, newRequest})
+	if err != nil || !found[0] || !found[1] || results[0].Meta.RunID != child.Meta.RunID || results[1].Meta.RunID != child.Meta.RunID {
+		t.Fatalf("занятый child не найден для двух форм повтора: %+v, %v, %v", results, found, err)
+	}
+	run, err := OpenLocked(root, child.Meta.RunID)
+	if err == nil {
+		err = run.Reserve([]string{"step"})
+	}
+	if err == nil {
+		err = run.Update("step", scheduler.Succeeded, "chat-child")
+	}
+	if run != nil {
+		err = errors.Join(err, run.Close())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Содержимое taskFile могло измениться после первого ответа. Стабильный ID
+	// доставленного вызова всё равно обязан вернуть созданный им run.
+	replayed := input
+	replayed.Task += " изменено после запуска"
+	results, found, err = FindMatchingChildren(root, []Input{replayed, newRequest})
+	if err != nil || !found[0] || found[1] || results[0].Meta.RunID != child.Meta.RunID {
+		t.Fatalf("завершённый child неверно сопоставлен: %+v, %v, %v", results, found, err)
+	}
+}
+
 // TestHistoricalMetadataVersion подтверждает чтение прежних snapshot v1. У них не
 // было parentRunId, поэтому dashboard считает такие run корнями дерева.
 func TestHistoricalMetadataVersion(t *testing.T) {

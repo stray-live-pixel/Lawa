@@ -32,6 +32,12 @@ func TestMain(m *testing.M) {
 func fakeServer(scenario string) {
 	input, output := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
 	send := func(v any) { _ = output.Encode(v) }
+	// Политика процесса обязана предшествовать всем RPC и не зависеть от того,
+	// создаётся thread, продолжается он или открывается read-only observer.
+	arguments := strings.Join(os.Args[1:], "\n")
+	if !strings.Contains(arguments, "app-server\n-c\napproval_policy=\"on-request\"\n-c\napprovals_reviewer=\"auto_review\"") {
+		panic("политика approval не передана в argv App Server")
+	}
 	configuredRuntime := scenario == "settings-run" || scenario == "settings-continue"
 	runtimeMatches := func(params map[string]any, includeEffort bool) bool {
 		if !configuredRuntime {
@@ -88,7 +94,15 @@ func fakeServer(scenario string) {
 					panic("профиль не передан app-server одним безопасным аргументом")
 				}
 			}
-			if p["cwd"] != cwd || hasHistoryMode || !validIsolation || !runtimeMatches(p, false) || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
+			dynamicTools, hasDynamicTools := p["dynamicTools"].([]any)
+			validDynamicTools := !hasDynamicTools
+			if scenario == "dynamic" {
+				validDynamicTools = hasDynamicTools && len(dynamicTools) == 2 &&
+					dynamicTools[0].(map[string]any)["name"] == "run_child" && dynamicTools[0].(map[string]any)["type"] == "function" &&
+					dynamicTools[0].(map[string]any)["inputSchema"].(map[string]any)["type"] == "object" &&
+					dynamicTools[1].(map[string]any)["name"] == "run_children"
+			}
+			if p["cwd"] != cwd || hasHistoryMode || !validIsolation || !validDynamicTools || !runtimeMatches(p, false) || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
 				panic("искажены параметры чата, автономность или модель")
 			}
 			id := "thread-1"
@@ -183,6 +197,24 @@ func fakeServer(scenario string) {
 					panic("решение обработчика изменено")
 				}
 			}
+			if scenario == "dynamic" {
+				send(map[string]any{"id": "tool-request", "method": "item/tool/call", "params": map[string]any{
+					"threadId": "thread-1", "turnId": "turn-1", "callId": "call-1", "namespace": nil,
+					"tool": "run_child", "arguments": map[string]any{"parentRun": "parent-1"},
+				}})
+				var response struct {
+					ID     string
+					Result struct {
+						Success      bool
+						ContentItems []struct{ Type, Text string }
+					}
+				}
+				if input.Decode(&response) != nil || response.ID != "tool-request" || !response.Result.Success ||
+					len(response.Result.ContentItems) != 1 || response.Result.ContentItems[0].Type != "inputText" ||
+					response.Result.ContentItems[0].Text != `{"runId":"child-1"}` {
+					panic("dynamic tool не вернул структурированный результат")
+				}
+			}
 			status := "completed"
 			if scenario == "failed" || scenario == "interrupted" {
 				status = scenario
@@ -269,7 +301,7 @@ func TestRun(t *testing.T) {
 	}{
 		{"ok", "completed", 1, 1}, {"early", "completed", 1, 1},
 		{"settings-run", "completed", 1, 1},
-		{"skill", "completed", 1, 1}, {"permissions", "completed", 1, 1}, {"handled", "completed", 1, 1},
+		{"skill", "completed", 1, 1}, {"permissions", "completed", 1, 1}, {"handled", "completed", 1, 1}, {"dynamic", "completed", 1, 1},
 		{"failed", "failed", 1, 1}, {"interrupted", "interrupted", 1, 1},
 		{"error:initialize", "", 0, 0}, {"eof:thread/start", "", 1, 0},
 		{"missing-id", "", 1, 0}, {"save", "", 1, 0},
@@ -313,6 +345,20 @@ func TestRun(t *testing.T) {
 			}
 			if tc.name == "settings-run" {
 				command.Model, command.Effort, command.ServiceTier = "gpt-test", "high", "fast"
+			}
+			if tc.name == "dynamic" {
+				command.DynamicTools = []DynamicTool{
+					{Name: "run_child", Description: "Создать один", InputSchema: json.RawMessage(`{"type":"object"}`)},
+					{Name: "run_children", Description: "Создать несколько", InputSchema: json.RawMessage(`{"type":"object"}`)},
+				}
+				command.CallDynamicTool = func(_ context.Context, call DynamicToolCall) (string, error) {
+					var arguments struct{ ParentRun string }
+					if err := json.Unmarshal(call.Arguments, &arguments); err != nil || call.ThreadID != "thread-1" || call.TurnID != "turn-1" ||
+						call.CallID != "call-1" || call.Tool != "run_child" || arguments.ParentRun != "parent-1" {
+						return "", errors.New("искажён вызов dynamic tool")
+					}
+					return `{"runId":"child-1"}`, nil
+				}
 			}
 			if tc.name == "permissions" {
 				command.Sandbox = ""
@@ -640,6 +686,8 @@ func TestInvalidInput(t *testing.T) {
 		{CWD: t.TempDir(), Text: "test", Model: "bad model"},
 		{CWD: t.TempDir(), Text: "test", Effort: "very high"},
 		{CWD: t.TempDir(), Text: "test", ServiceTier: "fast mode"},
+		{CWD: t.TempDir(), Text: "test", DynamicTools: []DynamicTool{{Name: "tool", Description: "Описание", InputSchema: json.RawMessage(`{"type":"object"}`)}}},
+		{CWD: t.TempDir(), Text: "test", DynamicTools: []DynamicTool{{Name: "tool", Description: "Описание", InputSchema: json.RawMessage(`{"type":"string"}`)}}, CallDynamicTool: func(context.Context, DynamicToolCall) (string, error) { return "ok", nil }},
 	} {
 		result, err := Run(context.Background(), command)
 		if err == nil || result.CreationAttempted {
