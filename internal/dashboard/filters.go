@@ -11,7 +11,10 @@ import (
 
 const (
 	defaultPeriod = "24h"
+	defaultScope  = "active"
+	defaultStates = "all"
 	maxQueryRunes = 300
+	maxRootRunes  = 200
 )
 
 // periodDefinition задаёт стабильное значение query-параметра и точную длительность.
@@ -38,8 +41,8 @@ var periodDefinitions = []periodDefinition{
 }
 
 type viewParams struct {
-	Query, Period string
-	Page          int
+	Query, Period, Scope, States, RootID string
+	Page                                 int
 }
 
 type periodOption struct {
@@ -48,12 +51,20 @@ type periodOption struct {
 }
 
 type filterView struct {
-	Query                         string
-	WindowLabel                   string
-	Periods                       []periodOption
-	Total, SearchMatched, Matched int
-	HasActiveQuery                bool
+	Query, WindowLabel, Scope, Period, States, RootID   string
+	ActiveURL, AllURL                                   template.URL
+	AllStatesURL, WorkingURL, FailedURL                 template.URL
+	Periods                                             []periodOption
+	FocusPath                                           []focusPart
+	FocusParentID                                       string
+	Total, SearchMatched, Matched                       int
+	HasActiveQuery, ActiveOnly, WorkingOnly, FailedOnly bool
+	Focused                                             bool
 }
+
+// focusPart — один доступный переход в пути закреплённого workflow. Состояние
+// нужно только для цветной папки; URL строит JavaScript из уже выбранных фильтров.
+type focusPart struct{ ID, Name, State, Tone string }
 
 type paginationItem struct {
 	Label   string
@@ -85,18 +96,57 @@ func parseViewParams(values url.Values) viewParams {
 	if err != nil || page < 1 {
 		page = 1
 	}
-	return viewParams{Query: query, Period: period, Page: page}
+	scope := values.Get("view")
+	if scope != "all" {
+		scope = defaultScope
+	}
+	states := values.Get("states")
+	if states != "working" && states != "failed" {
+		states = defaultStates
+	}
+	rootID := strings.TrimSpace(values.Get("root"))
+	rootRunes := []rune(rootID)
+	if len(rootRunes) > maxRootRunes {
+		rootID = string(rootRunes[:maxRootRunes])
+	}
+	return viewParams{Query: query, Period: period, Scope: scope, States: states, RootID: rootID, Page: page}
 }
 
-// applyDashboardView сначала ищет по целым деревьям, а затем выбирает временное
-// окно. Страница означает не количество элементов, а соседний интервал выбранной
-// длины: page=1 — последние N часов/дней, page=2 — предыдущие N и так далее.
-// Все совпавшие корневые run окна показываются без количественного лимита.
+// applyDashboardView сначала применяет статусный фильтр к целым деревьям, затем
+// ищет и выбирает временное окно. В режиме active дерево остаётся видимым, если
+// незавершён хотя бы один вложенный workflow: терминальная ошибка соседней ветки
+// не должна скрыть продолжающуюся работу. Страница означает соседний временной
+// интервал, а не лимит элементов: все совпавшие корни окна показываются целиком.
 func applyDashboardView(roots []*runNode, params viewParams, now time.Time) ([]*runNode, filterView, paginationView) {
+	if params.Scope != "all" {
+		params.Scope = defaultScope
+	}
+	if params.States != "working" && params.States != "failed" {
+		params.States = defaultStates
+	}
+	viewRoots, focusPath := focusDashboardRoots(roots, params.RootID)
+	if params.RootID != "" && len(focusPath) == 0 {
+		params.RootID = ""
+	}
 	period, _ := findPeriod(params.Period)
 	needle := strings.ToLower(params.Query)
-	searchMatched := make([]*runNode, 0, len(roots))
-	for _, root := range roots {
+	searchMatched := make([]*runNode, 0, len(viewRoots))
+	for _, original := range viewRoots {
+		root := original
+		if params.Scope == defaultScope && !root.HasUnfinished {
+			continue
+		}
+		if params.States == "working" {
+			root = workingTree(root)
+			if root == nil {
+				continue
+			}
+		} else if params.States == "failed" {
+			root = failedTree(root)
+			if root == nil {
+				continue
+			}
+		}
 		if needle != "" && !strings.Contains(root.searchText, needle) {
 			continue
 		}
@@ -122,7 +172,7 @@ func applyDashboardView(roots []*runNode, params viewParams, now time.Time) ([]*
 		}
 		// Живое дерево показывается в текущем окне даже при старом meta.json, но
 		// не повторяется на каждой исторической странице.
-		if root.treeState == "running" {
+		if root.HasUnfinished {
 			if current == 1 {
 				visible = append(visible, root)
 			}
@@ -140,8 +190,25 @@ func applyDashboardView(roots []*runNode, params viewParams, now time.Time) ([]*
 	})
 
 	filter := filterView{
-		Query: params.Query, Total: len(roots), SearchMatched: len(searchMatched), Matched: len(visible),
-		HasActiveQuery: params.Query != "", WindowLabel: formatWindowLabel(windowStart, windowEnd, period.Duration, current),
+		Query: params.Query, Scope: params.Scope, Period: params.Period, States: params.States, RootID: params.RootID,
+		Total: len(viewRoots), SearchMatched: len(searchMatched), Matched: len(visible),
+		HasActiveQuery: params.Query != "", ActiveOnly: params.Scope == defaultScope,
+		WorkingOnly: params.States == "working", FailedOnly: params.States == "failed",
+		WindowLabel: formatWindowLabel(windowStart, windowEnd, period.Duration, current),
+	}
+	filter.ActiveURL = scopeURL(params, defaultScope)
+	filter.AllURL = scopeURL(params, "all")
+	filter.AllStatesURL = statesURL(params, defaultStates)
+	filter.WorkingURL = statesURL(params, "working")
+	filter.FailedURL = statesURL(params, "failed")
+	if len(focusPath) != 0 {
+		filter.Focused = true
+		for _, node := range focusPath {
+			filter.FocusPath = append(filter.FocusPath, focusPart{ID: node.ID, Name: node.Name, State: node.State, Tone: node.Tone})
+		}
+		if len(focusPath) > 1 {
+			filter.FocusParentID = focusPath[len(focusPath)-2].ID
+		}
 	}
 	for _, definition := range periodDefinitions {
 		filter.Periods = append(filter.Periods, periodOption{Value: definition.Value, Label: definition.Label, Selected: definition.Value == params.Period})
@@ -159,7 +226,7 @@ func timeWindowCount(roots []*runNode, duration time.Duration, now time.Time) in
 	}
 	total := 1
 	for _, root := range roots {
-		if root.treeState == "running" {
+		if root.HasUnfinished {
 			continue
 		}
 		age := now.Sub(root.activityAt)
@@ -199,10 +266,18 @@ func findPeriod(value string) (periodDefinition, bool) {
 
 // finalizeTree строит агрегаты после связывания детей с родителями. Поиск по
 // ребёнку или его кубику возвращает целое дерево, activityAt выбирает самое свежее
-// изменение в нём, а treeState не прячет активного ребёнка под успешным родителем.
+// изменение, а HasUnfinished независимо от итогового цвета запоминает работу в
+// любой ветке. Разделение необходимо для дерева с одновременно упавшим и всё ещё
+// выполняющимся потомком: цвет сообщает об ошибке, фильтр не скрывает работу.
 func finalizeTree(node *runNode) {
 	node.activityAt = node.updatedAt
 	node.treeState = normalizeTreeState(node.State)
+	node.HasUnfinished = node.State != "failed" && node.State != "succeeded"
+	node.HasWorking = isWorkingState(node.State) || len(node.ActiveSteps) != 0
+	node.HasFailed = isFailedState(node.State)
+	for _, step := range node.Steps {
+		node.HasFailed = node.HasFailed || isFailedState(step.State)
+	}
 	parts := []string{node.searchText}
 	for _, child := range node.Children {
 		finalizeTree(child)
@@ -211,8 +286,95 @@ func finalizeTree(node *runNode) {
 			node.activityAt = child.activityAt
 		}
 		node.treeState = mergeTreeState(node.treeState, child.treeState)
+		node.HasUnfinished = node.HasUnfinished || child.HasUnfinished
+		node.HasWorking = node.HasWorking || child.HasWorking
+		node.HasFailed = node.HasFailed || child.HasFailed
 	}
 	node.searchText = strings.ToLower(strings.Join(parts, "\n"))
+}
+
+func isWorkingState(state string) bool {
+	return state == "running" || state == "starting" || state == "waiting_for_approval"
+}
+
+func isFailedState(state string) bool {
+	return state == "failed" || state == "cancelled" || state == "unknown"
+}
+
+// workingTree создаёт проекцию только для HTML и не меняет исходные snapshot.
+// Папка-предок остаётся в дереве, если работа идёт глубже, а её завершённые кубики
+// и соседние терминальные workflow скрываются. Копия нужна, чтобы другой запрос с
+// режимом «Все состояния» продолжал видеть полное дерево.
+func workingTree(node *runNode) *runNode {
+	if !node.HasWorking {
+		return nil
+	}
+	children := make([]*runNode, 0, len(node.Children))
+	for _, child := range node.Children {
+		if projected := workingTree(child); projected != nil {
+			children = append(children, projected)
+		}
+	}
+	steps := make([]stepNode, 0, len(node.ActiveSteps))
+	steps = append(steps, node.ActiveSteps...)
+	if len(steps) == 0 && len(children) == 0 && !isWorkingState(node.State) {
+		return nil
+	}
+	clone := *node
+	clone.Steps, clone.ActiveSteps, clone.Children = steps, steps, children
+	clone.Open = true
+	return &clone
+}
+
+// failedTree оставляет красные состояния и папки-предки к ним. Cancelled и
+// unknown входят сюда вместе с failed: tone показывает их тем же аварийным цветом,
+// поэтому фильтр соответствует визуальному языку дерева.
+func failedTree(node *runNode) *runNode {
+	if !node.HasFailed {
+		return nil
+	}
+	children := make([]*runNode, 0, len(node.Children))
+	for _, child := range node.Children {
+		if projected := failedTree(child); projected != nil {
+			children = append(children, projected)
+		}
+	}
+	steps := make([]stepNode, 0, len(node.Steps))
+	for _, step := range node.Steps {
+		if isFailedState(step.State) {
+			steps = append(steps, step)
+		}
+	}
+	clone := *node
+	clone.Steps, clone.ActiveSteps, clone.Children = steps, nil, children
+	clone.Open = true
+	return &clone
+}
+
+// focusDashboardRoots находит единственный закреплённый workflow и полный путь
+// от исходного корня. Неизвестный root мягко возвращает обычное дерево: устаревшая
+// закладка не должна превращать dashboard в пустой экран.
+func focusDashboardRoots(roots []*runNode, rootID string) ([]*runNode, []*runNode) {
+	if rootID == "" {
+		return roots, nil
+	}
+	if path := findNodePath(roots, rootID, nil); len(path) != 0 {
+		return []*runNode{path[len(path)-1]}, path
+	}
+	return roots, nil
+}
+
+func findNodePath(nodes []*runNode, id string, parents []*runNode) []*runNode {
+	for _, node := range nodes {
+		path := append(append([]*runNode(nil), parents...), node)
+		if node.ID == id {
+			return path
+		}
+		if found := findNodePath(node.Children, id, path); len(found) != 0 {
+			return found
+		}
+	}
+	return nil
 }
 
 func normalizeTreeState(state string) string {
@@ -286,6 +448,15 @@ func pageNumbers(current, total int) []int {
 func viewURL(params viewParams, page int) template.URL {
 	values := make(url.Values)
 	values.Set("period", params.Period)
+	if params.Scope == "all" {
+		values.Set("view", "all")
+	}
+	if params.States != defaultStates {
+		values.Set("states", params.States)
+	}
+	if params.RootID != "" {
+		values.Set("root", params.RootID)
+	}
 	if params.Query != "" {
 		values.Set("q", params.Query)
 	}
@@ -293,4 +464,18 @@ func viewURL(params viewParams, page int) template.URL {
 		values.Set("page", strconv.Itoa(page))
 	}
 	return template.URL("?" + values.Encode())
+}
+
+// scopeURL меняет только статусную выборку и возвращает её на первое временное
+// окно. Поиск и период сохраняются, чтобы две кнопки работали как один фильтр, а
+// не как полный сброс пользовательского контекста.
+func scopeURL(params viewParams, scope string) template.URL {
+	params.Scope, params.Page = scope, 1
+	return viewURL(params, 1)
+}
+
+// statesURL переключает состав строк внутри дерева, сохраняя остальные фильтры.
+func statesURL(params viewParams, states string) template.URL {
+	params.States, params.Page = states, 1
+	return viewURL(params, 1)
 }

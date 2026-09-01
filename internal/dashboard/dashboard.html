@@ -6,21 +6,22 @@
   <title>{{.Title}}</title>
   <style>
     :root{color-scheme:dark;--bg:#080808;--surface:#111;--button:#181818;--button-hover:#222;--line:#292929;--text:#f5f5f5;--muted:#777;--link:#58a6ff;--red:#f85149;--green:#3fb950}
-    *{box-sizing:border-box}html,body,button,input,select,textarea{font-family:Consolas,"Courier New",monospace}body{margin:0;background:var(--bg);color:var(--text);font-size:14px;line-height:1.45}button,input,select,textarea{font-size:inherit}button{color:inherit}
+    *{box-sizing:border-box}html,body{height:100%;overflow:hidden}html,body,button,input,select,textarea{font-family:Consolas,"Courier New",monospace}body{margin:0;background:var(--bg);color:var(--text);font-size:14px;line-height:1.45}button,input,select,textarea{font-size:inherit}button{color:inherit}[data-dashboard-content]{display:flex;flex-direction:column;height:100%;min-height:0}
     .app-header{width:100%;border-bottom:1px solid #222;background:#0d0d0d}.app-header-inner{max-width:1280px;min-height:60px;margin:0 auto;padding:10px 22px;display:flex;align-items:center;justify-content:space-between;gap:18px}.brand{display:flex;align-items:center;gap:9px;min-width:0}.app-logo{display:block;width:32px;height:32px;flex:0 0 auto;overflow:hidden;border:1px solid #303030;border-radius:9px;background:#0b0b0b}.app-logo img{display:block;width:100%;height:100%;object-fit:cover}.brand-name{font-size:17px;font-weight:700;letter-spacing:-.02em}.environment-pill{display:inline-flex;align-items:center;min-height:18px;border:1px solid #303030;border-radius:999px;background:#171717;color:#8a8a8a;padding:0 6px;font-size:8px;font-weight:700;letter-spacing:.08em}.environment-pill-text{display:block;transform:translateY(1px)}
     .next-run-pill{display:flex;align-items:center;gap:8px;min-width:0;max-width:min(620px,68vw);min-height:36px;border:1px solid #303030;border-radius:999px;background:#151515;padding:5px 8px 5px 12px;cursor:pointer;text-align:left;transition:border-color .12s,background .12s}.next-run-pill:hover,.next-run-pill:focus-visible{border-color:#484848;background:#1c1c1c;outline:none}.next-run-workflow{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.next-run-time{flex:0 0 auto;border-radius:999px;background:#0c2033;color:#9bd0ff;padding:3px 7px;font-size:10px;white-space:nowrap}.next-run-arrow{flex:0 0 auto;margin-right:3px;color:var(--muted);font-size:16px;line-height:1}.no-next-run{color:var(--muted);font-size:11px}
-    main{max-width:1280px;margin:0 auto;padding:24px 22px 60px}
-    a{color:var(--link);text-decoration:none}.tree,.children{list-style:none;margin:0;padding:0}.children{margin-left:17px;padding-left:14px;border-left:1px solid var(--line)}
-    details{margin:5px 0;border-bottom:1px solid #1d1d1d}summary{display:grid;grid-template-columns:9px 8px minmax(0,1fr) auto;align-items:center;gap:8px;min-height:44px;padding:3px 0;cursor:pointer;list-style:none}summary::-webkit-details-marker{display:none}summary:before{content:'›';color:var(--muted);width:9px;transition:transform .12s}details[open]>summary:before{transform:rotate(90deg)}
-    .run-main,.step-main{min-width:0}.primary{display:flex;align-items:center;gap:7px;min-width:0;flex-wrap:wrap}.name{font-weight:600}.ticket-title{display:block;color:#aaa;font-size:12px;line-height:1.35;margin-top:2px;white-space:normal}.meta{display:block;color:var(--muted);font-size:10px;line-height:1.35;margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    main{display:flex;flex:1;flex-direction:column;width:100%;max-width:1280px;min-height:0;margin:0 auto;padding:16px 22px 18px}
+    a{color:var(--link);text-decoration:none}.children{list-style:none;margin:0 0 0 13px;padding:0 0 0 12px;border-left:1px solid #242424}
+    details.run-folder{margin:0}summary.tree-row{grid-template-columns:10px 17px minmax(0,1fr) auto;min-height:34px;cursor:pointer;list-style:none}summary.tree-row::-webkit-details-marker{display:none}summary.tree-row:before{content:'›';width:10px;color:var(--muted);font-size:15px;line-height:1;transition:transform .12s}details[open]>summary.tree-row:before{transform:rotate(90deg)}
+    .name{font-weight:600}.ticket-title{display:block;color:#aaa;font-size:12px;line-height:1.35;margin-top:2px;white-space:normal}.meta{display:block;color:var(--muted);font-size:10px;line-height:1.45;margin-top:2px;overflow-wrap:anywhere}
     .actions{display:flex;gap:6px;margin-left:auto;padding-left:12px;white-space:nowrap}.action{display:inline-flex;align-items:center;min-height:24px;border:1px solid #30363d;border-radius:6px;background:var(--button);color:var(--link);padding:2px 8px;font-size:11px;line-height:1;text-decoration:none}.action:hover{background:var(--button-hover);border-color:#484f58;text-decoration:none}.action-ticket{border-color:#285783;background:#0c2033}.action.disabled{color:#555;border-color:#252525;background:#111;cursor:not-allowed}
-    .dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);flex:0 0 auto}.tone-running{background:var(--link)}.tone-failed{background:var(--red)}.tone-succeeded{background:var(--green)}
-    .workflows{list-style:none;margin:0;padding:7px 13px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}.compact-steps{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}.compact-step,.step-open{font:inherit;color:inherit;border:0;background:none;text-align:left;cursor:pointer}.compact-step{display:inline-flex;align-items:center;gap:5px;max-width:100%;border:1px solid #244d73;border-radius:999px;background:#0c2033;padding:2px 8px;color:#b9ddff;font-size:10px}.compact-step:hover,.step-open:hover .name{color:var(--link)}
-    .step{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:8px;min-height:38px;padding-left:17px}.step-open{display:grid;grid-template-columns:8px minmax(0,1fr);align-items:center;gap:8px;min-width:0;padding:5px 0}.step .actions{font-size:11px}.problem{border:1px solid #532423;background:#1b0d0d;padding:10px 12px;margin:8px 0;color:#ffb4ae}.empty{border:1px dashed var(--line);color:var(--muted);padding:24px;text-align:center}.badge{color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}
-    .filters{display:grid;grid-template-columns:minmax(220px,1fr) minmax(190px,260px) auto auto;gap:8px;margin:0 0 8px}.control{width:100%;min-height:34px;border:1px solid #30363d;border-radius:7px;background:var(--surface);color:var(--text);padding:6px 9px;font-size:12px;line-height:1.2}.control:focus{border-color:var(--link);outline:1px solid var(--link)}.filters .action{min-height:34px;font-size:12px;cursor:pointer}.action-primary{border-color:#285783;background:#0c2033}.result-summary{color:var(--muted);font-size:11px;margin:0 0 16px}.pagination{display:flex;align-items:center;justify-content:center;gap:6px;margin:18px 0}.pagination .action{min-width:28px;justify-content:center}.pagination .current{border-color:var(--link);background:#0c2033;color:var(--text)}.pagination .ellipsis{min-width:22px;color:var(--muted);text-align:center}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+    .node-icon{display:block;width:17px;height:17px;flex:0 0 auto;color:var(--muted)}.node-icon.tone-running{color:var(--link)}.node-icon.tone-failed{color:var(--red)}.node-icon.tone-succeeded{color:var(--green)}
+    .top-controls{display:flex;align-items:center;gap:8px;flex:0 0 auto;flex-wrap:wrap;margin-bottom:10px}.view-switch{display:inline-flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:7px;background:#0d0d0d}.view-option{min-height:27px;border-radius:5px;padding:5px 10px;color:var(--muted);font-size:11px;line-height:17px}.view-option:hover{color:var(--text);background:var(--button)}.view-option.current{color:var(--text);background:#242424}.period-filter{width:min(240px,28vw)}
+    .inspector{display:flex;flex:1;flex-direction:column;min-height:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}.inspector-body{display:grid;grid-template-columns:minmax(280px,2fr) minmax(0,3fr);flex:1;min-height:0}.inspector-tree{display:flex;flex-direction:column;min-width:0;min-height:0;border-right:1px solid var(--line);overflow:hidden}.inspector-search{flex:0 0 auto;padding:8px;border-bottom:1px solid var(--line);background:#0d0d0d}.focus-nav{flex:0 0 auto;padding:7px 8px;border-bottom:1px solid var(--line);background:#101010;overflow:hidden}.focus-path{display:flex;align-items:center;gap:3px;min-width:0;overflow-x:auto;overflow-y:hidden;scrollbar-width:none}.focus-path::-webkit-scrollbar{display:none}.focus-part{display:inline-flex;align-items:center;gap:5px;min-height:25px;border:0;border-radius:5px;background:transparent;color:#aaa;padding:3px 6px;font:inherit;font-size:10px;white-space:nowrap;cursor:pointer}.focus-part:hover{background:#202020;color:var(--text)}.focus-part .node-icon{width:14px;height:14px}.focus-separator{color:#555;font-size:10px}.tree-scroll{flex:1;min-height:0;padding:7px;overflow:auto}.workflows{list-style:none;margin:0;padding:0}.workflow-item{margin-top:2px}.tree-row{display:grid;align-items:center;gap:7px;min-width:0;width:100%;min-height:31px;border:0;border-radius:5px;background:transparent;color:var(--text);padding:4px 7px;text-align:left;font:inherit}.tree-row:hover{background:#1a1a1a}.tree-row.is-selected{background:#242424}.tree-row.is-selected .tree-label{color:#fff}.parent-row{grid-template-columns:17px minmax(0,1fr);min-height:32px;color:#888;cursor:pointer}.parent-row:hover{color:#bbb}.cube-item{margin:0}.tree-step{grid-template-columns:17px minmax(0,1fr);min-height:25px;padding:2px 7px 2px 11px;cursor:pointer}.tree-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px}.tree-count{color:#666;font-size:9px;white-space:nowrap}.folder-tail{display:flex;align-items:center;gap:3px}.pin-button{display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;border:0;border-radius:5px;background:transparent;color:#777;padding:4px;opacity:0;pointer-events:none;cursor:pointer}.pin-button svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round}.tree-row:hover .pin-button,.tree-row:focus-within .pin-button{opacity:1;pointer-events:auto}.pin-button:hover{background:#333;color:var(--text)}
+    .inspector-details{min-width:0;min-height:0;padding:24px;overflow:auto;background:#0d0d0d}.inspector-detail{max-width:720px}.detail-header{display:flex;align-items:flex-start;gap:11px;padding-bottom:18px;border-bottom:1px solid var(--line)}.detail-header .node-icon{width:24px;height:24px;margin-top:1px}.detail-heading{min-width:0}.detail-heading h2{margin:0;font-size:17px;line-height:1.35;overflow-wrap:anywhere}.detail-kind{display:block;margin-top:3px;color:var(--muted);font-size:10px}.fact-grid{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:7px 18px;margin:20px 0}.fact-grid dt{color:var(--muted);font-size:10px}.fact-grid dd{min-width:0;margin:0;color:#ccc;font-size:11px;overflow-wrap:anywhere}.detail-actions{display:flex;gap:7px;flex-wrap:wrap;margin-top:18px}.detail-section{margin-top:24px}.detail-section h3{margin:0 0 8px;color:#aaa;font-size:11px}.current-steps{display:flex;flex-direction:column;gap:5px}.current-step{display:grid;grid-template-columns:17px minmax(0,1fr);align-items:center;gap:8px;width:100%;border:1px solid var(--line);border-radius:6px;background:#151515;padding:7px 9px;color:var(--text);font:inherit;text-align:left;cursor:pointer}.current-step:hover{border-color:#3d3d3d;background:#1a1a1a}.detail-message{margin:20px 0 0;padding:10px 12px;border-left:2px solid #333;background:#141414;color:#bbb;font-size:11px;white-space:pre-wrap;overflow-wrap:anywhere}.problems{flex:0 0 auto;max-height:90px;margin-bottom:8px;overflow:auto}.problem{border:1px solid #532423;background:#1b0d0d;padding:10px 12px;margin:0 0 6px;color:#ffb4ae}.empty{border:1px dashed var(--line);color:var(--muted);padding:24px;text-align:center}.inspector-empty{margin:8px;padding:18px}.badge{color:var(--muted);border:1px solid var(--line);border-radius:999px;padding:2px 7px;font-size:11px}
+    .control{width:100%;min-height:34px;border:1px solid #30363d;border-radius:7px;background:var(--surface);color:var(--text);padding:6px 9px;font-size:12px;line-height:1.2}.control:focus{border-color:var(--link);outline:1px solid var(--link)}.top-controls>.action{min-height:34px;font-size:12px}.pagination{display:flex;align-items:center;justify-content:flex-end;gap:6px;margin-left:auto}.pagination .action{min-width:28px;justify-content:center}.pagination .current{border-color:var(--link);background:#0c2033;color:var(--text)}.pagination .ellipsis{min-width:22px;color:var(--muted);text-align:center}.sr-only{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
     .schedule-backdrop{position:fixed;inset:0;z-index:30;background:#0009}.schedule-panel{position:fixed;z-index:31;top:0;right:0;width:min(460px,100vw);height:100vh;border-left:1px solid #303030;background:#0d0d0d;box-shadow:-18px 0 50px #000b;display:flex;flex-direction:column}.schedule-panel-header{display:flex;align-items:center;gap:12px;padding:17px 18px;border-bottom:1px solid var(--line)}.schedule-heading{min-width:0;flex:1}.schedule-heading h2{margin:0;color:var(--text);font-size:18px;line-height:1.3}.schedule-count{color:var(--muted);font-size:10px}.schedule-close{width:30px;height:30px;min-width:30px;min-height:30px;flex:0 0 30px;padding:0;justify-content:center;font-size:17px;line-height:1}.schedule-list{list-style:none;margin:0;padding:5px 18px 32px;overflow:auto}.schedule-item{padding:14px 0;border-bottom:1px solid #242424}.schedule-item:last-child{border-bottom:0}.schedule-item-top{display:flex;align-items:baseline;justify-content:space-between;gap:14px}.schedule-workflow{min-width:0;overflow-wrap:anywhere;font-size:12px;font-weight:700}.schedule-relative{flex:0 0 auto;color:#9bd0ff;font-size:10px}.schedule-relative.overdue{color:#ffb86b}.schedule-absolute{display:block;margin-top:5px;color:#aaa;font-size:10px}.schedule-details{display:block;margin-top:3px;color:var(--muted);font-size:9px;line-height:1.5;overflow-wrap:anywhere}.drawer-open{overflow:hidden}
     .trace-backdrop{position:fixed;inset:0;background:#0008;z-index:20}.trace-panel{position:fixed;z-index:21;top:0;right:0;width:min(720px,92vw);height:100vh;background:#0d0d0d;border-left:1px solid var(--line);box-shadow:-18px 0 50px #000a;display:flex;flex-direction:column}.trace-header{display:flex;align-items:flex-start;gap:12px;padding:16px;border-bottom:1px solid var(--line)}.trace-heading{min-width:0;flex:1}.trace-heading h2{font-size:16px;line-height:1.3;margin:0}.trace-status,.trace-note{display:block;color:var(--muted);font-size:10px;margin-top:3px}.trace-note{color:#b58b55}.trace-close{font-size:18px;min-width:32px;justify-content:center}.trace-list{padding:13px 16px 40px;overflow:auto;display:flex;flex-direction:column;gap:9px}.trace-item{border:1px solid var(--line);border-radius:7px;background:#131313;padding:9px 11px}.trace-item-header{display:flex;justify-content:space-between;gap:12px;color:var(--muted);font-size:10px;margin-bottom:6px}.trace-item pre{margin:0;color:#ddd;font-size:12px;line-height:1.5;white-space:pre-wrap;overflow-wrap:anywhere}.trace-empty{color:var(--muted);padding:30px;text-align:center}.hidden{display:none!important}
-    @media(max-width:720px){.app-header-inner{padding:9px 12px;gap:10px}.brand{gap:7px}.brand-name{font-size:15px}.environment-pill{display:none}.next-run-pill{max-width:72vw;padding-left:9px}.next-run-workflow{font-size:10px}.next-run-time{font-size:9px}main{padding:20px 12px}.filters{grid-template-columns:1fr 1fr}.filters .search{grid-column:1/-1}.children{margin-left:8px;padding-left:8px}details>summary{grid-template-columns:9px 8px minmax(0,1fr)}details>summary>.actions{grid-column:3;margin:2px 0 5px;padding:0;flex-wrap:wrap}.step{grid-template-columns:minmax(0,1fr);padding-left:8px}.step>.actions{margin:0 0 5px 16px;padding:0;flex-wrap:wrap}.meta{white-space:normal}.pagination{flex-wrap:wrap}.trace-panel{width:100vw}}
+    @media(max-width:720px){.app-header-inner{padding:9px 12px;gap:10px}.brand{gap:7px}.brand-name{font-size:15px}.environment-pill{display:none}.next-run-pill{max-width:72vw;padding-left:9px}.next-run-workflow{font-size:10px}.next-run-time{font-size:9px}main{padding:12px}.top-controls{flex-wrap:wrap}.period-filter{width:100%}.pagination{order:5;width:100%;justify-content:flex-start;margin-left:0}.inspector-body{grid-template-columns:1fr;grid-template-rows:minmax(120px,45%) minmax(0,1fr)}.inspector-tree{border-right:0;border-bottom:1px solid var(--line)}.inspector-details{min-height:0;padding:18px 14px}.children{margin-left:7px;padding-left:7px}.fact-grid{grid-template-columns:1fr;gap:2px}.fact-grid dd{margin-bottom:8px}.trace-panel{width:100vw}}
   </style>
 </head>
 <body data-refresh="{{.Refresh}}"><div data-dashboard-content>
@@ -31,16 +32,34 @@
     </div>
   </header>
 <main>
-  <form class="filters" method="get">
-    <label class="search"><span class="sr-only">Поиск</span><input class="control" type="search" name="q" value="{{.Filter.Query}}" placeholder="Flow, кубик, тикет, run/thread ID, текст задачи…" maxlength="300"></label>
-    <label><span class="sr-only">Период</span><select class="control" name="period" aria-label="Период">{{range .Filter.Periods}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}</select></label>
-    <button class="action action-primary" type="submit">Применить</button>
+  <div class="top-controls">
+    <nav class="view-switch" aria-label="Какие workflow показывать">
+      <a class="view-option{{if .Filter.ActiveOnly}} current{{end}}" href="{{.Filter.ActiveURL}}" {{if .Filter.ActiveOnly}}aria-current="page"{{end}}>Активные</a>
+      <a class="view-option{{if not .Filter.ActiveOnly}} current{{end}}" href="{{.Filter.AllURL}}" {{if not .Filter.ActiveOnly}}aria-current="page"{{end}}>Все</a>
+    </nav>
+    <nav class="view-switch" aria-label="Какие состояния показывать">
+      <a class="view-option{{if and (not .Filter.WorkingOnly) (not .Filter.FailedOnly)}} current{{end}}" href="{{.Filter.AllStatesURL}}" {{if and (not .Filter.WorkingOnly) (not .Filter.FailedOnly)}}aria-current="page"{{end}}>Все состояния</a>
+      <a class="view-option{{if .Filter.WorkingOnly}} current{{end}}" href="{{.Filter.WorkingURL}}" {{if .Filter.WorkingOnly}}aria-current="page"{{end}}>В работе</a>
+      <a class="view-option{{if .Filter.FailedOnly}} current{{end}}" href="{{.Filter.FailedURL}}" {{if .Filter.FailedOnly}}aria-current="page"{{end}}>Сломавшиеся</a>
+    </nav>
+    <form class="period-filter" method="get" data-auto-submit>
+      <input type="hidden" name="view" value="{{.Filter.Scope}}"><input type="hidden" name="states" value="{{.Filter.States}}"><input type="hidden" name="root" value="{{.Filter.RootID}}"><input type="hidden" name="q" value="{{.Filter.Query}}">
+      <label><span class="sr-only">Период</span><select class="control" name="period" aria-label="Период">{{range .Filter.Periods}}<option value="{{.Value}}" {{if .Selected}}selected{{end}}>{{.Label}}</option>{{end}}</select></label>
+    </form>
     <a class="action" href="?period=24h">Сбросить</a>
-  </form>
-  <p class="result-summary">{{.Filter.WindowLabel}} · в окне {{.Filter.Matched}}{{if .Filter.HasActiveQuery}} · по поиску во всей истории {{.Filter.SearchMatched}}{{end}} · всего {{.Filter.Total}}</p>
-  {{range .Problems}}<div class="problem"><strong>{{.Name}}</strong> — {{.Message}}</div>{{end}}
-  {{if .Roots}}<ul class="workflows">{{range .Roots}}{{template "run" .}}{{end}}</ul>{{else}}<div class="empty">{{.EmptyMessage}}</div>{{end}}
-  {{template "pagination" .Pagination}}
+    {{template "pagination" .Pagination}}
+  </div>
+  {{if .Problems}}<div class="problems">{{range .Problems}}<div class="problem"><strong>{{.Name}}</strong> — {{.Message}}</div>{{end}}</div>{{end}}
+  {{if .Filter.Total}}<div class="inspector" data-inspector>
+    {{if .Filter.Focused}}<nav class="focus-nav" aria-label="Закреплённая папка"><div class="focus-path">{{range $index, $part := .Filter.FocusPath}}{{if $index}}<span class="focus-separator">/</span>{{end}}<button class="focus-part" type="button" data-root-target="{{$part.ID}}">{{template "folder-icon" $part}}<span>{{$part.Name}}</span></button>{{end}}</div></nav>{{end}}
+    <div class="inspector-body">
+      <section class="inspector-tree" aria-label="Дерево workflow и кубиков">
+        <form class="inspector-search" method="get" data-search-form><input type="hidden" name="view" value="{{.Filter.Scope}}"><input type="hidden" name="states" value="{{.Filter.States}}"><input type="hidden" name="root" value="{{.Filter.RootID}}"><input type="hidden" name="period" value="{{.Filter.Period}}"><label><span class="sr-only">Поиск</span><input class="control" type="search" name="q" value="{{.Filter.Query}}" placeholder="Поиск по workflow, кубикам и тикетам…" maxlength="300" data-search-input></label></form>
+        <div class="tree-scroll"><ul class="workflows">{{if .Filter.Focused}}<li class="workflow-item"><button class="tree-row parent-row" type="button" data-root-target="{{.Filter.FocusParentID}}"><svg class="node-icon folder-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"></path><path d="M3.5 9h17"></path></svg><span class="tree-label">../</span></button></li>{{end}}{{range .Roots}}{{template "run" .}}{{end}}</ul>{{if not .Roots}}<div class="empty inspector-empty">{{.EmptyMessage}}</div>{{end}}</div>
+      </section>
+      <section class="inspector-details" aria-live="polite">{{if .Roots}}{{range .Roots}}{{template "run-details" .}}{{end}}{{else}}<div class="empty inspector-empty">Нет выбранного workflow.</div>{{end}}</section>
+    </div>
+  </div>{{else}}<div class="empty">{{.EmptyMessage}}</div>{{end}}
 </main>
 <div class="schedule-backdrop hidden" data-schedule-backdrop></div>
 <aside class="schedule-panel hidden" data-schedule-panel role="dialog" aria-modal="true" aria-labelledby="schedule-panel-title" aria-hidden="true">
@@ -56,6 +75,8 @@
 <script>
   const key='lawa-dashboard-open:';
   const searchActive={{.Filter.HasActiveQuery}};
+  const workingOnly={{.Filter.WorkingOnly}};
+  const failedOnly={{.Filter.FailedOnly}};
   // Выделение и незавершённый ввод важнее очередного polling. Замена родительского
   // DOM-узла сбрасывает системное выделение браузера и фокус поля, поэтому такой
   // блок обновляется только после того, как пользователь закончит взаимодействие.
@@ -83,6 +104,21 @@
     if(saved!==null) node.open=saved==='1';
     node.addEventListener('toggle',()=>localStorage.setItem(key+id,node.open?'1':'0'));
   };
+  // Выбранный узел хранится вне заменяемого polling-контейнера. После обновления
+  // серверных данных инспектор возвращает прежний workflow или кубик, если он всё
+  // ещё проходит фильтр; иначе безопасно выбирает первый доступный узел.
+  let inspectorSelection='';
+  const selectInspector=(root,requested)=>{
+    const selectors=[...root.querySelectorAll('[data-inspector-select]')];
+    const details=[...root.querySelectorAll('[data-inspector-detail]')];
+    if(!selectors.length||!details.length)return;
+    let selected=selectors.find(item=>item.dataset.inspectorSelect===requested);
+    if(!selected)selected=selectors[0];
+    inspectorSelection=selected.dataset.inspectorSelect;
+    selectors.forEach(item=>{const active=item===selected;item.classList.toggle('is-selected',active);if(active)item.setAttribute('aria-current','true');else item.removeAttribute('aria-current');});
+    details.forEach(item=>item.classList.toggle('hidden',item.dataset.inspectorDetail!==inspectorSelection));
+  };
+  const changeRoot=id=>{const target=new URL(location.href);if(id)target.searchParams.set('root',id);else target.searchParams.delete('root');target.searchParams.delete('page');location.assign(target);};
   const panel=document.querySelector('[data-trace-panel]');
   const backdrop=document.querySelector('[data-trace-backdrop]');
   const traceList=document.querySelector('[data-trace-list]');
@@ -94,7 +130,14 @@
   const maxTraceBlocks=500;
   const labels={agent_message_delta:'Сообщение агента',reasoning_summary_delta:'Краткое объяснение',command_output_delta:'Вывод команды',plan_updated:'План',item_started:'Действие',item_completed:'Результат',error:'Ошибка'};
   const initialize=root=>{
-    root.querySelectorAll('details[data-node]').forEach(node=>searchActive?node.open=true:remember(node,node.dataset.node));
+    root.querySelectorAll('details[data-node]').forEach(node=>searchActive||workingOnly||failedOnly?node.open=true:remember(node,node.dataset.node));
+    root.querySelectorAll('[data-inspector-select]').forEach(item=>item.addEventListener('click',()=>selectInspector(root,item.dataset.inspectorSelect)));
+    selectInspector(root,inspectorSelection);
+    root.querySelectorAll('[data-root-target]').forEach(button=>button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();changeRoot(button.dataset.rootTarget);}));
+    root.querySelectorAll('[data-auto-submit] select').forEach(control=>control.addEventListener('change',()=>control.form?.requestSubmit()));
+    // Поиск применяется без отдельной кнопки, но короткая задержка позволяет
+    // набрать слово целиком и не перезагружает страницу после каждого символа.
+    root.querySelectorAll('[data-search-input]').forEach(input=>{let timer;input.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>input.form?.requestSubmit(),400);});});
     root.querySelectorAll('[data-trace]').forEach(button=>button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();openTrace(button);}));
     if(location.pathname==='/preview') root.querySelectorAll('a[href="#preview"]').forEach(a=>a.addEventListener('click',event=>event.preventDefault()));
   };
@@ -182,35 +225,37 @@
   if(refreshSeconds>0)setInterval(refreshDashboard,refreshSeconds*1000);
 </script></body></html>{{end}}
 
-{{define "run"}}<li>{{$run := .}}
-  <details data-node="{{.ID}}" {{if .Open}}open{{end}}>
-    <summary>
-      <span class="dot tone-{{.Tone}}" role="img" aria-label="Статус: {{.State}}" title="{{.State}}"></span>
-      <span class="run-main">
-        <span class="primary"><span class="name">{{.Name}}</span><span class="badge">{{.CompletedSteps}}/{{.TotalSteps}} шагов</span>{{if .TicketID}} {{if .TicketURL}}<a class="action action-ticket" href="{{.TicketURL}}" target="_blank" rel="noreferrer" title="Открыть тикет">Тикет · {{.TicketID}}</a>{{else}}<span class="action action-ticket disabled" title="URL тикета не сохранён">Тикет · {{.TicketID}}</span>{{end}}{{end}}</span>
-        {{if .TicketTitle}}<span class="ticket-title">{{.TicketTitle}}</span>{{end}}
-        <span class="meta">{{.State}} · run {{.ID}}{{if .Updated}} · {{.Updated}}{{end}}</span>
-        {{if .ActiveSteps}}<span class="compact-steps">{{range .ActiveSteps}}<button class="compact-step" type="button" data-trace="{{.TraceURL}}" data-title="{{$run.Name}} / {{.ID}}"><span class="dot tone-{{.Tone}}"></span>{{.ID}}{{if .Action}} · {{.Action}}{{end}}</button>{{end}}</span>{{end}}
-      </span>
-      <span class="actions">
-        <a class="action" href="{{.EventsURL}}" title="Открыть краткий журнал событий Lawa">События</a>
-        <a class="action" href="{{.VSCodeURL}}" title="Открыть папку run в VS Code">Папка</a>
-        {{if .HasUML}}<a class="action" href="{{.UMLURL}}" title="Открыть схему workflow">UML</a>{{else}}<span class="action disabled" title="PNG ещё не создан">UML</span>{{end}}
-      </span>
+{{define "folder-icon"}}<svg class="node-icon folder-icon tone-{{.Tone}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" role="img" aria-label="Статус: {{.State}}"><path d="M3.5 6.5h6l2 2h9v9.5a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"></path><path d="M3.5 9h17"></path></svg>{{end}}
+
+{{define "cube-icon"}}<svg class="node-icon cube-icon tone-{{.Tone}}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" role="img" aria-label="Статус: {{.State}}"><path d="m12 3 8 4.5v9L12 21l-8-4.5v-9z"></path><path d="m4.3 7.7 7.7 4.4 7.7-4.4M12 12.1V21"></path></svg>{{end}}
+
+{{define "run"}}<li class="workflow-item">{{$run := .}}
+  <details class="run-folder" data-node="{{.ID}}" {{if .Open}}open{{end}}>
+    <summary class="tree-row" data-inspector-select="run:{{.ID}}" title="{{.Name}}">
+      {{template "folder-icon" .}}<span class="tree-label">{{.Name}}</span><span class="folder-tail"><span class="tree-count">{{.CompletedSteps}}/{{.TotalSteps}}</span><button class="pin-button" type="button" data-root-target="{{.ID}}" aria-label="Сделать {{.Name}} корневой папкой" title="Сделать корневой папкой"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 4 6 0-.7 5 3.2 3.2v1.3h-11v-1.3L9.7 9z"></path><path d="M12 13.5V21"></path></svg></button></span>
     </summary>
     <ul class="children">
-      {{range .Steps}}<li class="step">
-        <button class="step-open" type="button" data-trace="{{.TraceURL}}" data-title="{{$run.Name}} / {{.ID}}"><span class="dot tone-{{.Tone}}" role="img" aria-label="Статус: {{.State}}" title="{{.State}}"></span>
-        <span class="step-main"><span class="name">{{.ID}}</span><span class="meta">{{.State}}{{if .Updated}} · {{.Updated}}{{end}}{{if .Runtime}} · {{.Runtime}}{{end}}{{if .Action}} · действие: {{.Action}}{{end}}{{if .Message}} · {{.Message}}{{end}}</span></span></button>
-        <span class="actions">
-          <a class="action" href="{{.EventsURL}}" title="Показать события этого кубика">События</a>
-          {{if .HasMemory}}<a class="action" href="{{.MemoryURL}}">Память</a>{{else}}<span class="action disabled" title="Память пока пуста">Память</span>{{end}}
-        </span>
-      </li>{{end}}
+      {{range .Steps}}<li class="cube-item"><button class="tree-row tree-step" type="button" data-inspector-select="step:{{$run.ID}}:{{.ID}}" title="{{.ID}}">{{template "cube-icon" .}}<span class="tree-label">{{.ID}}</span></button></li>{{end}}
       {{range .Children}}{{template "run" .}}{{end}}
     </ul>
   </details>
 </li>{{end}}
+
+{{define "run-details"}}{{$run := .}}
+  <article class="inspector-detail hidden" data-inspector-detail="run:{{.ID}}">
+    <header class="detail-header">{{template "folder-icon" .}}<div class="detail-heading"><h2>{{.Name}}</h2><span class="detail-kind">Workflow · {{.State}}</span></div></header>
+    <dl class="fact-grid"><dt>Run</dt><dd>{{.ID}}</dd><dt>Кубики</dt><dd>{{.CompletedSteps}} из {{.TotalSteps}} завершено</dd>{{if .Updated}}<dt>Обновлён</dt><dd>{{.Updated}}</dd>{{end}}{{if .TicketID}}<dt>Тикет</dt><dd>{{.TicketID}}{{if .TicketTitle}} · {{.TicketTitle}}{{end}}</dd>{{end}}</dl>
+    <div class="detail-actions"><a class="action" href="{{.EventsURL}}" title="Открыть краткий журнал событий Lawa">События</a><a class="action" href="{{.VSCodeURL}}" title="Открыть папку run в VS Code">Папка</a>{{if .HasUML}}<a class="action" href="{{.UMLURL}}" title="Открыть схему workflow">UML</a>{{else}}<span class="action disabled" title="PNG ещё не создан">UML</span>{{end}}{{if .TicketID}}{{if .TicketURL}}<a class="action action-ticket" href="{{.TicketURL}}" target="_blank" rel="noreferrer">Тикет · {{.TicketID}}</a>{{else}}<span class="action action-ticket disabled">Тикет · {{.TicketID}}</span>{{end}}{{end}}</div>
+    {{if .ActiveSteps}}<section class="detail-section"><h3>Сейчас выполняются</h3><div class="current-steps">{{range .ActiveSteps}}<button class="current-step" type="button" data-trace="{{.TraceURL}}" data-title="{{$run.Name}} / {{.ID}}">{{template "cube-icon" .}}<span><span class="name">{{.ID}}</span>{{if .Action}}<span class="meta">{{.Action}}</span>{{end}}</span></button>{{end}}</div></section>{{end}}
+  </article>
+  {{range .Steps}}<article class="inspector-detail hidden" data-inspector-detail="step:{{$run.ID}}:{{.ID}}">
+    <header class="detail-header">{{template "cube-icon" .}}<div class="detail-heading"><h2>{{.ID}}</h2><span class="detail-kind">Кубик · {{.State}}</span></div></header>
+    <dl class="fact-grid"><dt>Workflow</dt><dd>{{$run.Name}}</dd><dt>Run</dt><dd>{{$run.ID}}</dd>{{if .Updated}}<dt>Обновлён</dt><dd>{{.Updated}}</dd>{{end}}{{if .Runtime}}<dt>Процесс</dt><dd>{{.Runtime}}</dd>{{end}}{{if .Action}}<dt>Действие</dt><dd>{{.Action}}</dd>{{end}}</dl>
+    {{if .Message}}<p class="detail-message">{{.Message}}</p>{{end}}
+    <div class="detail-actions"><button class="action" type="button" data-trace="{{.TraceURL}}" data-title="{{$run.Name}} / {{.ID}}">Live-вывод</button><a class="action" href="{{.EventsURL}}">События</a>{{if .HasMemory}}<a class="action" href="{{.MemoryURL}}">Память</a>{{else}}<span class="action disabled" title="Память пока пуста">Память</span>{{end}}</div>
+  </article>{{end}}
+  {{range .Children}}{{template "run-details" .}}{{end}}
+{{end}}
 
 {{define "pagination"}}{{if .Visible}}<nav class="pagination" aria-label="Страницы">
   {{if .PreviousURL}}<a class="action" href="{{.PreviousURL}}">← Новее</a>{{else}}<span class="action disabled" aria-hidden="true">← Новее</span>{{end}}

@@ -61,16 +61,16 @@ type scheduledRun struct {
 // runNode — готовая к HTML структура одного workflow и его потомков. Все URL
 // строит сервер из проверенных ID, поэтому template.URL не содержит сырого ввода.
 type runNode struct {
-	ID, ParentID, Name, State, Tone, Updated string
-	TicketID, TicketTitle                    string
-	EventsURL, VSCodeURL, UMLURL             template.URL
-	TicketURL                                template.URL
-	HasUML, Open                             bool
-	CompletedSteps, TotalSteps               int
-	Steps, ActiveSteps                       []stepNode
-	Children                                 []*runNode
-	updatedAt, activityAt                    time.Time
-	searchText, treeState                    string
+	ID, ParentID, Name, State, Tone, Updated           string
+	TicketID, TicketTitle                              string
+	EventsURL, VSCodeURL, UMLURL                       template.URL
+	TicketURL                                          template.URL
+	HasUML, Open, HasUnfinished, HasWorking, HasFailed bool
+	CompletedSteps, TotalSteps                         int
+	Steps, ActiveSteps                                 []stepNode
+	Children                                           []*runNode
+	updatedAt, activityAt                              time.Time
+	searchText, treeState                              string
 }
 
 // stepNode описывает лист дерева и доступность его сохранённой памяти.
@@ -130,6 +130,8 @@ func (h handler) live(w http.ResponseWriter, r *http.Request) {
 	view.Filter, view.Pagination = filter, pagination
 	if len(roots) == 0 {
 		view.EmptyMessage = "Запусков пока нет. Создайте workflow командой lawa run."
+	} else if filter.ActiveOnly && !filter.HasActiveQuery && len(visible) == 0 {
+		view.EmptyMessage = "Активных workflow нет. Переключитесь на «Все», чтобы посмотреть завершённые."
 	} else {
 		view.EmptyMessage = "Ничего не найдено. Измените период или строку поиска."
 	}
