@@ -745,8 +745,9 @@ func TestRunCommand(t *testing.T) {
 
 // TestNativeParentStartsRegisteredChild проходит весь внутренний путь задачи #60:
 // команда родительского turn вызывает run_child, получает ID только после
-// публикации runstore, а координатор ждёт дочерний workflow. Повтор с другим
-// callId, но тем же входом возвращает прежний runId и не создаёт дубль.
+// публикации runstore, а координатор ждёт дочерний workflow. Новый callId пока
+// задача занята не создаёт дубль, точный повтор остаётся идемпотентным, а новый
+// запрос после успеха запускает тот же фактический вход заново.
 func TestNativeParentStartsRegisteredChild(t *testing.T) {
 	root, cwd := filepath.Join(t.TempDir(), "runs"), t.TempDir()
 	parentPath, childPath := filepath.Join(cwd, "parent.json"), filepath.Join(cwd, "child.json")
@@ -757,8 +758,19 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	client := newCLIFakeClient()
-	var returnedRunID string
+	var firstRunID, secondRunID string
+	workerStarted, releaseWorker := make(chan struct{}), make(chan struct{})
 	client.onCommand = func(command codex.Command) error {
+		if strings.Contains(command.Title, "Lawa: child / worker [") {
+			client.mu.Lock()
+			workerRun := client.runs["worker"]
+			client.mu.Unlock()
+			if workerRun == 1 {
+				close(workerStarted)
+				<-releaseWorker
+			}
+			return nil
+		}
 		if !strings.Contains(command.Title, "Lawa: parent / root [") {
 			return nil
 		}
@@ -768,26 +780,50 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 		open := strings.LastIndex(command.Title, "[")
 		parentRunID := strings.TrimSuffix(command.Title[open+1:], "]")
 		arguments := json.RawMessage(fmt.Sprintf(`{"workflow":"child.json","cwd":".","task":"Дочерняя задача","parentRun":"%s"}`, parentRunID))
-		for index := 0; index < 2; index++ {
+		callChild := func(callID string) (string, error) {
 			result, err := command.CallDynamicTool(t.Context(), codex.DynamicToolCall{
-				CallID: fmt.Sprintf("call-%d", index+1), Tool: "run_child", Arguments: arguments,
+				ThreadID: "chat-parent", TurnID: "turn-parent", CallID: callID, Tool: "run_child", Arguments: arguments,
 			})
 			if err != nil {
-				return err
+				return "", err
 			}
 			var decoded struct {
 				RunID string `json:"runId"`
 			}
 			if err := json.Unmarshal([]byte(result), &decoded); err != nil || decoded.RunID == "" {
-				return fmt.Errorf("run_child вернул неверный результат %q: %w", result, err)
+				return "", fmt.Errorf("run_child вернул неверный результат %q: %w", result, err)
 			}
-			if returnedRunID != "" && returnedRunID != decoded.RunID {
-				return fmt.Errorf("повтор создал второй runId: %s и %s", returnedRunID, decoded.RunID)
+			if _, err := runstore.Load(root, decoded.RunID); err != nil {
+				return "", fmt.Errorf("runId возвращён до надёжной регистрации: %w", err)
 			}
-			returnedRunID = decoded.RunID
-			if _, err := runstore.Load(root, returnedRunID); err != nil {
-				return fmt.Errorf("runId возвращён до надёжной регистрации: %w", err)
+			return decoded.RunID, nil
+		}
+		var err error
+		if firstRunID, err = callChild("call-create"); err != nil {
+			return err
+		}
+		<-workerStarted
+		occupiedRunID, err := callChild("call-while-occupied")
+		if err != nil || occupiedRunID != firstRunID {
+			return fmt.Errorf("занятая задача создала дубль %q вместо %q: %w", occupiedRunID, firstRunID, err)
+		}
+		close(releaseWorker)
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			child, loadErr := runstore.Load(root, firstRunID)
+			if loadErr == nil && child.Meta.Steps[0].State == scheduler.Succeeded {
+				break
 			}
+			if time.Now().After(deadline) {
+				return fmt.Errorf("первый дочерний run не завершился вовремя: %+v, %w", child.Meta, loadErr)
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if repeatedRunID, repeatErr := callChild("call-create"); repeatErr != nil || repeatedRunID != firstRunID {
+			return fmt.Errorf("точный повтор потерял runId %q: %q, %w", firstRunID, repeatedRunID, repeatErr)
+		}
+		if secondRunID, err = callChild("call-after-success"); err != nil || secondRunID == firstRunID {
+			return fmt.Errorf("новый запрос после успеха не создал новый run: %q, %q, %w", firstRunID, secondRunID, err)
 		}
 		return nil
 	}
@@ -798,19 +834,21 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 		t.Fatal(err)
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 2 {
-		t.Fatalf("ожидались родитель и один ребёнок: %v, %v", entries, err)
+	if err != nil || len(entries) != 3 {
+		t.Fatalf("ожидались родитель и два последовательных ребёнка: %v, %v", entries, err)
 	}
-	child, err := runstore.Load(root, returnedRunID)
-	if err != nil || child.Workflow.ID != "child" || child.Meta.ParentRunID == "" ||
-		len(child.Meta.Steps) != 1 || child.Meta.Steps[0].State != scheduler.Succeeded {
-		t.Fatalf("дочерний workflow не завершён: %+v, %v", child, err)
+	for _, runID := range []string{firstRunID, secondRunID} {
+		child, loadErr := runstore.Load(root, runID)
+		if loadErr != nil || child.Workflow.ID != "child" || child.Meta.ParentRunID == "" ||
+			len(child.Meta.Steps) != 1 || child.Meta.Steps[0].State != scheduler.Succeeded {
+			t.Fatalf("дочерний workflow %s не завершён: %+v, %v", runID, child, loadErr)
+		}
 	}
 	client.mu.Lock()
 	workerRuns := client.runs["worker"]
 	client.mu.Unlock()
-	if workerRuns != 1 {
-		t.Fatalf("дочерний шаг запущен %d раз вместо одного", workerRuns)
+	if workerRuns != 2 {
+		t.Fatalf("дочерний шаг запущен %d раз вместо двух последовательных запусков", workerRuns)
 	}
 }
 

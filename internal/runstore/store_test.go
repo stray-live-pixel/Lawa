@@ -176,30 +176,48 @@ func TestParentRun(t *testing.T) {
 	}
 }
 
-// TestFindMatchingChild доказывает durable-идемпотентность встроенного запуска:
-// после потери in-memory callId обычные опубликованные файлы позволяют найти тот
-// же смысловой вход без нового индекса. Отличающаяся задача остаётся новым входом.
-func TestFindMatchingChild(t *testing.T) {
+// TestFindMatchingChildren разделяет повторную доставку и новый вызов. Точный
+// childRequestId находит прежний run даже после успеха, а другой запрос переиспользует
+// тот же вход только пока задача занята. Один вызов функции проверяет весь batch.
+func TestFindMatchingChildren(t *testing.T) {
 	root := t.TempDir()
 	parent, err := Create(root, testInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	input := testInput(t)
-	input.ParentRunID = parent.Meta.RunID
+	input.WorkflowJSON = []byte(`{"id":"child","steps":[{"id":"step","type":"agent","prompt":"work","dependsOn":[]}]}`)
+	input.ParentRunID, input.ChildRequestID = parent.Meta.RunID, strings.Repeat("1", 32)
 	child, err := Create(root, input)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Пробелы JSON не меняют разобранный workflow и не должны создавать дубль.
-	input.WorkflowJSON = append([]byte(" \n"), input.WorkflowJSON...)
-	found, ok, err := FindMatchingChild(root, input)
-	if err != nil || !ok || found.Meta.RunID != child.Meta.RunID {
-		t.Fatalf("опубликованный child не найден: %+v, %t, %v", found.Meta, ok, err)
+	newRequest := input
+	newRequest.ChildRequestID = strings.Repeat("2", 32)
+	results, found, err := FindMatchingChildren(root, []Input{input, newRequest})
+	if err != nil || !found[0] || !found[1] || results[0].Meta.RunID != child.Meta.RunID || results[1].Meta.RunID != child.Meta.RunID {
+		t.Fatalf("занятый child не найден для двух форм повтора: %+v, %v, %v", results, found, err)
 	}
-	input.Task += " другое"
-	if found, ok, err = FindMatchingChild(root, input); err != nil || ok || found.Meta.RunID != "" {
-		t.Fatalf("другой вход принят за занятый: %+v, %t, %v", found.Meta, ok, err)
+	run, err := OpenLocked(root, child.Meta.RunID)
+	if err == nil {
+		err = run.Reserve([]string{"step"})
+	}
+	if err == nil {
+		err = run.Update("step", scheduler.Succeeded, "chat-child")
+	}
+	if run != nil {
+		err = errors.Join(err, run.Close())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Содержимое taskFile могло измениться после первого ответа. Стабильный ID
+	// доставленного вызова всё равно обязан вернуть созданный им run.
+	replayed := input
+	replayed.Task += " изменено после запуска"
+	results, found, err = FindMatchingChildren(root, []Input{replayed, newRequest})
+	if err != nil || !found[0] || found[1] || results[0].Meta.RunID != child.Meta.RunID {
+		t.Fatalf("завершённый child неверно сопоставлен: %+v, %v, %v", results, found, err)
 	}
 }
 

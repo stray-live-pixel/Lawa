@@ -54,21 +54,27 @@ var ErrHistoricalAppNative = errors.New("исторический app-native run
 // Input — общий вход нового запуска. WorkflowJSON сохраняется побайтно; Task
 // и Comment записываются отдельными разделами task.md без обрезки пробелов.
 // ParentRunID необязателен, но обязан вести в существующий run того же root.
-// CWD должен указывать на существующую папку. Проверка подключения — вне пакета.
+// ChildRequestID связывает нативного ребёнка с доставленным tool call: повтор
+// именно этого вызова находит прежний run, а новый вызов той же завершённой задачи
+// получает новый ID. CWD должен указывать на существующую папку. Проверка
+// подключения — вне пакета.
 type Input struct {
-	WorkflowJSON  []byte
-	Task, Comment string
-	CWD           string
-	ParentRunID   string
+	WorkflowJSON   []byte
+	Task, Comment  string
+	CWD            string
+	ParentRunID    string
+	ChildRequestID string
 }
 
 // Metadata — версия формата и постоянные связи запуска. ParentRunID появился в
-// v2; пустое значение у прежнего v1 означает корень дерева. State использует
+// v2; пустое значение у прежнего v1 означает корень дерева. ChildRequestID есть
+// только у нативных детей v3 и не содержит исходный callId. State использует
 // внутренний словарь планировщика, а не статусы протокола Codex.
 type Metadata struct {
 	Version           int    `json:"version"`
 	RunID             string `json:"runId"`
 	ParentRunID       string `json:"parentRunId,omitempty"`
+	ChildRequestID    string `json:"childRequestId,omitempty"`
 	CWD               string `json:"cwd"`
 	InitiatorThreadID string `json:"initiatorThreadId,omitempty"` // Только чтение форматов v1/v2.
 	Steps             []Step `json:"steps"`
@@ -150,7 +156,7 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 		}
 	}
 	s := Snapshot{Workflow: w, Task: formattedTask(in.Task, in.Comment)}
-	s.Meta = Metadata{Version: 3, RunID: newID(), ParentRunID: in.ParentRunID, CWD: cwd}
+	s.Meta = Metadata{Version: 3, RunID: newID(), ParentRunID: in.ParentRunID, ChildRequestID: in.ChildRequestID, CWD: cwd}
 	for _, step := range w.Steps {
 		s.Meta.Steps = append(s.Meta.Steps, Step{ID: step.ID, ThreadID: newID(), State: scheduler.Pending})
 	}
@@ -201,33 +207,41 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 	return s, nil
 }
 
-// FindMatchingChild ищет уже опубликованный дочерний run с тем же фактическим
-// входом. Это даёт повторному item/tool/call после перезапуска Lawa прежний
-// runId вместо дубля и не требует отдельной базы или marker-файла. Сравниваются
-// разобранный workflow, cwd, задача, комментарий и родитель: различие любого
-// пользовательского входа означает новый запуск.
-//
-// Каталоги незавершённого Create и повреждённые посторонние run пропускаются:
-// без целого опубликованного snapshot невозможно доказать, что именно эта задача
-// уже зарегистрирована. Одновременные вызовы для одного родителя дополнительно
-// сериализует lock родительского координатора и mutex вызывающего процесса.
-func FindMatchingChild(root string, in Input) (Snapshot, bool, error) {
-	w, err := workflow.Decode(bytes.NewReader(in.WorkflowJSON))
-	if err != nil {
-		return Snapshot{}, false, err
+// FindMatchingChildren за один обход root ищет результаты для всего batch. Точный
+// ChildRequestID имеет приоритет и возвращает прежний run в любом состоянии: это
+// повторная доставка уже выполненного tool call. Другой запрос переиспользует
+// смысловой вход только пока тот занят; после завершения создаётся новый run.
+// Повреждённые и незавершённые каталоги пропускаются, потому что по ним нельзя
+// доказать регистрацию задачи. Время чтения хранилища — O(R), где R — число run;
+// сравнение в памяти ограничено 32 элементами batch.
+func FindMatchingChildren(root string, inputs []Input) ([]Snapshot, []bool, error) {
+	type wantedChild struct {
+		workflow                          workflow.Workflow
+		task, cwd, parentRunID, requestID string
 	}
-	cwd, err := filepath.Abs(in.CWD)
-	if err != nil {
-		return Snapshot{}, false, err
+	wanted := make([]wantedChild, len(inputs))
+	for index, in := range inputs {
+		if in.ChildRequestID != "" && !validID(in.ChildRequestID) {
+			return nil, nil, fmt.Errorf("некорректный childRequestId %q", in.ChildRequestID)
+		}
+		w, err := workflow.Decode(bytes.NewReader(in.WorkflowJSON))
+		if err != nil {
+			return nil, nil, err
+		}
+		cwd, err := filepath.Abs(in.CWD)
+		if err != nil {
+			return nil, nil, err
+		}
+		wanted[index] = wantedChild{workflow: w, task: formattedTask(in.Task, in.Comment), cwd: cwd, parentRunID: in.ParentRunID, requestID: in.ChildRequestID}
 	}
+	results, found, exact := make([]Snapshot, len(inputs)), make([]bool, len(inputs)), make([]bool, len(inputs))
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
-		return Snapshot{}, false, nil
+		return results, found, nil
 	}
 	if err != nil {
-		return Snapshot{}, false, err
+		return nil, nil, err
 	}
-	wantTask := formattedTask(in.Task, in.Comment)
 	for _, entry := range entries {
 		if !entry.IsDir() || !validID(entry.Name()) {
 			continue
@@ -236,12 +250,30 @@ func FindMatchingChild(root string, in Input) (Snapshot, bool, error) {
 		if loadErr != nil {
 			continue
 		}
-		if snapshot.Meta.ParentRunID == in.ParentRunID && snapshot.Meta.CWD == cwd &&
-			snapshot.Task == wantTask && reflect.DeepEqual(snapshot.Workflow, w) {
-			return snapshot, true, nil
+		occupied := childOccupied(snapshot)
+		for index, candidate := range wanted {
+			sameInput := snapshot.Meta.ParentRunID == candidate.parentRunID && snapshot.Meta.CWD == candidate.cwd &&
+				snapshot.Task == candidate.task && reflect.DeepEqual(snapshot.Workflow, candidate.workflow)
+			sameRequest := candidate.requestID != "" && snapshot.Meta.ChildRequestID == candidate.requestID
+			if sameRequest && exact[index] && results[index].Meta.RunID != snapshot.Meta.RunID {
+				return nil, nil, fmt.Errorf("childRequestId %q принадлежит нескольким run", candidate.requestID)
+			}
+			if sameRequest || (!exact[index] && !found[index] && occupied && sameInput) {
+				results[index], found[index], exact[index] = snapshot, true, sameRequest
+			}
 		}
 	}
-	return Snapshot{}, false, nil
+	return results, found, nil
+}
+
+func childOccupied(snapshot Snapshot) bool {
+	for _, step := range snapshot.Meta.Steps {
+		switch step.State {
+		case scheduler.Pending, scheduler.Starting, scheduler.Unknown, scheduler.Running, scheduler.WaitingForApproval:
+			return true
+		}
+	}
+	return false
 }
 
 func formattedTask(task, comment string) string {
@@ -447,6 +479,7 @@ func (s Snapshot) validate(runID string) error {
 	oldFormat := m.Version == 1 || m.Version == 2
 	if (m.Version != 1 && m.Version != 2 && m.Version != 3) || m.Version == 1 && m.ParentRunID != "" ||
 		m.RunID != runID || m.ParentRunID == m.RunID || m.ParentRunID != "" && !validID(m.ParentRunID) ||
+		m.ChildRequestID != "" && (m.Version != 3 || m.ParentRunID == "" || !validID(m.ChildRequestID)) ||
 		!filepath.IsAbs(m.CWD) || !validText(m.CWD) || strings.ContainsRune(m.CWD, 0) ||
 		oldFormat && !validText(m.InitiatorThreadID) || m.Version == 3 && m.InitiatorThreadID != "" ||
 		len(m.Steps) != len(s.Workflow.Steps) {

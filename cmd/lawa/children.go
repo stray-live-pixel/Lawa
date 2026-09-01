@@ -120,7 +120,7 @@ func (m *childRunManager) handle(ctx context.Context, parent runstore.Snapshot, 
 		}
 		resolved = append(resolved, child)
 	}
-	key, err := childFingerprint(resolved)
+	key, err := prepareChildCall(parent.Meta.RunID, call, requests, resolved)
 	if err != nil {
 		return "", err
 	}
@@ -310,6 +310,46 @@ func childFingerprint(children []resolvedChild) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// prepareChildCall разделяет две формы повтора. Стабильные адреса App Server
+// образуют идентичность одного tool call, а смысловой вход входит в in-memory key,
+// чтобы повреждённая повторная доставка с другими аргументами не получила старый
+// ответ. Идентификатор ребёнка включает исходный структурированный запрос, а не
+// прочитанное содержимое файлов: повторная доставка остаётся той же операцией,
+// даже если workflow или taskFile успели измениться. Одинаковые элементы одного
+// batch намеренно получают один durable request ID.
+func prepareChildCall(parentRunID string, call codex.DynamicToolCall, requests []childRequest, children []resolvedChild) (string, error) {
+	if strings.TrimSpace(call.CallID) == "" {
+		return "", errors.New("item/tool/call не содержит callId")
+	}
+	if len(requests) != len(children) {
+		return "", errors.New("число исходных и разрешённых дочерних запросов различается")
+	}
+	identityData, err := json.Marshal(struct {
+		ParentRunID, ThreadID, TurnID, CallID, Tool string
+	}{parentRunID, call.ThreadID, call.TurnID, call.CallID, call.Tool})
+	if err != nil {
+		return "", err
+	}
+	identitySum := sha256.Sum256(identityData)
+	identity := hex.EncodeToString(identitySum[:])
+	batchFingerprint, err := childFingerprint(children)
+	if err != nil {
+		return "", err
+	}
+	for index := range children {
+		requestData, marshalErr := json.Marshal(struct {
+			Call    string
+			Request childRequest
+		}{identity, requests[index]})
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		requestSum := sha256.Sum256(requestData)
+		children[index].input.ChildRequestID = hex.EncodeToString(requestSum[:16])
+	}
+	return identity + ":" + batchFingerprint, nil
+}
+
 // launchOnce сериализует одинаковые запросы и повторно использует уже
 // опубликованный child из обычного runstore. Create возвращается только после
 // fsync, поэтому runId отдаётся агенту не раньше надёжной регистрации.
@@ -328,10 +368,29 @@ func (m *childRunManager) launchOnce(ctx context.Context, key string, children [
 	m.calls[key] = call
 	m.mu.Unlock()
 
-	for _, child := range children {
-		snapshot, found, err := runstore.FindMatchingChild(m.root, child.input)
-		if err == nil && !found {
-			snapshot, err = runstore.Create(m.root, child.input)
+	inputs := make([]runstore.Input, len(children))
+	for index := range children {
+		inputs[index] = children[index].input
+	}
+	snapshots, found, err := runstore.FindMatchingChildren(m.root, inputs)
+	created := make(map[string]runstore.Snapshot)
+	if err != nil {
+		call.err = fmt.Errorf("найти дочерние run: %w", err)
+	}
+	for index, child := range children {
+		if call.err != nil {
+			break
+		}
+		snapshot, exists := snapshots[index], found[index]
+		if !exists {
+			if previous, ok := created[child.input.ChildRequestID]; ok {
+				snapshot, exists = previous, true
+			} else {
+				snapshot, err = runstore.Create(m.root, child.input)
+				if err == nil {
+					created[child.input.ChildRequestID] = snapshot
+				}
+			}
 		}
 		if err != nil {
 			call.err = fmt.Errorf("зарегистрировать дочерний run после %v: %w", call.runIDs, err)
@@ -340,10 +399,15 @@ func (m *childRunManager) launchOnce(ctx context.Context, key string, children [
 		// Результат сохраняет позиционное соответствие batch: одинаковые входы
 		// получают одинаковый ID дважды, но start ниже всё равно идемпотентен.
 		call.runIDs = append(call.runIDs, snapshot.Meta.RunID)
-		m.start(snapshot.Meta.RunID, found)
+		m.start(snapshot.Meta.RunID, exists)
 	}
 	m.mu.Lock()
 	close(call.done)
+	// Ошибка регистрации не является готовым ответом: повтор того же call должен
+	// найти уже опубликованные элементы batch и попробовать закончить остальные.
+	if call.err != nil {
+		delete(m.calls, key)
+	}
 	m.mu.Unlock()
 	return append([]string(nil), call.runIDs...), call.err
 }
