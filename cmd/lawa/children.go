@@ -83,11 +83,16 @@ type childRunManager struct {
 	pool             *capacity.Pool
 	stderr           io.Writer
 	deps             dependencies
-	mu               sync.Mutex
-	calls            map[string]*childCall
-	started          map[string]bool
-	errors           []error
-	wg               sync.WaitGroup
+	// registrationMu делает поиск и создание одним действием для разных callId
+	// с одинаковой задачей. Внешний LockedRun уже запрещает два процесса для одного
+	// parent; здесь закрывается гонка его параллельных кубиков внутри общего manager.
+	// Блокировка не удерживается до завершения созданных run.
+	registrationMu sync.Mutex
+	mu             sync.Mutex
+	calls          map[string]*childCall
+	started        map[string]bool
+	errors         []error
+	wg             sync.WaitGroup
 }
 
 func newChildRunManager(ctx context.Context, root, executable string, pool *capacity.Pool, stderr io.Writer, deps dependencies) *childRunManager {
@@ -367,6 +372,8 @@ func (m *childRunManager) launchOnce(ctx context.Context, key string, children [
 	call := &childCall{done: make(chan struct{})}
 	m.calls[key] = call
 	m.mu.Unlock()
+	m.registrationMu.Lock()
+	defer m.registrationMu.Unlock()
 
 	inputs := make([]runstore.Input, len(children))
 	for index := range children {

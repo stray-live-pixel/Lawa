@@ -744,14 +744,13 @@ func TestRunCommand(t *testing.T) {
 }
 
 // TestNativeParentStartsRegisteredChild проходит весь внутренний путь задачи #60:
-// команда родительского turn вызывает run_child, получает ID только после
-// публикации runstore, а координатор ждёт дочерний workflow. Новый callId пока
-// задача занята не создаёт дубль, точный повтор остаётся идемпотентным, а новый
-// запрос после успеха запускает тот же фактический вход заново.
+// параллельные родительские turn вызывают run_child, получают один ID только после
+// публикации runstore, а координатор ждёт дочерний workflow. Точный повтор остаётся
+// идемпотентным, а новый запрос после успеха запускает тот же вход заново.
 func TestNativeParentStartsRegisteredChild(t *testing.T) {
 	root, cwd := filepath.Join(t.TempDir(), "runs"), t.TempDir()
 	parentPath, childPath := filepath.Join(cwd, "parent.json"), filepath.Join(cwd, "child.json")
-	if err := os.WriteFile(parentPath, []byte(`{"id":"parent","steps":[{"id":"root","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]}]}`), 0o600); err != nil {
+	if err := os.WriteFile(parentPath, []byte(`{"id":"parent","steps":[{"id":"root-1","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-2","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-3","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-4","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-5","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-6","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-7","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-8","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(childPath, []byte(`{"id":"child","steps":[{"id":"worker","type":"agent","prompt":"Выполни","dependsOn":[]}]}`), 0o600); err != nil {
@@ -760,18 +759,21 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 	client := newCLIFakeClient()
 	var firstRunID, secondRunID string
 	workerStarted, releaseWorker := make(chan struct{}), make(chan struct{})
+	var workerStartedOnce, releaseWorkerOnce sync.Once
+	var parentReady sync.WaitGroup
+	parentReady.Add(8)
+	type childCallResult struct {
+		runID string
+		err   error
+	}
+	initialResults := make(chan childCallResult, 8)
 	client.onCommand = func(command codex.Command) error {
 		if strings.Contains(command.Title, "Lawa: child / worker [") {
-			client.mu.Lock()
-			workerRun := client.runs["worker"]
-			client.mu.Unlock()
-			if workerRun == 1 {
-				close(workerStarted)
-				<-releaseWorker
-			}
+			workerStartedOnce.Do(func() { close(workerStarted) })
+			<-releaseWorker
 			return nil
 		}
-		if !strings.Contains(command.Title, "Lawa: parent / root [") {
+		if !strings.Contains(command.Title, "Lawa: parent / root-") {
 			return nil
 		}
 		if len(command.DynamicTools) != 2 || command.CallDynamicTool == nil {
@@ -782,7 +784,7 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 		arguments := json.RawMessage(fmt.Sprintf(`{"workflow":"child.json","cwd":".","task":"Дочерняя задача","parentRun":"%s"}`, parentRunID))
 		callChild := func(callID string) (string, error) {
 			result, err := command.CallDynamicTool(t.Context(), codex.DynamicToolCall{
-				ThreadID: "chat-parent", TurnID: "turn-parent", CallID: callID, Tool: "run_child", Arguments: arguments,
+				ThreadID: command.Title, TurnID: "turn-parent", CallID: callID, Tool: "run_child", Arguments: arguments,
 			})
 			if err != nil {
 				return "", err
@@ -798,16 +800,27 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 			}
 			return decoded.RunID, nil
 		}
-		var err error
-		if firstRunID, err = callChild("call-create"); err != nil {
+		parentReady.Done()
+		parentReady.Wait()
+		initialRunID, err := callChild(command.Title)
+		initialResults <- childCallResult{runID: initialRunID, err: err}
+		if !strings.Contains(command.Title, "Lawa: parent / root-1 [") {
 			return err
 		}
-		<-workerStarted
-		occupiedRunID, err := callChild("call-while-occupied")
-		if err != nil || occupiedRunID != firstRunID {
-			return fmt.Errorf("занятая задача создала дубль %q вместо %q: %w", occupiedRunID, firstRunID, err)
+		defer releaseWorkerOnce.Do(func() { close(releaseWorker) })
+		for range 8 {
+			result := <-initialResults
+			if result.err != nil {
+				return result.err
+			}
+			if firstRunID == "" {
+				firstRunID = result.runID
+			} else if result.runID != firstRunID {
+				return fmt.Errorf("параллельная занятая задача создала дубль %q вместо %q", result.runID, firstRunID)
+			}
 		}
-		close(releaseWorker)
+		<-workerStarted
+		releaseWorkerOnce.Do(func() { close(releaseWorker) })
 		deadline := time.Now().Add(5 * time.Second)
 		for {
 			child, loadErr := runstore.Load(root, firstRunID)
@@ -819,10 +832,10 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 			}
 			time.Sleep(time.Millisecond)
 		}
-		if repeatedRunID, repeatErr := callChild("call-create"); repeatErr != nil || repeatedRunID != firstRunID {
+		if repeatedRunID, repeatErr := callChild(command.Title); repeatErr != nil || repeatedRunID != firstRunID {
 			return fmt.Errorf("точный повтор потерял runId %q: %q, %w", firstRunID, repeatedRunID, repeatErr)
 		}
-		if secondRunID, err = callChild("call-after-success"); err != nil || secondRunID == firstRunID {
+		if secondRunID, err = callChild(command.Title + "-after-success"); err != nil || secondRunID == firstRunID {
 			return fmt.Errorf("новый запрос после успеха не создал новый run: %q, %q, %w", firstRunID, secondRunID, err)
 		}
 		return nil
