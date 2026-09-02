@@ -11,7 +11,7 @@
     .next-run-pill{display:flex;align-items:center;gap:8px;min-width:0;max-width:min(620px,68vw);min-height:36px;border:1px solid #303030;border-radius:999px;background:#151515;padding:5px 8px 5px 12px;cursor:pointer;text-align:left;transition:border-color .12s,background .12s}.next-run-pill:hover,.next-run-pill:focus-visible{border-color:#484848;background:#1c1c1c;outline:none}.next-run-workflow{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:700}.next-run-time{flex:0 0 auto;border-radius:999px;background:#0c2033;color:#9bd0ff;padding:3px 7px;font-size:10px;white-space:nowrap}.next-run-arrow{flex:0 0 auto;margin-right:3px;color:var(--muted);font-size:16px;line-height:1}.no-next-run{color:var(--muted);font-size:11px}
     main{display:flex;flex:1;flex-direction:column;width:100%;max-width:1280px;min-height:0;margin:0 auto;padding:16px 22px 18px}
     a{color:var(--link);text-decoration:none}.children{list-style:none;margin:0 0 0 13px;padding:0 0 0 12px;border-left:1px solid #242424}
-    details.run-folder{margin:0}summary.tree-row{grid-template-columns:10px 17px minmax(0,1fr) auto;min-height:34px;cursor:pointer;list-style:none}summary.tree-row::-webkit-details-marker{display:none}summary.tree-row:before{content:'›';width:10px;color:var(--muted);font-size:15px;line-height:1;transition:transform .12s}details[open]>summary.tree-row:before{transform:rotate(90deg)}
+    details.run-folder{margin:0}summary.tree-row{grid-template-columns:18px 17px minmax(0,1fr) auto;min-height:34px;cursor:pointer;list-style:none}summary.tree-row::-webkit-details-marker{display:none}.folder-toggle{display:flex;align-items:center;justify-content:center;width:18px;height:24px;border:0;border-radius:4px;background:transparent;color:var(--muted);padding:0;cursor:pointer}.folder-toggle:hover{background:#292929;color:var(--text)}.folder-toggle svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;transition:transform .12s}details[open]>summary .folder-toggle svg{transform:rotate(90deg)}
     .name{font-weight:600}.ticket-title{display:block;color:#aaa;font-size:12px;line-height:1.35;margin-top:2px;white-space:normal}.meta{display:block;color:var(--muted);font-size:10px;line-height:1.45;margin-top:2px;overflow-wrap:anywhere}
     .actions{display:flex;gap:6px;margin-left:auto;padding-left:12px;white-space:nowrap}.action{display:inline-flex;align-items:center;min-height:24px;border:1px solid #30363d;border-radius:6px;background:var(--button);color:var(--link);padding:2px 8px;font-size:11px;line-height:1;text-decoration:none}.action:hover{background:var(--button-hover);border-color:#484f58;text-decoration:none}.action-ticket{border-color:#285783;background:#0c2033}.action.disabled{color:#555;border-color:#252525;background:#111;cursor:not-allowed}
     .node-icon{display:block;width:17px;height:17px;flex:0 0 auto;color:var(--muted)}.node-icon.tone-running{color:var(--link)}.node-icon.tone-failed{color:var(--red)}.node-icon.tone-succeeded{color:var(--green)}
@@ -130,8 +130,16 @@
   const maxTraceBlocks=500;
   const labels={agent_message_delta:'Сообщение агента',reasoning_summary_delta:'Краткое объяснение',command_output_delta:'Вывод команды',plan_updated:'План',item_started:'Действие',item_completed:'Результат',error:'Ошибка'};
   const initialize=root=>{
-    root.querySelectorAll('details[data-node]').forEach(node=>searchActive||workingOnly||failedOnly?node.open=true:remember(node,node.dataset.node));
-    root.querySelectorAll('[data-inspector-select]').forEach(item=>item.addEventListener('click',()=>selectInspector(root,item.dataset.inspectorSelect)));
+    root.querySelectorAll('details[data-node]').forEach(node=>{
+      if(searchActive||workingOnly||failedOnly)node.open=true;else remember(node,node.dataset.node);
+      const toggle=node.querySelector(':scope>summary [data-folder-toggle]');
+      const sync=()=>toggle?.setAttribute('aria-expanded',String(node.open));
+      sync();node.addEventListener('toggle',sync);
+      toggle?.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();node.open=!node.open;});
+    });
+    // Выбор папки и раскрытие дерева — независимые действия. preventDefault
+    // не даёт нативному summary переключить details при просмотре карточки run.
+    root.querySelectorAll('[data-inspector-select]').forEach(item=>item.addEventListener('click',event=>{event.preventDefault();selectInspector(root,item.dataset.inspectorSelect);}));
     selectInspector(root,inspectorSelection);
     root.querySelectorAll('[data-root-target]').forEach(button=>button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();changeRoot(button.dataset.rootTarget);}));
     root.querySelectorAll('[data-auto-submit] select').forEach(control=>control.addEventListener('change',()=>control.form?.requestSubmit()));
@@ -234,7 +242,7 @@
 {{define "run"}}<li class="workflow-item">{{$run := .}}
   <details class="run-folder" data-node="{{.ID}}" {{if .Open}}open{{end}}>
     <summary class="tree-row" data-inspector-select="run:{{.ID}}" title="{{.Name}}">
-      {{template "folder-icon" .}}<span class="tree-label">{{.Name}}</span><span class="folder-tail"><span class="tree-count">{{.CompletedSteps}}/{{.TotalSteps}}</span><button class="pin-button" type="button" data-root-target="{{.ID}}" aria-label="Сделать {{.Name}} корневой папкой" title="Сделать корневой папкой"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 4 6 0-.7 5 3.2 3.2v1.3h-11v-1.3L9.7 9z"></path><path d="M12 13.5V21"></path></svg></button></span>
+      <button class="folder-toggle" type="button" data-folder-toggle aria-label="Свернуть или развернуть {{.Name}}"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="m6 3 5 5-5 5"></path></svg></button>{{template "folder-icon" .}}<span class="tree-label">{{.Name}}</span><span class="folder-tail"><span class="tree-count">{{.CompletedSteps}}/{{.TotalSteps}}</span><button class="pin-button" type="button" data-root-target="{{.ID}}" aria-label="Сделать {{.Name}} корневой папкой" title="Сделать корневой папкой"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 4 6 0-.7 5 3.2 3.2v1.3h-11v-1.3L9.7 9z"></path><path d="M12 13.5V21"></path></svg></button></span>
     </summary>
     <ul class="children">
       {{range .Steps}}<li class="cube-item"><button class="tree-row tree-step" type="button" data-inspector-select="step:{{$run.ID}}:{{.ID}}" title="{{.ID}}">{{template "cube-icon" .}}<span class="tree-label">{{.ID}}</span></button></li>{{end}}
