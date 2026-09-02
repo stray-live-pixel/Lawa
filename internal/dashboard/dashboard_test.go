@@ -149,12 +149,13 @@ TRACKER_CONTEXT_END`)
 		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "vscode://file/",
 		"0 из 1 завершено", "Работа агента", "Активные", "Все", "Все состояния", "В работе", "Сломавшиеся", "data-inspector", "folder-icon", "cube-icon",
 		"Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
-		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID, "mcpToolCall",
+		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID,
 		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
 		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",
 		"Поиск по workflow, кубикам и тикетам…", "data-auto-submit", "data-search-input", "top-controls", "tree-scroll", "pin-button", "data-root-target",
 		"html,body{height:100%;overflow:hidden}", "flex:1;min-height:0",
 		"selectionInside", "editableFocusInside", "schedulePanelOpen", "freshMarkup===dashboardMarkup", "traceRenderPending",
+		"setTimeout(()=>input.form?.requestSubmit(),1000)", "setInterval(fetchTrace,10000)",
 		"/assets/lawa-logo.png", "Расписание запусков", "data-schedule-open", "next-run-time", "scheduled-workflow", "Запуск: " + plannedAt.Local().Format("02.01.2006 15:04:05"), "cron 0 10 * * * · Europe/Moscow",
 		"/uml/" + parent.Meta.RunID, "/memory/" + child.Meta.RunID + "/" + child.Meta.Steps[0].ThreadID,
 	} {
@@ -314,9 +315,10 @@ func TestProtectedRoutes(t *testing.T) {
 	}
 }
 
-// TestCorruptedEventsRemainVisible сохраняет сам run в дереве, но показывает
-// оператору отдельную проблему журнала вместо молчаливой потери observability.
-func TestCorruptedEventsRemainVisible(t *testing.T) {
+// TestDashboardReadsEventsOnlyForSearch защищает границу между лёгким polling и
+// полнотекстовым поиском. Обычная страница строится без журнала даже для видимого
+// run; поисковый запрос читает журнал и показывает его повреждение оператору.
+func TestDashboardReadsEventsOnlyForSearch(t *testing.T) {
 	root := t.TempDir()
 	run := createRun(t, root, "visible-with-broken-events", "")
 	if err := os.WriteFile(filepath.Join(root, run.Meta.RunID, "events.jsonl"), []byte("not json\n"), 0o600); err != nil {
@@ -325,15 +327,20 @@ func TestCorruptedEventsRemainVisible(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	Handler(root).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/?period=all", nil))
 	body := recorder.Body.String()
-	if !strings.Contains(body, "visible-with-broken-events") || !strings.Contains(body, "журнал событий") {
-		t.Fatalf("повреждение журнала скрыто вместе с run: %q", body)
+	if !strings.Contains(body, "visible-with-broken-events") || strings.Contains(body, `class="problem"`) {
+		t.Fatalf("обычный polling прочитал журнал видимого run: %q", body)
+	}
+	search := httptest.NewRecorder()
+	Handler(root).ServeHTTP(search, httptest.NewRequest(http.MethodGet, "/?period=all&q=visible", nil))
+	if !strings.Contains(search.Body.String(), `class="problem"`) {
+		t.Fatal("полнотекстовый поиск не сообщил о повреждённом журнале")
 	}
 }
 
 // TestDashboardSkipsHiddenEventLogs защищает основной сценарий оптимизации:
 // polling активного представления не должен разбирать журнал завершённого run,
-// который отфильтрован и не попадёт в HTML. При явном переходе ко всем запускам
-// тот же журнал загружается и его повреждение становится видимой диагностикой.
+// который отфильтрован и не попадёт в HTML. Переход ко всем запускам тоже остаётся
+// лёгким: сам выбор временного окна не означает полнотекстовый поиск.
 func TestDashboardSkipsHiddenEventLogs(t *testing.T) {
 	root := t.TempDir()
 	run := createRun(t, root, "hidden-completed", "")
@@ -351,8 +358,8 @@ func TestDashboardSkipsHiddenEventLogs(t *testing.T) {
 
 	all := httptest.NewRecorder()
 	dashboard.ServeHTTP(all, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
-	if !strings.Contains(all.Body.String(), "журнал событий") {
-		t.Fatal("dashboard не прочитал журнал после показа завершённого run")
+	if strings.Contains(all.Body.String(), `class="problem"`) {
+		t.Fatal("dashboard прочитал журнал после показа завершённого run")
 	}
 }
 

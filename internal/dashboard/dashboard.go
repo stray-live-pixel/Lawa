@@ -138,9 +138,6 @@ func (h handler) live(w http.ResponseWriter, r *http.Request) {
 	}
 	scheduled, seriesProblems := loadScheduledRuns(h.root, now)
 	visible, filter, pagination := applyDashboardView(roots, params, now)
-	if params.Query == "" {
-		problems = append(problems, hydrateRunNodes(h.root, visible, false)...)
-	}
 	view.Roots, view.Scheduled, view.Problems = visible, scheduled, append(problems, seriesProblems...)
 	view.Filter, view.Pagination = filter, pagination
 	if len(roots) == 0 {
@@ -477,16 +474,22 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		node.updatedAt = info.ModTime()
 		node.Updated = node.updatedAt.Local().Format("2006-01-02 15:04:05")
 	}
+	// Наличие артефактов определяется по метаданным файлов: обычный polling
+	// сохраняет рабочие ссылки, но не читает содержимое UML и memory.
+	if regularFileExists(filepath.Join(root, runID, runstore.StatusImageFilename)) {
+		node.HasUML, node.UMLURL = true, template.URL("/uml/"+runID)
+	}
 	for _, step := range snapshot.Meta.Steps {
 		active := activeStepState(step.State)
 		if step.State == scheduler.Succeeded {
 			node.CompletedSteps++
 		}
 		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State))
+		memoryPath := filepath.Join(root, runID, "memory", step.ThreadID+".md")
 		node.Steps = append(node.Steps, stepNode{
 			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
 			EventsURL: template.URL("/events/" + runID + "?step=" + url.QueryEscape(step.ID)),
-			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID),
+			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID), HasMemory: nonEmptyRegularFile(memoryPath),
 			TraceURL:  template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
 			Active:    active, threadID: step.ThreadID, turnID: step.TurnID,
 		})
@@ -501,8 +504,9 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 	return node
 }
 
-// hydrateRunNodes загружает подробности только выбранных деревьев. Ошибка одного
-// журнала не мешает остальным карточкам и возвращается отдельной диагностикой.
+// hydrateRunNodes загружает подробности всех деревьев только для явного
+// полнотекстового поиска. Ошибка одного журнала не мешает остальным карточкам и
+// возвращается отдельной диагностикой.
 func hydrateRunNodes(root string, nodes []*runNode, fullTextSearch bool) []problem {
 	var problems []problem
 	for _, node := range nodes {
@@ -521,14 +525,9 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 		node.updatedAt = events[len(events)-1].Time
 		node.Updated = node.updatedAt.Local().Format("2006-01-02 15:04:05")
 	}
-	if regularFileExists(filepath.Join(root, node.ID, runstore.StatusImageFilename)) {
-		node.HasUML, node.UMLURL = true, template.URL("/uml/"+node.ID)
-	}
 	for index := range node.Steps {
 		step := &node.Steps[index]
 		summary := summaries[step.ID]
-		memoryPath := filepath.Join(root, node.ID, "memory", step.threadID+".md")
-		step.HasMemory = nonEmptyRegularFile(memoryPath)
 		step.Message, step.Action, step.updatedAt = summary.Message, strings.Join(summary.ActiveItemTypes, ", "), summary.LastActivity
 		step.Updated = ""
 		if !summary.LastActivity.IsZero() {

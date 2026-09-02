@@ -135,9 +135,9 @@
     selectInspector(root,inspectorSelection);
     root.querySelectorAll('[data-root-target]').forEach(button=>button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();changeRoot(button.dataset.rootTarget);}));
     root.querySelectorAll('[data-auto-submit] select').forEach(control=>control.addEventListener('change',()=>control.form?.requestSubmit()));
-    // Поиск применяется без отдельной кнопки, но короткая задержка позволяет
-    // набрать слово целиком и не перезагружает страницу после каждого символа.
-    root.querySelectorAll('[data-search-input]').forEach(input=>{let timer;input.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>input.form?.requestSubmit(),400);});});
+    // Полнотекстовый поиск читает журналы и memory всех запусков. Секундная
+    // задержка объединяет быстрый набор в один тяжёлый запрос после паузы человека.
+    root.querySelectorAll('[data-search-input]').forEach(input=>{let timer;input.addEventListener('input',()=>{clearTimeout(timer);timer=setTimeout(()=>input.form?.requestSubmit(),1000);});});
     root.querySelectorAll('[data-trace]').forEach(button=>button.addEventListener('click',event=>{event.preventDefault();event.stopPropagation();openTrace(button);}));
     if(location.pathname==='/preview') root.querySelectorAll('a[href="#preview"]').forEach(a=>a.addEventListener('click',event=>event.preventDefault()));
   };
@@ -201,7 +201,9 @@
   });
   document.querySelector('[data-trace-close]').addEventListener('click',closeTrace);backdrop.addEventListener('click',closeTrace);document.addEventListener('keydown',event=>{if(event.key==='Escape'){closeTrace();closeSchedule();}});
   initialize(document);
-  setInterval(fetchTrace,1000);
+  // Детальный журнал нужен только открытой панели. Первый запрос выполняется
+  // сразу в openTrace, а последующие редко проверяют дописанный хвост.
+  setInterval(fetchTrace,10000);
   const refreshSeconds=Number(document.body.dataset.refresh||0);
   let refreshing=false;
   const refreshDashboard=async()=>{
