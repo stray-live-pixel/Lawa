@@ -426,15 +426,16 @@ func TestPreview(t *testing.T) {
 	}
 }
 
-// TestSortNodesNewestFirst фиксирует единый временной порядок без статусных
-// секций: успешный новый workflow не должен оказаться ниже старого активного.
-func TestSortNodesNewestFirst(t *testing.T) {
-	old := &runNode{ID: "old-running", activityAt: time.Now().Add(-time.Hour)}
-	recent := &runNode{ID: "recent-succeeded", activityAt: time.Now()}
+// TestSortNodesByCreationTime фиксирует стабильный порядок папок: активность
+// старого workflow не должна поднимать его выше созданного позднее run.
+func TestSortNodesByCreationTime(t *testing.T) {
+	now := time.Now()
+	old := &runNode{ID: "old-running", createdAt: now.Add(-time.Hour), activityAt: now}
+	recent := &runNode{ID: "recent-succeeded", createdAt: now, activityAt: now.Add(-time.Hour)}
 	roots := []*runNode{old, recent}
 	sortNodes(roots)
 	if roots[0] != recent || roots[1] != old {
-		t.Fatalf("workflow отсортированы не по времени: %+v", roots)
+		t.Fatalf("workflow отсортированы не по времени создания: %+v", roots)
 	}
 }
 

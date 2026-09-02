@@ -172,32 +172,19 @@ func TestFocusedRootBuildsPath(t *testing.T) {
 	}
 }
 
-// TestTreeStateAndNewestChildOrder проверяет две агрегированные гарантии дерева:
-// живой ребёнок делает всё дерево активным, а самый свежий ребёнок идёт первым.
-func TestTreeStateAndNewestChildOrder(t *testing.T) {
+// TestTreeStateAndStableChildOrder проверяет две независимые гарантии дерева:
+// живой ребёнок делает всё дерево активным, но активность не меняет порядок детей.
+func TestTreeStateAndStableChildOrder(t *testing.T) {
 	now := time.Now()
 	old := testFilterNode("old", "succeeded", "old", now.Add(-time.Hour))
 	recent := testFilterNode("recent", "running", "recent", now)
+	old.createdAt, recent.createdAt = now.Add(-time.Hour), now
+	old.updatedAt, recent.updatedAt = now, now.Add(-time.Hour)
 	root := testFilterNode("root", "succeeded", "root", now.Add(-2*time.Hour), old, recent)
 	finalizeTree(root)
 	sortNodes([]*runNode{root})
 	if root.treeState != "running" || root.Children[0].ID != "recent" {
 		t.Fatalf("агрегат или сортировка дерева неверны: state=%s children=%s", root.treeState, nodeIDs(root.Children))
-	}
-}
-
-// TestSortStepsNewestFirst фиксирует порядок строк внутри раскрытого workflow:
-// сначала самая свежая работа, а при одинаковом времени — выполняющийся шаг.
-func TestSortStepsNewestFirst(t *testing.T) {
-	now := time.Now()
-	steps := []stepNode{
-		{ID: "old-active", Active: true, updatedAt: now.Add(-time.Minute)},
-		{ID: "finished", updatedAt: now},
-		{ID: "current", Active: true, updatedAt: now},
-	}
-	sortSteps(steps)
-	if got := steps[0].ID + "," + steps[1].ID + "," + steps[2].ID; got != "current,finished,old-active" {
-		t.Fatalf("шаги отсортированы не по текущей активности: %s", got)
 	}
 }
 

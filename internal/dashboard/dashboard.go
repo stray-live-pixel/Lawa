@@ -69,7 +69,7 @@ type runNode struct {
 	CompletedSteps, TotalSteps                         int
 	Steps, ActiveSteps                                 []stepNode
 	Children                                           []*runNode
-	updatedAt, activityAt                              time.Time
+	createdAt, updatedAt, activityAt                   time.Time
 	baseSearch, searchText, treeState                  string
 }
 
@@ -78,7 +78,6 @@ type stepNode struct {
 	ID, State, Tone, Runtime, Message, Action, Updated string
 	EventsURL, MemoryURL, TraceURL                     template.URL
 	HasMemory, Active                                  bool
-	updatedAt                                          time.Time
 	threadID, turnID                                   string
 }
 
@@ -465,6 +464,12 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 			search = append(search, string(*definition.Speed))
 		}
 	}
+	// workflow.json создаётся один раз вместе с run и затем не перезаписывается.
+	// Его ModTime даёт стабильный ключ порядка без чтения events.jsonl и без
+	// миграции старых meta.json, в которых отдельной даты создания ещё нет.
+	if info, err := os.Stat(filepath.Join(root, runID, "workflow.json")); err == nil {
+		node.createdAt = info.ModTime()
+	}
 	if info, err := os.Stat(filepath.Join(root, runID, "meta.json")); err == nil {
 		node.updatedAt = info.ModTime()
 		node.Updated = node.updatedAt.Format("2006-01-02 15:04:05")
@@ -498,7 +503,6 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 			Active:   active, threadID: step.ThreadID, turnID: step.TurnID,
 		})
 	}
-	sortSteps(node.Steps)
 	for _, step := range node.Steps {
 		if step.Active {
 			node.ActiveSteps = append(node.ActiveSteps, step)
@@ -532,7 +536,7 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 	for index := range node.Steps {
 		step := &node.Steps[index]
 		summary := summaries[step.ID]
-		step.Message, step.Action, step.updatedAt = summary.Message, strings.Join(summary.ActiveItemTypes, ", "), summary.LastActivity
+		step.Message, step.Action = summary.Message, strings.Join(summary.ActiveItemTypes, ", ")
 		step.Updated = ""
 		if !summary.LastActivity.IsZero() {
 			step.Updated = summary.LastActivity.Local().Format("15:04:05")
@@ -545,7 +549,6 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 			}
 		}
 	}
-	sortSteps(node.Steps)
 	node.ActiveSteps = node.ActiveSteps[:0]
 	for _, step := range node.Steps {
 		if step.Active {
@@ -592,21 +595,6 @@ func activeStepState(state scheduler.State) bool {
 	return state == scheduler.Starting || state == scheduler.Running || state == scheduler.WaitingForApproval
 }
 
-// sortSteps ставит сверху шаг с самой свежей активностью. Если два события
-// получили одну временную метку, выполняющийся шаг важнее завершённого: оператор
-// сразу видит текущую работу, а окончательным стабильным ключом остаётся ID.
-func sortSteps(steps []stepNode) {
-	sort.SliceStable(steps, func(left, right int) bool {
-		if !steps[left].updatedAt.Equal(steps[right].updatedAt) {
-			return steps[left].updatedAt.After(steps[right].updatedAt)
-		}
-		if steps[left].Active != steps[right].Active {
-			return steps[left].Active
-		}
-		return steps[left].ID < steps[right].ID
-	})
-}
-
 // workflowState сворачивает состояния кубиков в три цветных итога и нейтральное
 // ожидание. Ошибка приоритетнее работы, а успех требует успеха каждого кубика.
 func workflowState(snapshot runstore.Snapshot) string {
@@ -648,15 +636,15 @@ func parentCycle(start *runNode, nodes map[string]*runNode) bool {
 	return false
 }
 
-// sortNodes ставит самый недавно изменённый workflow сверху. activityAt уже
-// включает потомков, поэтому новое дочернее действие поднимает всё связанное
-// дерево. Равное или неизвестное время стабилизируется по ID между polling.
+// sortNodes ставит новые workflow сверху по времени создания неизменяемого
+// workflow.json. Последующая активность не меняет порядок папок при polling.
+// Равное или неизвестное время стабилизируется по ID.
 func sortNodes(nodes []*runNode) {
 	sort.Slice(nodes, func(i, j int) bool {
-		if nodes[i].activityAt.Equal(nodes[j].activityAt) {
+		if nodes[i].createdAt.Equal(nodes[j].createdAt) {
 			return nodes[i].ID < nodes[j].ID
 		}
-		return nodes[i].activityAt.After(nodes[j].activityAt)
+		return nodes[i].createdAt.After(nodes[j].createdAt)
 	})
 	for _, node := range nodes {
 		sortNodes(node.Children)
@@ -763,11 +751,8 @@ func previewPage(params viewParams, now time.Time) page {
 		node := &runNode{
 			ID: id, Name: name, State: state, Tone: tone(state), Updated: "2026-08-31 18:42:10",
 			EventsURL: action, VSCodeURL: action, UMLURL: action, HasUML: true, Steps: steps, TotalSteps: len(steps),
-			updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
+			createdAt: now.Add(-age), updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
 		}
-		// Preview проходит тот же порядок, что и live-данные. Иначе макет мог бы
-		// скрыть регрессию, при которой текущая работа уступила завершённой строке.
-		sortSteps(node.Steps)
 		for _, item := range node.Steps {
 			if item.State == string(scheduler.Succeeded) {
 				node.CompletedSteps++
