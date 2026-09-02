@@ -148,7 +148,7 @@ TRACKER_CONTEXT_END`)
 	for _, fragment := range []string{
 		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "vscode://file/",
 		"0 из 1 завершено", "Работа агента", "Активные", "Все", "Все состояния", "В работе", "Сломавшиеся", "data-inspector", "folder-icon", "cube-icon",
-		"Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
+		`class="tree-ticket"`, ">THINKTWICE-592</span>", "Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
 		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID,
 		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
 		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",
