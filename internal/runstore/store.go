@@ -68,20 +68,23 @@ type Input struct {
 
 // Metadata — версия формата и постоянные связи запуска. ParentRunID появился в
 // v2; пустое значение у прежнего v1 означает корень дерева. ChildRequestID есть
-// только у нативных детей v3 и не содержит исходный callId. State использует
-// внутренний словарь планировщика, а не статусы протокола Codex.
+// у app-server детей v3/v4 и не содержит исходный callId. Steps принадлежат лишь
+// legacy v1-v3, а v4 хранит общий RunState и append-only Visits.
 type Metadata struct {
-	Version           int    `json:"version"`
-	RunID             string `json:"runId"`
-	ParentRunID       string `json:"parentRunId,omitempty"`
-	ChildRequestID    string `json:"childRequestId,omitempty"`
-	CWD               string `json:"cwd"`
-	InitiatorThreadID string `json:"initiatorThreadId,omitempty"` // Только чтение форматов v1/v2.
-	Steps             []Step `json:"steps"`
+	Version           int      `json:"version"`
+	RunID             string   `json:"runId"`
+	ParentRunID       string   `json:"parentRunId,omitempty"`
+	ChildRequestID    string   `json:"childRequestId,omitempty"`
+	CWD               string   `json:"cwd"`
+	InitiatorThreadID string   `json:"initiatorThreadId,omitempty"` // Только чтение форматов v1/v2.
+	Steps             []Step   `json:"steps,omitempty"`
+	RunState          RunState `json:"runState,omitempty"`
+	StopReason        string   `json:"stopReason,omitempty"`
+	Visits            []Visit  `json:"visits,omitempty"`
 }
 
-// Step связывает ID из графа с отдельным файлом памяти, thread и последним turn
-// Codex App Server. Произвольный ID из workflow не используется как имя файла.
+// Step связывает legacy ID из графа с отдельным файлом памяти, thread и последним
+// turn Codex App Server. Произвольный ID workflow не используется как имя файла.
 // Revision сохраняется только для чтения исторического app-native формата v2.
 type Step struct {
 	ID            string          `json:"id"`
@@ -121,12 +124,35 @@ func Create(root string, in Input) (Snapshot, error) {
 	return create(root, in, syncDir)
 }
 
+// CreateAgentGraph создаёт формат v4 только для workflow version=2. Это узкий
+// внутренний API пакета: production-команды продолжают вызывать Create, который
+// намеренно получает отказ legacy-планировщика до появления visit-aware
+// координатора. Разделение не позволяет частично включить новый runtime.
+func CreateAgentGraph(root string, in Input) (Snapshot, error) {
+	return createAgentGraph(root, in, syncDir)
+}
+
 // create принимает синхронизацию каталогов явно, чтобы тесты могли воспроизвести
 // отказ диска без глобальных подмен, влияющих на параллельные вызовы Create.
 func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot, err error) {
+	return createMode(root, in, syncDirectory, false)
+}
+
+// createAgentGraph оставляет Sync инъекцией только для проверок границ записи.
+func createAgentGraph(root string, in Input, syncDirectory func(string) error) (_ Snapshot, err error) {
+	return createMode(root, in, syncDirectory, true)
+}
+
+// createMode сохраняет общий crash-safe протокол обоих форматов. Выбор режима
+// влияет только на представление metadata и набор файлов памяти; legacy Create
+// по-прежнему проходит через scheduler.Evaluate внутри Snapshot.validate.
+func createMode(root string, in Input, syncDirectory func(string) error, agentGraph bool) (_ Snapshot, err error) {
 	w, err := workflow.Decode(bytes.NewReader(in.WorkflowJSON))
 	if err != nil {
 		return Snapshot{}, err
+	}
+	if agentGraph && w.EffectiveVersion() != workflow.VersionAgentGraph {
+		return Snapshot{}, fmt.Errorf("CreateAgentGraph требует workflow version=2")
 	}
 	if !validText(in.Task) || !utf8.ValidString(in.Comment) || !validText(in.CWD) {
 		return Snapshot{}, fmt.Errorf("нужны постановка и cwd; текст должен быть UTF-8")
@@ -157,8 +183,18 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 	}
 	s := Snapshot{Workflow: w, Task: formattedTask(in.Task, in.Comment)}
 	s.Meta = Metadata{Version: 3, RunID: newID(), ParentRunID: in.ParentRunID, ChildRequestID: in.ChildRequestID, CWD: cwd}
-	for _, step := range w.Steps {
-		s.Meta.Steps = append(s.Meta.Steps, Step{ID: step.ID, ThreadID: newID(), State: scheduler.Pending})
+	if agentGraph {
+		s.Meta.Version, s.Meta.RunState = 4, RunRunning
+		for _, stepID := range w.Start {
+			s.Meta.Visits = append(s.Meta.Visits, Visit{
+				VisitID: newID(), StepID: stepID, Visit: 1, Iteration: 1,
+				Trigger: VisitTrigger{Kind: TriggerStart}, State: scheduler.Pending,
+			})
+		}
+	} else {
+		for _, step := range w.Steps {
+			s.Meta.Steps = append(s.Meta.Steps, Step{ID: step.ID, ThreadID: newID(), State: scheduler.Pending})
+		}
 	}
 	if err = s.validate(s.Meta.RunID); err != nil {
 		return Snapshot{}, err
@@ -186,8 +222,8 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 		return Snapshot{}, err
 	}
 	files := map[string][]byte{"workflow.json": in.WorkflowJSON, "task.md": []byte(s.Task), "meta.json.tmp": meta}
-	for _, step := range s.Meta.Steps {
-		files[filepath.Join("memory", step.ThreadID+".md")] = nil
+	for _, memoryID := range s.memoryIDs() {
+		files[filepath.Join("memory", memoryID+".md")] = nil
 	}
 	for name, data := range files {
 		if err = writeNewFile(filepath.Join(dir, name), data); err != nil {
@@ -267,6 +303,9 @@ func FindMatchingChildren(root string, inputs []Input) ([]Snapshot, []bool, erro
 }
 
 func childOccupied(snapshot Snapshot) bool {
+	if snapshot.Meta.Version == 4 {
+		return snapshot.Meta.RunState == RunRunning
+	}
 	for _, step := range snapshot.Meta.Steps {
 		switch step.State {
 		case scheduler.Pending, scheduler.Starting, scheduler.Unknown, scheduler.Running, scheduler.WaitingForApproval:
@@ -331,10 +370,10 @@ func LoadForDashboard(root, runID string) (Snapshot, error) {
 	return loadForDashboard(dir, runID)
 }
 
-// ReadMemory возвращает память только существующего кубика из валидного run.
+// ReadMemory возвращает память только известного legacy threadId или v4 visitId.
 // os.Root удерживает чтение внутри каталога даже при конкурентной подмене пути;
 // проверка обычного файла не позволяет использовать симлинк на чужие данные.
-func ReadMemory(root, runID, threadID string) ([]byte, error) {
+func ReadMemory(root, runID, memoryID string) ([]byte, error) {
 	dir, err := openRun(root, runID)
 	if err != nil {
 		return nil, err
@@ -345,13 +384,13 @@ func ReadMemory(root, runID, threadID string) ([]byte, error) {
 		return nil, err
 	}
 	found := false
-	for _, step := range snapshot.Meta.Steps {
-		found = found || step.ThreadID == threadID
+	for _, knownID := range snapshot.memoryIDs() {
+		found = found || knownID == memoryID
 	}
 	if !found {
-		return nil, fmt.Errorf("неизвестный threadId памяти %q", threadID)
+		return nil, fmt.Errorf("неизвестный идентификатор памяти %q", memoryID)
 	}
-	return readFile(dir, filepath.Join("memory", threadID+".md"))
+	return readFile(dir, filepath.Join("memory", memoryID+".md"))
 }
 
 // ReadStatusImage читает только стабильный PNG статуса. Отдельная функция вместо
@@ -380,6 +419,11 @@ func RemoveUnstarted(root, runID string) error {
 	for _, step := range snapshot.Meta.Steps {
 		if step.State != scheduler.Pending || step.CodexThreadID != "" {
 			return fmt.Errorf("откат run %q запрещён: шаг %q уже передан исполнителю", runID, step.ID)
+		}
+	}
+	for _, visit := range snapshot.Meta.Visits {
+		if visit.State != scheduler.Pending || visit.CodexThreadID != "" || visit.TurnID != "" || visit.Attempt != 0 || visit.Decision != nil {
+			return fmt.Errorf("откат run %q запрещён: посещение %q уже передано исполнителю", runID, visit.VisitID)
 		}
 	}
 	root, err = filepath.Abs(root)
@@ -457,6 +501,9 @@ func loadSnapshot(dir *os.Root, runID string, rejectUnknownMembers bool) (Snapsh
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("meta.json: %w", err)
 	}
+	if err = validateMetadataShape(meta, s.Meta); err != nil {
+		return Snapshot{}, fmt.Errorf("meta.json: %w", err)
+	}
 	data, err := readFile(dir, "workflow.json")
 	if err != nil {
 		return Snapshot{}, err
@@ -472,13 +519,13 @@ func loadSnapshot(dir *os.Root, runID string, rejectUnknownMembers bool) (Snapsh
 	if err = s.validate(runID); err != nil {
 		return Snapshot{}, err
 	}
-	for _, step := range s.Meta.Steps {
-		info, err := dir.Lstat(filepath.Join("memory", step.ThreadID+".md"))
+	for _, memoryID := range s.memoryIDs() {
+		info, err := dir.Lstat(filepath.Join("memory", memoryID+".md"))
 		if err != nil {
 			return Snapshot{}, err
 		}
 		if !info.Mode().IsRegular() {
-			return Snapshot{}, fmt.Errorf("память шага %q должна быть обычным файлом", step.ID)
+			return Snapshot{}, fmt.Errorf("память %q должна быть обычным файлом", memoryID)
 		}
 	}
 	if s.Meta.Version == 2 {
@@ -491,18 +538,43 @@ func loadSnapshot(dir *os.Root, runID string, rejectUnknownMembers bool) (Snapsh
 	return s, nil
 }
 
+// validateMetadataShape различает отсутствующее поле и явный null/zero. Обычная
+// структура Go этого не сохраняет, но смешение Steps и Visits означает попытку
+// прочитать новый runtime по правилам старого и потому должно быть отвергнуто.
+func validateMetadataShape(data []byte, metadata Metadata) error {
+	var fields map[string]any
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	has := func(name string) bool { _, exists := fields[name]; return exists }
+	if metadata.Version == 4 {
+		if has("steps") || !has("runState") || !has("visits") {
+			return fmt.Errorf("metadata v4 требует runState/visits и запрещает legacy steps")
+		}
+		return nil
+	}
+	if metadata.Version >= 1 && metadata.Version <= 3 && (has("runState") || has("stopReason") || has("visits")) {
+		return fmt.Errorf("legacy metadata не может содержать поля v4")
+	}
+	return nil
+}
+
 // validate отклоняет повреждённую постановку, несовместимую версию, потерянные
 // или дублированные связи и состояния, способные создать повторный чат.
 // Starting без ID оставляем как неопределённый результат создания,
 // а не превращаем в новый Pending.
 func (s Snapshot) validate(runID string) error {
 	m := s.Meta
+	if m.Version == 4 {
+		return s.validateAgentGraph(runID)
+	}
 	oldFormat := m.Version == 1 || m.Version == 2
 	if (m.Version != 1 && m.Version != 2 && m.Version != 3) || m.Version == 1 && m.ParentRunID != "" ||
 		m.RunID != runID || m.ParentRunID == m.RunID || m.ParentRunID != "" && !validID(m.ParentRunID) ||
 		m.ChildRequestID != "" && (m.Version != 3 || m.ParentRunID == "" || !validID(m.ChildRequestID)) ||
 		!filepath.IsAbs(m.CWD) || !validText(m.CWD) || strings.ContainsRune(m.CWD, 0) ||
 		oldFormat && !validText(m.InitiatorThreadID) || m.Version == 3 && m.InitiatorThreadID != "" ||
+		m.RunState != "" || m.StopReason != "" || m.Visits != nil ||
 		len(m.Steps) != len(s.Workflow.Steps) {
 		return fmt.Errorf("повреждены входы, версия или состав meta.json")
 	}
@@ -544,6 +616,19 @@ func (s Snapshot) validate(runID string) error {
 	}
 	_, err := scheduler.Evaluate(s.Workflow, states)
 	return err
+}
+
+// memoryIDs возвращает только проверенные validate непрозрачные имена файлов.
+// В legacy файл принадлежит логическому шагу, а в v4 — отдельному посещению.
+func (s Snapshot) memoryIDs() []string {
+	ids := make([]string, 0, len(s.Meta.Steps)+len(s.Meta.Visits))
+	for _, step := range s.Meta.Steps {
+		ids = append(ids, step.ThreadID)
+	}
+	for _, visit := range s.Meta.Visits {
+		ids = append(ids, visit.VisitID)
+	}
+	return ids
 }
 
 // historicalAppNative ищет только защитные marker-файлы опубликованного v2
