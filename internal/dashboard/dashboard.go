@@ -555,8 +555,8 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 	return eventErr
 }
 
-// regularFileExists проверяет артефакт без чтения его содержимого. Lstat не
-// принимает симлинк за доступный файл: защищённый HTTP-маршрут также его отвергнет.
+// nonEmptyRegularFile проверяет memory без чтения содержимого. Lstat не принимает
+// симлинк за доступный файл: защищённый HTTP-маршрут также его отвергнет.
 func nonEmptyRegularFile(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode().IsRegular() && info.Size() > 0
