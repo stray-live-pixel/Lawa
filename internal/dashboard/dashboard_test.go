@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -84,6 +86,92 @@ func setState(t *testing.T, root string, snapshot runstore.Snapshot, state sched
 	}
 }
 
+// TestDashboardStopHelper остаётся живым дочерним процессом, пока dashboard не
+// пошлёт сигнал его отдельной process group. Запуск через текущий test binary не
+// зависит от наличия системной команды sleep на машине CI.
+func TestDashboardStopHelper(t *testing.T) {
+	if os.Getenv("LAWA_TEST_STOP_HELPER") != "1" {
+		return
+	}
+	time.Sleep(time.Minute)
+}
+
+// TestStopAndDeleteRun проверяет опасный порядок операции: сначала завершается
+// реально существующая process group Codex, затем координатор освобождает lock,
+// и только после этого исчезает каталог run.
+func TestStopAndDeleteRun(t *testing.T) {
+	root := t.TempDir()
+	snapshot := createRun(t, root, "stoppable-workflow", "")
+	run, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestDashboardStopHelper$")
+	command.Env = append(os.Environ(), "LAWA_TEST_STOP_HELPER=1")
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err = command.Start(); err != nil {
+		_ = run.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = run.Close()
+		_ = command.Process.Kill()
+		_, _ = command.Process.Wait()
+	})
+	if err = run.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "process_started", PID: command.Process.Pid}); err != nil {
+		_ = run.Close()
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- stopAndRemoveRun(t.Context(), root, snapshot.Meta.RunID) }()
+	if err = command.Wait(); err == nil {
+		t.Fatal("helper завершился без ожидаемого сигнала")
+	}
+	if err = run.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(root, snapshot.Meta.RunID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("каталог run не удалён: %v", err)
+	}
+}
+
+// TestStopAndDeleteEndpoint фиксирует идемпотентность отсутствующего процесса и
+// same-origin границу destructive маршрута.
+func TestStopAndDeleteEndpoint(t *testing.T) {
+	root := t.TempDir()
+	foreign := createRun(t, root, "protected-workflow", "")
+	request := httptest.NewRequest(http.MethodPost, "http://dashboard/api/runs/"+foreign.Meta.RunID+"/stop-and-delete", nil)
+	request.Header.Set("Origin", "https://other.example")
+	recorder := httptest.NewRecorder()
+	Handler(root).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin удаление получило status %d", recorder.Code)
+	}
+
+	snapshot := createRun(t, root, "missing-process-workflow", "")
+	run, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = run.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "process_started", PID: 2147483647}); err == nil {
+		err = run.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://dashboard/api/runs/"+snapshot.Meta.RunID+"/stop-and-delete", nil)
+	request.Header.Set("Origin", "http://dashboard")
+	recorder = httptest.NewRecorder()
+	Handler(root).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"deleted":true`) {
+		t.Fatalf("отсутствующий процесс помешал удалить run: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestDashboard показывает дерево из сохранённых run, но изолирует повреждённый
 // каталог. Специальные символы в именах экранируются шаблоном, а deeplink строятся
 // только из проверенных snapshot.
@@ -149,6 +237,7 @@ TRACKER_CONTEXT_END`)
 		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "vscode://file/",
 		"0 из 1 завершено", "Работа агента", "Активные", "Все", "Все состояния", "В работе", "Сломавшиеся", "data-inspector", "folder-icon", "cube-icon",
 		`class="tree-ticket"`, ">THINKTWICE-592</span>", "Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
+		"Остановить и удалить", "data-stop-delete", "destructiveActionPending",
 		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID,
 		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
 		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",

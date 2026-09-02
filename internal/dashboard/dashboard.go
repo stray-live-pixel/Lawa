@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -29,6 +30,12 @@ import (
 )
 
 const DefaultAddress = "127.0.0.1:60800"
+
+const (
+	processStopGrace = 2 * time.Second
+	runStopTimeout   = 10 * time.Second
+	runStopPoll      = 50 * time.Millisecond
+)
 
 //go:embed dashboard.html
 var pageHTML string
@@ -63,7 +70,7 @@ type scheduledRun struct {
 type runNode struct {
 	ID, ParentID, Name, State, Tone, Updated           string
 	TicketID, TicketTitle                              string
-	EventsURL, VSCodeURL, UMLURL                       template.URL
+	EventsURL, VSCodeURL, UMLURL, DeleteURL            template.URL
 	TicketURL                                          template.URL
 	HasUML, Open, HasUnfinished, HasWorking, HasFailed bool
 	CompletedSteps, TotalSteps                         int
@@ -93,6 +100,7 @@ func Handler(root string) http.Handler {
 	mux.HandleFunc("GET /memory/{run}/{thread}", h.memory)
 	mux.HandleFunc("GET /events/{run}", h.events)
 	mux.HandleFunc("GET /api/trace/{run}", h.trace)
+	mux.HandleFunc("POST /api/runs/{run}/stop-and-delete", h.stopAndDelete)
 	mux.HandleFunc("GET /uml/{run}", h.uml)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// ServeMux канонизирует пути с `..` редиректом. Для read-only локального
@@ -118,6 +126,108 @@ func (h handler) logo(w http.ResponseWriter, _ *http.Request) {
 // handler хранит единственную область чтения Lawa. Dashboard не обходит
 // внутренние каталоги Codex и не раскрывает сырые rollout-файлы.
 type handler struct{ root string }
+
+// stopAndDelete принимает только same-origin запрос интерфейса. Проверка Origin
+// не заменяет авторизацию для публичного сервера, но не позволяет посторонней
+// веб-странице незаметно отправить destructive POST на loopback dashboard.
+func (h handler) stopAndDelete(w http.ResponseWriter, r *http.Request) {
+	origin, err := url.Parse(r.Header.Get("Origin"))
+	if err != nil || origin.Host != r.Host || origin.Scheme != "http" && origin.Scheme != "https" {
+		http.Error(w, "запрос разрешён только из dashboard", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), runStopTimeout)
+	defer cancel()
+	if err = stopAndRemoveRun(ctx, h.root, r.PathValue("run")); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+		}
+		http.Error(w, diagnostic(err), status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"deleted":true}`))
+}
+
+// stopAndRemoveRun останавливает только process group, PID которой Lawa сама
+// записала как активный App Server. Отрицательный PID адресует созданную Codex
+// отдельную группу и не затрагивает координатор. ESRCH означает, что процесс уже
+// исчез, поэтому повтор и удаление остаются идемпотентными по отношению к stop.
+//
+// Список перечитывается до захвата lock: координатор мог запустить следующий
+// кубик между двумя попытками. Удаление разрешено лишь когда активных групп уже
+// нет и coordinator.lock свободен, то есть новых процессов больше не появится.
+func stopAndRemoveRun(ctx context.Context, root, runID string) error {
+	terminated := make(map[int]time.Time)
+	for {
+		events, err := runstore.ReadEvents(root, runID)
+		if err != nil {
+			return fmt.Errorf("прочитать процессы run %q: %w", runID, err)
+		}
+		now := time.Now()
+		for _, summary := range runstore.SummarizeEvents(events) {
+			if summary.PID <= 1 {
+				continue
+			}
+			if _, known := terminated[summary.PID]; !known {
+				if err = signalProcessGroup(summary.PID, syscall.SIGTERM); err != nil {
+					return err
+				}
+				terminated[summary.PID] = now
+			}
+		}
+		active := false
+		for pid, started := range terminated {
+			exists, checkErr := processGroupExists(pid)
+			if checkErr != nil {
+				return checkErr
+			}
+			if !exists {
+				delete(terminated, pid)
+				continue
+			}
+			active = true
+			if now.Sub(started) >= processStopGrace {
+				if err = signalProcessGroup(pid, syscall.SIGKILL); err != nil {
+					return err
+				}
+			}
+		}
+		if !active {
+			if err = runstore.Remove(root, runID); err == nil {
+				return nil
+			} else if !errors.Is(err, runstore.ErrRunLocked) {
+				return fmt.Errorf("удалить run %q: %w", runID, err)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("остановить и удалить run %q: %w", runID, ctx.Err())
+		case <-time.After(runStopPoll):
+		}
+	}
+}
+
+func signalProcessGroup(pid int, signal syscall.Signal) error {
+	if err := syscall.Kill(-pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("послать %s process group %d: %w", signal, pid, err)
+	}
+	return nil
+}
+
+func processGroupExists(pid int) (bool, error) {
+	err := syscall.Kill(-pid, 0)
+	if err == nil || errors.Is(err, syscall.EPERM) {
+		return true, nil
+	}
+	if errors.Is(err, syscall.ESRCH) {
+		return false, nil
+	}
+	return false, fmt.Errorf("проверить process group %d: %w", pid, err)
+}
 
 // live перечитывает хранилище на каждый polling-запрос.
 func (h handler) live(w http.ResponseWriter, r *http.Request) {
@@ -441,6 +551,7 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		ID: runID, ParentID: snapshot.Meta.ParentRunID, Name: snapshot.Workflow.ID,
 		State: workflowState(snapshot), TicketID: ticket.ID, TicketTitle: ticket.Title, TicketURL: ticket.URL,
 		EventsURL: template.URL("/events/" + runID), VSCodeURL: vscodeFileURL(filepath.Join(root, runID)),
+		DeleteURL:  template.URL("/api/runs/" + runID + "/stop-and-delete"),
 		TotalSteps: len(snapshot.Meta.Steps),
 	}
 	node.Tone = tone(node.State)
@@ -750,7 +861,7 @@ func previewPage(params viewParams, now time.Time) page {
 		}
 		node := &runNode{
 			ID: id, Name: name, State: state, Tone: tone(state), Updated: "2026-08-31 18:42:10",
-			EventsURL: action, VSCodeURL: action, UMLURL: action, HasUML: true, Steps: steps, TotalSteps: len(steps),
+			EventsURL: action, VSCodeURL: action, UMLURL: action, DeleteURL: action, HasUML: true, Steps: steps, TotalSteps: len(steps),
 			createdAt: now.Add(-age), updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
 		}
 		for _, item := range node.Steps {
