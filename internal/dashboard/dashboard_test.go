@@ -9,9 +9,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -84,6 +86,131 @@ func setState(t *testing.T, root string, snapshot runstore.Snapshot, state sched
 	}
 }
 
+// TestDashboardStopHelper остаётся живым дочерним процессом, пока dashboard не
+// пошлёт сигнал его отдельной process group. Запуск через текущий test binary не
+// зависит от наличия системной команды sleep на машине CI.
+func TestDashboardStopHelper(t *testing.T) {
+	if os.Getenv("LAWA_TEST_STOP_HELPER") != "1" {
+		return
+	}
+	time.Sleep(time.Minute)
+}
+
+// TestStopAndDeleteRun проверяет остановку живого run: занятый lock подтверждает
+// координатор, затем завершается его process group, а после освобождения lock
+// исчезает каталог run.
+func TestStopAndDeleteRun(t *testing.T) {
+	root := t.TempDir()
+	snapshot := createRun(t, root, "stoppable-workflow", "")
+	run, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestDashboardStopHelper$")
+	command.Env = append(os.Environ(), "LAWA_TEST_STOP_HELPER=1")
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err = command.Start(); err != nil {
+		_ = run.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = run.Close()
+		_ = command.Process.Kill()
+		_, _ = command.Process.Wait()
+	})
+	if err = run.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "process_started", PID: command.Process.Pid}); err != nil {
+		_ = run.Close()
+		t.Fatal(err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- stopAndRemoveRun(t.Context(), root, snapshot.Meta.RunID) }()
+	if err = command.Wait(); err == nil {
+		t.Fatal("helper завершился без ожидаемого сигнала")
+	}
+	if err = run.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(root, snapshot.Meta.RunID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("каталог run не удалён: %v", err)
+	}
+}
+
+// TestStopAndDeleteDoesNotSignalStalePID защищает от повторного использования PID.
+// Если координатор уже освободил lock, сохранённый process_started мог пережить
+// исходный процесс и больше не доказывает, что группа принадлежит этому run.
+func TestStopAndDeleteDoesNotSignalStalePID(t *testing.T) {
+	root := t.TempDir()
+	snapshot := createRun(t, root, "stale-process-workflow", "")
+	run, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestDashboardStopHelper$")
+	command.Env = append(os.Environ(), "LAWA_TEST_STOP_HELPER=1")
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err = command.Start(); err != nil {
+		_ = run.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		_, _ = command.Process.Wait()
+	})
+	if err = run.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "process_started", PID: command.Process.Pid}); err == nil {
+		err = run.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = stopAndRemoveRun(t.Context(), root, snapshot.Meta.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if exists, checkErr := processGroupExists(command.Process.Pid); checkErr != nil || !exists {
+		t.Fatalf("посторонняя process group получила сигнал: exists=%t err=%v", exists, checkErr)
+	}
+	if _, err = os.Stat(filepath.Join(root, snapshot.Meta.RunID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("каталог run не удалён: %v", err)
+	}
+}
+
+// TestStopAndDeleteEndpoint фиксирует идемпотентность отсутствующего процесса и
+// same-origin границу destructive маршрута.
+func TestStopAndDeleteEndpoint(t *testing.T) {
+	root := t.TempDir()
+	foreign := createRun(t, root, "protected-workflow", "")
+	request := httptest.NewRequest(http.MethodPost, "http://dashboard/api/runs/"+foreign.Meta.RunID+"/stop-and-delete", nil)
+	request.Header.Set("Origin", "https://other.example")
+	recorder := httptest.NewRecorder()
+	Handler(root).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("cross-origin удаление получило status %d", recorder.Code)
+	}
+
+	snapshot := createRun(t, root, "missing-process-workflow", "")
+	run, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = run.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "process_started", PID: 2147483647}); err == nil {
+		err = run.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	request = httptest.NewRequest(http.MethodPost, "http://dashboard/api/runs/"+snapshot.Meta.RunID+"/stop-and-delete", nil)
+	request.Header.Set("Origin", "http://dashboard")
+	recorder = httptest.NewRecorder()
+	Handler(root).ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"deleted":true`) {
+		t.Fatalf("отсутствующий процесс помешал удалить run: status=%d body=%q", recorder.Code, recorder.Body.String())
+	}
+}
+
 // TestDashboard показывает дерево из сохранённых run, но изолирует повреждённый
 // каталог. Специальные символы в именах экранируются шаблоном, а deeplink строятся
 // только из проверенных snapshot.
@@ -148,13 +275,15 @@ TRACKER_CONTEXT_END`)
 	for _, fragment := range []string{
 		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "vscode://file/",
 		"0 из 1 завершено", "Работа агента", "Активные", "Все", "Все состояния", "В работе", "Сломавшиеся", "data-inspector", "folder-icon", "cube-icon",
-		"Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
-		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID, "mcpToolCall",
+		`class="tree-ticket"`, ">THINKTWICE-592</span>", "Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
+		"Остановить и удалить", "data-stop-delete", "destructiveActionPending",
+		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID,
 		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
 		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",
-		"Поиск по workflow, кубикам и тикетам…", "data-auto-submit", "data-search-input", "top-controls", "tree-scroll", "pin-button", "data-root-target",
+		"Поиск по workflow, кубикам и тикетам…", "data-auto-submit", "data-search-input", "top-controls", "tree-scroll", "pin-button", "data-root-target", "data-folder-toggle",
 		"html,body{height:100%;overflow:hidden}", "flex:1;min-height:0",
-		"selectionInside", "editableFocusInside", "schedulePanelOpen", "freshMarkup===dashboardMarkup", "traceRenderPending",
+		"selectionInside", "editableFocusInside", "schedulePanelOpen", "freshMarkup===dashboardMarkup", "traceRenderPending", "node.open=!node.open",
+		"setTimeout(()=>input.form?.requestSubmit(),1000)", "setInterval(fetchTrace,10000)",
 		"/assets/lawa-logo.png", "Расписание запусков", "data-schedule-open", "next-run-time", "scheduled-workflow", "Запуск: " + plannedAt.Local().Format("02.01.2006 15:04:05"), "cron 0 10 * * * · Europe/Moscow",
 		"/uml/" + parent.Meta.RunID, "/memory/" + child.Meta.RunID + "/" + child.Meta.Steps[0].ThreadID,
 	} {
@@ -170,6 +299,10 @@ TRACKER_CONTEXT_END`)
 	}
 	if strings.Contains(html, `class="tree-state"`) {
 		t.Fatal("дерево снова печатает текстовый статус справа от кубика")
+	}
+	if !strings.Contains(html, `class="uml-preview"`) || !strings.Contains(html, `target="_blank"`) ||
+		!strings.Contains(html, `<img src="/uml/`+parent.Meta.RunID+`?v=`) || strings.Contains(html, `>UML</`) {
+		t.Fatal("UML не показан ссылкой-превью или отдельная кнопка UML вернулась")
 	}
 	allRecorder := httptest.NewRecorder()
 	dashboard.ServeHTTP(allRecorder, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
@@ -209,7 +342,7 @@ TRACKER_CONTEXT_END`)
 	}
 	recorder = httptest.NewRecorder()
 	dashboard.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/uml/"+parent.Meta.RunID, nil))
-	if recorder.Header().Get("Content-Type") != "image/png" || recorder.Body.String() != string(png) {
+	if recorder.Header().Get("Content-Type") != "image/png" || recorder.Header().Get("Cache-Control") != "no-store" || recorder.Body.String() != string(png) {
 		t.Fatalf("неверный UML: %s, %q", recorder.Header().Get("Content-Type"), recorder.Body.String())
 	}
 	recorder = httptest.NewRecorder()
@@ -314,9 +447,10 @@ func TestProtectedRoutes(t *testing.T) {
 	}
 }
 
-// TestCorruptedEventsRemainVisible сохраняет сам run в дереве, но показывает
-// оператору отдельную проблему журнала вместо молчаливой потери observability.
-func TestCorruptedEventsRemainVisible(t *testing.T) {
+// TestDashboardReadsEventsOnlyForSearch защищает границу между лёгким polling и
+// полнотекстовым поиском. Обычная страница строится без журнала даже для видимого
+// run; поисковый запрос читает журнал и показывает его повреждение оператору.
+func TestDashboardReadsEventsOnlyForSearch(t *testing.T) {
 	root := t.TempDir()
 	run := createRun(t, root, "visible-with-broken-events", "")
 	if err := os.WriteFile(filepath.Join(root, run.Meta.RunID, "events.jsonl"), []byte("not json\n"), 0o600); err != nil {
@@ -325,15 +459,20 @@ func TestCorruptedEventsRemainVisible(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	Handler(root).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/?period=all", nil))
 	body := recorder.Body.String()
-	if !strings.Contains(body, "visible-with-broken-events") || !strings.Contains(body, "журнал событий") {
-		t.Fatalf("повреждение журнала скрыто вместе с run: %q", body)
+	if !strings.Contains(body, "visible-with-broken-events") || strings.Contains(body, `class="problem"`) {
+		t.Fatalf("обычный polling прочитал журнал видимого run: %q", body)
+	}
+	search := httptest.NewRecorder()
+	Handler(root).ServeHTTP(search, httptest.NewRequest(http.MethodGet, "/?period=all&q=visible", nil))
+	if !strings.Contains(search.Body.String(), `class="problem"`) {
+		t.Fatal("полнотекстовый поиск не сообщил о повреждённом журнале")
 	}
 }
 
 // TestDashboardSkipsHiddenEventLogs защищает основной сценарий оптимизации:
 // polling активного представления не должен разбирать журнал завершённого run,
-// который отфильтрован и не попадёт в HTML. При явном переходе ко всем запускам
-// тот же журнал загружается и его повреждение становится видимой диагностикой.
+// который отфильтрован и не попадёт в HTML. Переход ко всем запускам тоже остаётся
+// лёгким: сам выбор временного окна не означает полнотекстовый поиск.
 func TestDashboardSkipsHiddenEventLogs(t *testing.T) {
 	root := t.TempDir()
 	run := createRun(t, root, "hidden-completed", "")
@@ -351,8 +490,8 @@ func TestDashboardSkipsHiddenEventLogs(t *testing.T) {
 
 	all := httptest.NewRecorder()
 	dashboard.ServeHTTP(all, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
-	if !strings.Contains(all.Body.String(), "журнал событий") {
-		t.Fatal("dashboard не прочитал журнал после показа завершённого run")
+	if strings.Contains(all.Body.String(), `class="problem"`) {
+		t.Fatal("dashboard прочитал журнал после показа завершённого run")
 	}
 }
 
@@ -415,15 +554,16 @@ func TestPreview(t *testing.T) {
 	}
 }
 
-// TestSortNodesNewestFirst фиксирует единый временной порядок без статусных
-// секций: успешный новый workflow не должен оказаться ниже старого активного.
-func TestSortNodesNewestFirst(t *testing.T) {
-	old := &runNode{ID: "old-running", activityAt: time.Now().Add(-time.Hour)}
-	recent := &runNode{ID: "recent-succeeded", activityAt: time.Now()}
+// TestSortNodesByCreationTime фиксирует стабильный порядок папок: активность
+// старого workflow не должна поднимать его выше созданного позднее run.
+func TestSortNodesByCreationTime(t *testing.T) {
+	now := time.Now()
+	old := &runNode{ID: "old-running", createdAt: now.Add(-time.Hour), activityAt: now}
+	recent := &runNode{ID: "recent-succeeded", createdAt: now, activityAt: now.Add(-time.Hour)}
 	roots := []*runNode{old, recent}
 	sortNodes(roots)
 	if roots[0] != recent || roots[1] != old {
-		t.Fatalf("workflow отсортированы не по времени: %+v", roots)
+		t.Fatalf("workflow отсортированы не по времени создания: %+v", roots)
 	}
 }
 

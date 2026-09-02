@@ -393,6 +393,27 @@ func RemoveUnstarted(root, runID string) error {
 	return syncDir(root)
 }
 
+// Remove удаляет существующий run только после захвата coordinator.lock. Поэтому
+// dashboard не может стереть каталог, пока координатор ещё пишет meta, events или
+// memory. Сам каталог удаляется до освобождения lock: новый координатор либо
+// увидит занятую старую inode, либо уже не найдёт run после удаления его имени.
+func Remove(root, runID string) (err error) {
+	run, err := OpenLocked(root, runID)
+	if err != nil {
+		return err
+	}
+	defer func() { err = errors.Join(err, run.Close()) }()
+	root, err = filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+	dir := filepath.Join(root, runID)
+	if err = os.RemoveAll(dir); err != nil {
+		return fmt.Errorf("удалить run %q из %q: %w", runID, dir, err)
+	}
+	return syncDir(root)
+}
+
 // openRun ограничивает все операции каталогом выбранного run, в том числе после
 // его открытия координатором. Доверенный root нельзя подменять во время работы.
 func openRun(root, runID string) (*os.Root, error) {

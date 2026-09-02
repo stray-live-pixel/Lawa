@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -29,6 +30,12 @@ import (
 )
 
 const DefaultAddress = "127.0.0.1:60800"
+
+const (
+	processStopGrace = 2 * time.Second
+	runStopTimeout   = 10 * time.Second
+	runStopPoll      = 50 * time.Millisecond
+)
 
 //go:embed dashboard.html
 var pageHTML string
@@ -63,13 +70,13 @@ type scheduledRun struct {
 type runNode struct {
 	ID, ParentID, Name, State, Tone, Updated           string
 	TicketID, TicketTitle                              string
-	EventsURL, VSCodeURL, UMLURL                       template.URL
+	EventsURL, VSCodeURL, UMLURL, DeleteURL            template.URL
 	TicketURL                                          template.URL
 	HasUML, Open, HasUnfinished, HasWorking, HasFailed bool
 	CompletedSteps, TotalSteps                         int
 	Steps, ActiveSteps                                 []stepNode
 	Children                                           []*runNode
-	updatedAt, activityAt                              time.Time
+	createdAt, updatedAt, activityAt                   time.Time
 	baseSearch, searchText, treeState                  string
 }
 
@@ -78,7 +85,6 @@ type stepNode struct {
 	ID, State, Tone, Runtime, Message, Action, Updated string
 	EventsURL, MemoryURL, TraceURL                     template.URL
 	HasMemory, Active                                  bool
-	updatedAt                                          time.Time
 	threadID, turnID                                   string
 }
 
@@ -94,6 +100,7 @@ func Handler(root string) http.Handler {
 	mux.HandleFunc("GET /memory/{run}/{thread}", h.memory)
 	mux.HandleFunc("GET /events/{run}", h.events)
 	mux.HandleFunc("GET /api/trace/{run}", h.trace)
+	mux.HandleFunc("POST /api/runs/{run}/stop-and-delete", h.stopAndDelete)
 	mux.HandleFunc("GET /uml/{run}", h.uml)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// ServeMux канонизирует пути с `..` редиректом. Для read-only локального
@@ -120,6 +127,107 @@ func (h handler) logo(w http.ResponseWriter, _ *http.Request) {
 // внутренние каталоги Codex и не раскрывает сырые rollout-файлы.
 type handler struct{ root string }
 
+// stopAndDelete принимает только same-origin запрос интерфейса. Проверка Origin
+// не заменяет авторизацию для публичного сервера, но не позволяет посторонней
+// веб-странице незаметно отправить destructive POST на loopback dashboard.
+func (h handler) stopAndDelete(w http.ResponseWriter, r *http.Request) {
+	origin, err := url.Parse(r.Header.Get("Origin"))
+	if err != nil || origin.Host != r.Host || origin.Scheme != "http" && origin.Scheme != "https" {
+		http.Error(w, "запрос разрешён только из dashboard", http.StatusForbidden)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), runStopTimeout)
+	defer cancel()
+	if err = stopAndRemoveRun(ctx, h.root, r.PathValue("run")); err != nil {
+		status := http.StatusConflict
+		if errors.Is(err, os.ErrNotExist) {
+			status = http.StatusNotFound
+		} else if errors.Is(err, context.DeadlineExceeded) {
+			status = http.StatusGatewayTimeout
+		}
+		http.Error(w, diagnostic(err), status)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(`{"deleted":true}`))
+}
+
+// stopAndRemoveRun останавливает только process group, PID которой Lawa сама
+// записала как активный App Server. Отрицательный PID адресует созданную Codex
+// отдельную группу и не затрагивает координатор. ESRCH означает, что процесс уже
+// исчез, поэтому повтор и удаление остаются идемпотентными по отношению к stop.
+//
+// Каждая итерация сначала пытается захватить lock и удалить run. Если координатор
+// уже исчез, это не даёт устаревшему PID из журнала остановить постороннюю группу,
+// которой ОС успела повторно выдать тот же номер. Только занятый lock подтверждает,
+// что живой координатор ещё владеет run и записанный процесс можно останавливать.
+// После сигнала список перечитывается: координатор мог запустить следующий кубик
+// между попытками, а удаление допустимо только после освобождения lock.
+func stopAndRemoveRun(ctx context.Context, root, runID string) error {
+	terminated := make(map[int]time.Time)
+	for {
+		if err := runstore.Remove(root, runID); err == nil {
+			return nil
+		} else if !errors.Is(err, runstore.ErrRunLocked) {
+			return fmt.Errorf("удалить run %q: %w", runID, err)
+		}
+		events, err := runstore.ReadEvents(root, runID)
+		if err != nil {
+			return fmt.Errorf("прочитать процессы run %q: %w", runID, err)
+		}
+		now := time.Now()
+		for _, summary := range runstore.SummarizeEvents(events) {
+			if summary.PID <= 1 {
+				continue
+			}
+			if _, known := terminated[summary.PID]; !known {
+				if err = signalProcessGroup(summary.PID, syscall.SIGTERM); err != nil {
+					return err
+				}
+				terminated[summary.PID] = now
+			}
+		}
+		for pid, started := range terminated {
+			exists, checkErr := processGroupExists(pid)
+			if checkErr != nil {
+				return checkErr
+			}
+			if !exists {
+				delete(terminated, pid)
+				continue
+			}
+			if now.Sub(started) >= processStopGrace {
+				if err = signalProcessGroup(pid, syscall.SIGKILL); err != nil {
+					return err
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("остановить и удалить run %q: %w", runID, ctx.Err())
+		case <-time.After(runStopPoll):
+		}
+	}
+}
+
+func signalProcessGroup(pid int, signal syscall.Signal) error {
+	if err := syscall.Kill(-pid, signal); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("послать %s process group %d: %w", signal, pid, err)
+	}
+	return nil
+}
+
+func processGroupExists(pid int) (bool, error) {
+	err := syscall.Kill(-pid, 0)
+	if err == nil || errors.Is(err, syscall.EPERM) {
+		return true, nil
+	}
+	if errors.Is(err, syscall.ESRCH) {
+		return false, nil
+	}
+	return false, fmt.Errorf("проверить process group %d: %w", pid, err)
+}
+
 // live перечитывает хранилище на каждый polling-запрос.
 func (h handler) live(w http.ResponseWriter, r *http.Request) {
 	view := page{Title: "Lawa", Refresh: "3"}
@@ -138,9 +246,6 @@ func (h handler) live(w http.ResponseWriter, r *http.Request) {
 	}
 	scheduled, seriesProblems := loadScheduledRuns(h.root, now)
 	visible, filter, pagination := applyDashboardView(roots, params, now)
-	if params.Query == "" {
-		problems = append(problems, hydrateRunNodes(h.root, visible, false)...)
-	}
 	view.Roots, view.Scheduled, view.Problems = visible, scheduled, append(problems, seriesProblems...)
 	view.Filter, view.Pagination = filter, pagination
 	if len(roots) == 0 {
@@ -380,6 +485,7 @@ func (h handler) uml(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(data)
 }
 
@@ -444,6 +550,7 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		ID: runID, ParentID: snapshot.Meta.ParentRunID, Name: snapshot.Workflow.ID,
 		State: workflowState(snapshot), TicketID: ticket.ID, TicketTitle: ticket.Title, TicketURL: ticket.URL,
 		EventsURL: template.URL("/events/" + runID), VSCodeURL: vscodeFileURL(filepath.Join(root, runID)),
+		DeleteURL:  template.URL("/api/runs/" + runID + "/stop-and-delete"),
 		TotalSteps: len(snapshot.Meta.Steps),
 	}
 	node.Tone = tone(node.State)
@@ -467,6 +574,12 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 			search = append(search, string(*definition.Speed))
 		}
 	}
+	// workflow.json создаётся один раз вместе с run и затем не перезаписывается.
+	// Его ModTime даёт стабильный ключ порядка без чтения events.jsonl и без
+	// миграции старых meta.json, в которых отдельной даты создания ещё нет.
+	if info, err := os.Stat(filepath.Join(root, runID, "workflow.json")); err == nil {
+		node.createdAt = info.ModTime()
+	}
 	if info, err := os.Stat(filepath.Join(root, runID, "meta.json")); err == nil {
 		node.updatedAt = info.ModTime()
 		node.Updated = node.updatedAt.Format("2006-01-02 15:04:05")
@@ -477,21 +590,29 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		node.updatedAt = info.ModTime()
 		node.Updated = node.updatedAt.Local().Format("2006-01-02 15:04:05")
 	}
+	// Наличие артефактов определяется по метаданным файлов: обычный polling
+	// сохраняет рабочие ссылки, но не читает содержимое UML и memory.
+	if info, err := os.Lstat(filepath.Join(root, runID, runstore.StatusImageFilename)); err == nil && info.Mode().IsRegular() {
+		// Версия из ModTime меняет HTML при обновлении PNG. Polling заменяет
+		// карточку и браузер запрашивает новое изображение, не показывая старый кэш.
+		node.HasUML = true
+		node.UMLURL = template.URL("/uml/" + runID + "?v=" + strconv.FormatInt(info.ModTime().UnixNano(), 10))
+	}
 	for _, step := range snapshot.Meta.Steps {
 		active := activeStepState(step.State)
 		if step.State == scheduler.Succeeded {
 			node.CompletedSteps++
 		}
 		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State))
+		memoryPath := filepath.Join(root, runID, "memory", step.ThreadID+".md")
 		node.Steps = append(node.Steps, stepNode{
 			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
 			EventsURL: template.URL("/events/" + runID + "?step=" + url.QueryEscape(step.ID)),
-			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID),
-			TraceURL:  template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
-			Active:    active, threadID: step.ThreadID, turnID: step.TurnID,
+			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID), HasMemory: nonEmptyRegularFile(memoryPath),
+			TraceURL: template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
+			Active:   active, threadID: step.ThreadID, turnID: step.TurnID,
 		})
 	}
-	sortSteps(node.Steps)
 	for _, step := range node.Steps {
 		if step.Active {
 			node.ActiveSteps = append(node.ActiveSteps, step)
@@ -501,8 +622,9 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 	return node
 }
 
-// hydrateRunNodes загружает подробности только выбранных деревьев. Ошибка одного
-// журнала не мешает остальным карточкам и возвращается отдельной диагностикой.
+// hydrateRunNodes загружает подробности всех деревьев только для явного
+// полнотекстового поиска. Ошибка одного журнала не мешает остальным карточкам и
+// возвращается отдельной диагностикой.
 func hydrateRunNodes(root string, nodes []*runNode, fullTextSearch bool) []problem {
 	var problems []problem
 	for _, node := range nodes {
@@ -521,15 +643,10 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 		node.updatedAt = events[len(events)-1].Time
 		node.Updated = node.updatedAt.Local().Format("2006-01-02 15:04:05")
 	}
-	if regularFileExists(filepath.Join(root, node.ID, runstore.StatusImageFilename)) {
-		node.HasUML, node.UMLURL = true, template.URL("/uml/"+node.ID)
-	}
 	for index := range node.Steps {
 		step := &node.Steps[index]
 		summary := summaries[step.ID]
-		memoryPath := filepath.Join(root, node.ID, "memory", step.threadID+".md")
-		step.HasMemory = nonEmptyRegularFile(memoryPath)
-		step.Message, step.Action, step.updatedAt = summary.Message, strings.Join(summary.ActiveItemTypes, ", "), summary.LastActivity
+		step.Message, step.Action = summary.Message, strings.Join(summary.ActiveItemTypes, ", ")
 		step.Updated = ""
 		if !summary.LastActivity.IsZero() {
 			step.Updated = summary.LastActivity.Local().Format("15:04:05")
@@ -542,7 +659,6 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 			}
 		}
 	}
-	sortSteps(node.Steps)
 	node.ActiveSteps = node.ActiveSteps[:0]
 	for _, step := range node.Steps {
 		if step.Active {
@@ -552,13 +668,8 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 	return eventErr
 }
 
-// regularFileExists проверяет артефакт без чтения его содержимого. Lstat не
-// принимает симлинк за доступный файл: защищённый HTTP-маршрут также его отвергнет.
-func regularFileExists(path string) bool {
-	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular()
-}
-
+// nonEmptyRegularFile проверяет memory без чтения содержимого. Lstat не принимает
+// симлинк за доступный файл: защищённый HTTP-маршрут также его отвергнет.
 func nonEmptyRegularFile(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode().IsRegular() && info.Size() > 0
@@ -592,21 +703,6 @@ func formatStepRuntime(summary runstore.EventSummary, turnID string) string {
 
 func activeStepState(state scheduler.State) bool {
 	return state == scheduler.Starting || state == scheduler.Running || state == scheduler.WaitingForApproval
-}
-
-// sortSteps ставит сверху шаг с самой свежей активностью. Если два события
-// получили одну временную метку, выполняющийся шаг важнее завершённого: оператор
-// сразу видит текущую работу, а окончательным стабильным ключом остаётся ID.
-func sortSteps(steps []stepNode) {
-	sort.SliceStable(steps, func(left, right int) bool {
-		if !steps[left].updatedAt.Equal(steps[right].updatedAt) {
-			return steps[left].updatedAt.After(steps[right].updatedAt)
-		}
-		if steps[left].Active != steps[right].Active {
-			return steps[left].Active
-		}
-		return steps[left].ID < steps[right].ID
-	})
 }
 
 // workflowState сворачивает состояния кубиков в три цветных итога и нейтральное
@@ -650,15 +746,15 @@ func parentCycle(start *runNode, nodes map[string]*runNode) bool {
 	return false
 }
 
-// sortNodes ставит самый недавно изменённый workflow сверху. activityAt уже
-// включает потомков, поэтому новое дочернее действие поднимает всё связанное
-// дерево. Равное или неизвестное время стабилизируется по ID между polling.
+// sortNodes ставит новые workflow сверху по времени создания неизменяемого
+// workflow.json. Последующая активность не меняет порядок папок при polling.
+// Равное или неизвестное время стабилизируется по ID.
 func sortNodes(nodes []*runNode) {
 	sort.Slice(nodes, func(i, j int) bool {
-		if nodes[i].activityAt.Equal(nodes[j].activityAt) {
+		if nodes[i].createdAt.Equal(nodes[j].createdAt) {
 			return nodes[i].ID < nodes[j].ID
 		}
-		return nodes[i].activityAt.After(nodes[j].activityAt)
+		return nodes[i].createdAt.After(nodes[j].createdAt)
 	})
 	for _, node := range nodes {
 		sortNodes(node.Children)
@@ -764,12 +860,9 @@ func previewPage(params viewParams, now time.Time) page {
 		}
 		node := &runNode{
 			ID: id, Name: name, State: state, Tone: tone(state), Updated: "2026-08-31 18:42:10",
-			EventsURL: action, VSCodeURL: action, UMLURL: action, HasUML: true, Steps: steps, TotalSteps: len(steps),
-			updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
+			EventsURL: action, VSCodeURL: action, UMLURL: action, DeleteURL: action, HasUML: true, Steps: steps, TotalSteps: len(steps),
+			createdAt: now.Add(-age), updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
 		}
-		// Preview проходит тот же порядок, что и live-данные. Иначе макет мог бы
-		// скрыть регрессию, при которой текущая работа уступила завершённой строке.
-		sortSteps(node.Steps)
 		for _, item := range node.Steps {
 			if item.State == string(scheduler.Succeeded) {
 				node.CompletedSteps++
