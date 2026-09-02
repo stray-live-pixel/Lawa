@@ -122,6 +122,9 @@ var skillInstruction string
 // отменяет наблюдение и новые волны; координатор адресно прерывает активные turn.
 // Точный код нужен вызывающему агенту чата-инициатора.
 func main() {
+	if codex.RunDirectoryHelper() {
+		return
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	signals := make(chan os.Signal, 1)
 	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
@@ -202,7 +205,7 @@ func exitCode(err error, received int32) int {
 // app-server, тесты — клиент без модели и изолированное временное хранилище.
 type dependencies struct {
 	check            func(context.Context, codex.Connection) error
-	client           func(string, io.Writer) coordinator.Client
+	client           func(string, io.Writer, *codex.Directory) coordinator.Client
 	pollInterval     time.Duration
 	logsPollInterval time.Duration
 	refreshInterval  time.Duration
@@ -218,8 +221,8 @@ type dependencies struct {
 func productionDependencies() dependencies {
 	return dependencies{
 		check: codex.Check,
-		client: func(executable string, stderr io.Writer) coordinator.Client {
-			return coordinator.ProductionClient{Executable: executable, Stderr: stderr}
+		client: func(executable string, stderr io.Writer, directory *codex.Directory) coordinator.Client {
+			return coordinator.ProductionClient{Executable: executable, Stderr: stderr, Directory: directory}
 		},
 		// Одна read-only app-server-сессия обслуживает все сверки текущего запуска.
 		// Пять секунд сохраняют отзывчивость ручного продолжения и не создают
@@ -563,15 +566,24 @@ func coordinate(ctx context.Context, root, runID, executable string, pool *capac
 // вывода и закрытия хранилища. Терминальный Outcome остаётся действительным, если
 // ошибка управления произошла уже после надёжного сохранения состояния run.
 func coordinateWithOutcome(ctx context.Context, root, runID, executable string, pool *capacity.Pool, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool) (outcome coordinator.Outcome, err error) {
+	snapshot, err := runstore.Load(root, runID)
+	if err != nil {
+		return coordinator.Outcome{}, fmt.Errorf("прочитать cwd запуска %q: %w", runID, err)
+	}
+	directory, err := codex.OpenDirectory(snapshot.Meta.CWD)
+	if err != nil {
+		return coordinator.Outcome{}, fmt.Errorf("открыть cwd запуска %q: %w", runID, err)
+	}
+	defer func() { err = errors.Join(err, directory.Close()) }()
 	manager := newChildRunManager(ctx, root, executable, pool, stderr, deps)
-	outcome, err = coordinateRunWithOutcome(ctx, root, runID, executable, pool, out, stderr, deps, resume, returnOnFailure, manager)
+	outcome, err = coordinateRunWithOutcome(ctx, root, runID, executable, pool, out, stderr, deps, resume, returnOnFailure, manager, directory)
 	return outcome, errors.Join(err, manager.wait())
 }
 
 // coordinateRunWithOutcome выполняет ровно один сохранённый run. Верхний вызов
 // владеет manager и ждёт всё дерево, а дочерние вызовы переиспользуют его без
 // рекурсивного ожидания самих себя.
-func coordinateRunWithOutcome(ctx context.Context, root, runID, executable string, pool *capacity.Pool, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool, manager *childRunManager) (outcome coordinator.Outcome, err error) {
+func coordinateRunWithOutcome(ctx context.Context, root, runID, executable string, pool *capacity.Pool, out, stderr io.Writer, deps dependencies, resume, returnOnFailure bool, manager *childRunManager, directory *codex.Directory) (outcome coordinator.Outcome, err error) {
 	run, err := runstore.OpenLocked(root, runID)
 	if err != nil {
 		return coordinator.Outcome{}, fmt.Errorf("открыть запуск %q: %w", runID, err)
@@ -582,7 +594,11 @@ func coordinateRunWithOutcome(ctx context.Context, root, runID, executable strin
 		return coordinator.Outcome{}, fmt.Errorf("прочитать запуск %q: %w", runID, err)
 	}
 	if resume {
-		if err = deps.check(ctx, codex.Connection{Executable: executable, CWD: snapshot.Meta.CWD, Stderr: stderr}); err != nil {
+		connectionCWD := snapshot.Meta.CWD
+		if directory != nil {
+			connectionCWD = directory.Path()
+		}
+		if err = deps.check(ctx, codex.Connection{Executable: executable, CWD: connectionCWD, Stderr: stderr, Directory: directory}); err != nil {
 			return coordinator.Outcome{}, fmt.Errorf("проверить подключение Codex: %w", err)
 		}
 	}
@@ -592,7 +608,7 @@ func coordinateRunWithOutcome(ctx context.Context, root, runID, executable strin
 	publisher := newStatusPublisher(ctx, out, filepath.Join(root, runID), deps.renderer, deps.chatInterval, deps.now)
 	return coordinator.ExecuteWithOutcome(ctx, run, coordinator.Options{
 		Root: root, PollInterval: deps.pollInterval, RefreshInterval: deps.refreshInterval,
-		Client: deps.client(executable, stderr), ContinueInterrupted: resume,
+		Client: deps.client(executable, stderr, directory), ContinueInterrupted: resume,
 		ReturnOnFailure:  returnOnFailure,
 		Notify:           publisher.Publish,
 		Capacity:         pool,

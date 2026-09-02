@@ -30,7 +30,7 @@ var childInputSchema = json.RawMessage(`{
   "additionalProperties":false,
   "properties":{
     "workflow":{"type":"string"},
-    "cwd":{"type":"string"},
+    "cwd":{"type":"string","description":"Существующий разрешённый абсолютный рабочий каталог дочернего workflow."},
     "task":{"type":"string"},
     "taskFile":{"type":"string"},
     "parentRun":{"type":"string"}
@@ -41,11 +41,11 @@ var childInputSchema = json.RawMessage(`{
 
 var nativeChildTools = []codex.DynamicTool{
 	{
-		Name: "run_child", Description: "Надёжно зарегистрировать и запустить один дочерний workflow Lawa; возвращает runId.",
+		Name: "run_child", Description: "Надёжно зарегистрировать и запустить один дочерний workflow Lawa в указанном разрешённом абсолютном cwd; возвращает runId.",
 		InputSchema: childInputSchema,
 	},
 	{
-		Name: "run_children", Description: "Надёжно зарегистрировать и параллельно запустить несколько дочерних workflow Lawa; возвращает runIds.",
+		Name: "run_children", Description: "Надёжно зарегистрировать и параллельно запустить дочерние workflow Lawa с независимыми разрешёнными абсолютными cwd; возвращает runIds.",
 		InputSchema: json.RawMessage(`{
   "type":"object",
   "additionalProperties":false,
@@ -64,7 +64,8 @@ type childRequest struct {
 }
 
 type resolvedChild struct {
-	input runstore.Input
+	input     runstore.Input
+	directory *codex.Directory
 }
 
 type childCall struct {
@@ -119,15 +120,15 @@ func (m *childRunManager) handle(ctx context.Context, parent runstore.Snapshot, 
 	}
 	resolved := make([]resolvedChild, 0, len(requests))
 	for index, request := range requests {
-		child, resolveErr := m.resolve(parent, request)
+		child, resolveErr := m.resolve(ctx, parent, request)
 		if resolveErr != nil {
-			return "", fmt.Errorf("дочерний запуск %d: %w", index+1, resolveErr)
+			return "", errors.Join(fmt.Errorf("дочерний запуск %d: %w", index+1, resolveErr), closeResolvedChildren(resolved))
 		}
 		resolved = append(resolved, child)
 	}
 	key, err := prepareChildCall(parent.Meta.RunID, call, requests, resolved)
 	if err != nil {
-		return "", err
+		return "", errors.Join(err, closeResolvedChildren(resolved))
 	}
 	runIDs, err := m.launchOnce(ctx, key, resolved)
 	if err != nil {
@@ -177,10 +178,11 @@ func decodeChildRequests(tool string, arguments json.RawMessage) ([]childRequest
 	}
 }
 
-// resolve читает файлы самим процессом Lawa, но не расширяет доступ агента:
-// child cwd обязан совпадать с текущим workspace, а workflow/task-file —
-// внутри workspace либо доступной только для чтения папки родительского run.
-func (m *childRunManager) resolve(parent runstore.Snapshot, request childRequest) (_ resolvedChild, err error) {
+// resolve читает workflow и taskFile из прежних доверенных корней, а cwd открывает
+// независимо как файловую capability. Проверка подключения использует тот же
+// дескриптор и выполняется до durable-регистрации: недоступный политике среды
+// каталог не оставляет run, который заведомо нельзя запустить.
+func (m *childRunManager) resolve(ctx context.Context, parent runstore.Snapshot, request childRequest) (_ resolvedChild, err error) {
 	if request.ParentRun != parent.Meta.RunID {
 		return resolvedChild{}, fmt.Errorf("parentRun должен быть текущим runId %q", parent.Meta.RunID)
 	}
@@ -199,19 +201,18 @@ func (m *childRunManager) resolve(parent runstore.Snapshot, request childRequest
 	if err != nil {
 		return resolvedChild{}, fmt.Errorf("проверить папку родительского run: %w", err)
 	}
-	cwd, err := resolveExistingPath(workspace, request.CWD)
+	if !filepath.IsAbs(request.CWD) {
+		return resolvedChild{}, errors.New("cwd дочернего workflow должен быть абсолютным путём")
+	}
+	directory, err := codex.OpenDirectory(request.CWD)
 	if err != nil {
 		return resolvedChild{}, fmt.Errorf("проверить cwd: %w", err)
 	}
-	// exec.Cmd принимает cwd как строку и повторно разрешает путь уже при запуске
-	// App Server. Если разрешить вложенную папку, агент с правом записи в workspace
-	// сможет после этой проверки заменить её симлинком и направить дочерний процесс
-	// наружу. Корень workspace агент переименовать не может без доступа к его
-	// родительской папке, поэтому до запуска через открытый дескриптор принимаем
-	// только его.
-	if cwd != workspace {
-		return resolvedChild{}, errors.New("cwd дочернего workflow должен совпадать с workspace родителя")
-	}
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, directory.Close())
+		}
+	}()
 	workspaceRoot, err := os.OpenRoot(workspace)
 	if err != nil {
 		return resolvedChild{}, fmt.Errorf("открыть workspace родителя: %w", err)
@@ -240,16 +241,29 @@ func (m *childRunManager) resolve(parent runstore.Snapshot, request childRequest
 	if !utf8.ValidString(task) || strings.TrimSpace(task) == "" {
 		return resolvedChild{}, errors.New("task должен быть непустым текстом UTF-8")
 	}
+	if m.deps.check == nil {
+		return resolvedChild{}, errors.New("проверка подключения Codex не настроена")
+	}
+	connection := codex.Connection{
+		Executable: m.executable, CWD: directory.Path(), Stderr: m.stderr, Directory: directory,
+	}
+	if err = m.deps.check(ctx, connection); err != nil {
+		return resolvedChild{}, fmt.Errorf("cwd недоступен активной политике Codex: %w", err)
+	}
 	return resolvedChild{input: runstore.Input{
-		WorkflowJSON: workflowJSON, Task: task, CWD: cwd, ParentRunID: parent.Meta.RunID,
-	}}, nil
+		WorkflowJSON: workflowJSON, Task: task, CWD: directory.Path(), ParentRunID: parent.Meta.RunID,
+	}, directory: directory}, nil
 }
 
-func resolveExistingPath(base, path string) (string, error) {
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(base, path)
+// closeResolvedChildren освобождает только те capability, которые ещё не были
+// переданы start. Метод Directory.Close допускает nil, поэтому частичный batch
+// можно закрывать одним проходом без отдельной карты владения.
+func closeResolvedChildren(children []resolvedChild) error {
+	var err error
+	for _, child := range children {
+		err = errors.Join(err, child.directory.Close())
 	}
-	return filepath.EvalSymlinks(filepath.Clean(path))
+	return err
 }
 
 // readAllowedFile выбирает один из двух доверенных корней по абсолютному имени,
@@ -359,6 +373,10 @@ func prepareChildCall(parentRunID string, call codex.DynamicToolCall, requests [
 // опубликованный child из обычного runstore. Create возвращается только после
 // fsync, поэтому runId отдаётся агенту не раньше надёжной регистрации.
 func (m *childRunManager) launchOnce(ctx context.Context, key string, children []resolvedChild) ([]string, error) {
+	// Каждый Directory либо передаётся start, либо закрывается при любом раннем
+	// выходе. Это особенно важно для повторной доставки уже известного callId:
+	// свежий preflight открыл новые дескрипторы, но существующий запуск их не ждёт.
+	defer func() { _ = closeResolvedChildren(children) }()
 	m.mu.Lock()
 	if existing := m.calls[key]; existing != nil {
 		m.mu.Unlock()
@@ -406,7 +424,8 @@ func (m *childRunManager) launchOnce(ctx context.Context, key string, children [
 		// Результат сохраняет позиционное соответствие batch: одинаковые входы
 		// получают одинаковый ID дважды, но start ниже всё равно идемпотентен.
 		call.runIDs = append(call.runIDs, snapshot.Meta.RunID)
-		m.start(snapshot.Meta.RunID, exists)
+		m.start(snapshot.Meta.RunID, exists, child.directory)
+		children[index].directory = nil
 	}
 	m.mu.Lock()
 	close(call.done)
@@ -419,10 +438,11 @@ func (m *childRunManager) launchOnce(ctx context.Context, key string, children [
 	return append([]string(nil), call.runIDs...), call.err
 }
 
-func (m *childRunManager) start(runID string, resume bool) {
+func (m *childRunManager) start(runID string, resume bool, directory *codex.Directory) {
 	m.mu.Lock()
 	if m.started[runID] {
 		m.mu.Unlock()
+		_ = directory.Close()
 		return
 	}
 	m.started[runID] = true
@@ -430,7 +450,8 @@ func (m *childRunManager) start(runID string, resume bool) {
 	m.mu.Unlock()
 	go func() {
 		defer m.wg.Done()
-		_, err := coordinateRunWithOutcome(m.ctx, m.root, runID, m.executable, m.pool, io.Discard, m.stderr, m.deps, resume, true, m)
+		defer directory.Close()
+		_, err := coordinateRunWithOutcome(m.ctx, m.root, runID, m.executable, m.pool, io.Discard, m.stderr, m.deps, resume, true, m, directory)
 		if err != nil {
 			m.mu.Lock()
 			m.errors = append(m.errors, fmt.Errorf("дочерний run %s: %w", runID, err))

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -411,7 +412,7 @@ func (o *cliFakeObserver) Close() error { return nil }
 func cliTestDependencies(client coordinator.Client, check func(context.Context, codex.Connection) error) dependencies {
 	return dependencies{
 		check:            check,
-		client:           func(string, io.Writer) coordinator.Client { return client },
+		client:           func(string, io.Writer, *codex.Directory) coordinator.Client { return client },
 		pollInterval:     time.Millisecond,
 		logsPollInterval: time.Millisecond,
 		refreshInterval:  coordinator.DefaultRefreshInterval,
@@ -785,7 +786,7 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 		}
 		open := strings.LastIndex(command.Title, "[")
 		parentRunID := strings.TrimSuffix(command.Title[open+1:], "]")
-		arguments := json.RawMessage(fmt.Sprintf(`{"workflow":"child.json","cwd":".","task":"Дочерняя задача","parentRun":"%s"}`, parentRunID))
+		arguments := json.RawMessage(fmt.Sprintf(`{"workflow":"child.json","cwd":%q,"task":"Дочерняя задача","parentRun":"%s"}`, cwd, parentRunID))
 		callChild := func(callID string) (string, error) {
 			result, err := command.CallDynamicTool(t.Context(), codex.DynamicToolCall{
 				ThreadID: command.Title, TurnID: "turn-parent", CallID: callID, Tool: "run_child", Arguments: arguments,
@@ -866,6 +867,83 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 	client.mu.Unlock()
 	if workerRuns != 2 {
 		t.Fatalf("дочерний шаг запущен %d раз вместо двух последовательных запусков", workerRuns)
+	}
+}
+
+// TestNativeParentStartsMixedCWDChildren проходит run_children целиком. Оба
+// workflow читаются из workspace родителя, но их App Server-команды получают
+// разные внешние cwd и остаются частью одного дерева с общим manager.
+func TestNativeParentStartsMixedCWDChildren(t *testing.T) {
+	root, parentCWD, firstCWD, secondCWD := filepath.Join(t.TempDir(), "runs"), t.TempDir(), t.TempDir(), t.TempDir()
+	parentPath := filepath.Join(parentCWD, "parent.json")
+	childPath := filepath.Join(parentCWD, "child.json")
+	if err := os.WriteFile(parentPath, []byte(`{"id":"parent","steps":[{"id":"root","type":"agent","prompt":"Запусти детей","dependsOn":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childPath, []byte(`{"id":"child","steps":[{"id":"worker","type":"agent","prompt":"Выполни","dependsOn":[]}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := newCLIFakeClient()
+	workerCWDs := make(chan string, 2)
+	var childRunIDs []string
+	client.onCommand = func(command codex.Command) error {
+		if strings.Contains(command.Title, "Lawa: child / worker [") {
+			workerCWDs <- command.CWD
+			return nil
+		}
+		if !strings.Contains(command.Title, "Lawa: parent / root [") {
+			return nil
+		}
+		open := strings.LastIndex(command.Title, "[")
+		parentRunID := strings.TrimSuffix(command.Title[open+1:], "]")
+		arguments := json.RawMessage(fmt.Sprintf(`{"children":[
+  {"workflow":"child.json","cwd":%q,"task":"Первая","parentRun":"%s"},
+  {"workflow":"child.json","cwd":%q,"task":"Вторая","parentRun":"%s"}
+]}`, firstCWD, parentRunID, secondCWD, parentRunID))
+		result, err := command.CallDynamicTool(t.Context(), codex.DynamicToolCall{
+			ThreadID: command.Title, TurnID: "turn-parent", CallID: "mixed-cwd", Tool: "run_children", Arguments: arguments,
+		})
+		if err != nil {
+			return err
+		}
+		var decoded struct {
+			RunIDs []string `json:"runIds"`
+		}
+		if err = json.Unmarshal([]byte(result), &decoded); err != nil || len(decoded.RunIDs) != 2 || decoded.RunIDs[0] == decoded.RunIDs[1] {
+			return fmt.Errorf("run_children вернул неверный результат %q: %w", result, err)
+		}
+		childRunIDs = decoded.RunIDs
+		return nil
+	}
+	pinnedPreflights := map[string]bool{}
+	deps := cliTestDependencies(client, func(_ context.Context, connection codex.Connection) error {
+		if connection.Directory != nil {
+			pinnedPreflights[connection.CWD] = true
+		}
+		return nil
+	})
+	if err := executeContext(t.Context(), []string{
+		"run", parentPath, "--cwd", parentCWD, "--task", "Корневая задача", "--root", root,
+	}, io.Discard, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	wantCWDs := map[string]bool{}
+	for _, path := range []string{firstCWD, secondCWD} {
+		canonical, err := filepath.EvalSymlinks(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantCWDs[canonical] = true
+	}
+	gotCWDs := map[string]bool{<-workerCWDs: true, <-workerCWDs: true}
+	if !maps.Equal(gotCWDs, wantCWDs) || !maps.Equal(pinnedPreflights, wantCWDs) {
+		t.Fatalf("смешанные cwd потеряны: команды=%v, preflight=%v, ожидались=%v", gotCWDs, pinnedPreflights, wantCWDs)
+	}
+	for _, runID := range childRunIDs {
+		child, err := runstore.Load(root, runID)
+		if err != nil || child.Meta.ParentRunID == "" || !wantCWDs[child.Meta.CWD] || child.Meta.Steps[0].State != scheduler.Succeeded {
+			t.Fatalf("дочерний run %s неверен: %+v, %v", runID, child.Meta, err)
+		}
 	}
 }
 

@@ -19,6 +19,9 @@ import (
 // TestMain позволяет запускать этот же бинарник вместо Codex. Проверяются
 // настоящие stdio и завершение процесса, но модель и пользовательские чаты не нужны.
 func TestMain(m *testing.M) {
+	if RunDirectoryHelper() {
+		return
+	}
 	if scenario := os.Getenv("LAWA_TEST_CODEX_SERVER"); scenario != "" {
 		fakeServer(scenario)
 		return
@@ -84,6 +87,12 @@ func fakeServer(scenario string) {
 			}
 		case "thread/start":
 			cwd, _ := os.Getwd()
+			validCWD := p["cwd"] == cwd
+			if scenario == "pinned-directory" {
+				capability, _ := p["cwd"].(string)
+				marker, markerErr := os.ReadFile("cwd-marker")
+				validCWD = capability == inheritedDirectoryPath && markerErr == nil && string(marker) == "проверенный каталог"
+			}
 			_, hasHistoryMode := p["historyMode"]
 			validIsolation := p["sandbox"] == "read-only" && p["permissions"] == nil
 			if scenario == "permissions" {
@@ -102,8 +111,8 @@ func fakeServer(scenario string) {
 					dynamicTools[0].(map[string]any)["inputSchema"].(map[string]any)["type"] == "object" &&
 					dynamicTools[1].(map[string]any)["name"] == "run_children"
 			}
-			if p["cwd"] != cwd || hasHistoryMode || !validIsolation || !validDynamicTools || !runtimeMatches(p, false) || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
-				panic("искажены параметры чата, автономность или модель")
+			if !validCWD || hasHistoryMode || !validIsolation || !validDynamicTools || !runtimeMatches(p, false) || p["approvalPolicy"] != "on-request" || p["approvalsReviewer"] != "auto_review" {
+				panic(fmt.Sprintf("искажены параметры чата, автономность или модель: cwd=%v actual=%q validCWD=%t isolation=%t dynamic=%t", p["cwd"], cwd, validCWD, validIsolation, validDynamicTools))
 			}
 			id := "thread-1"
 			if scenario == "missing-id" {
@@ -437,6 +446,53 @@ func TestProcessLifecycle(t *testing.T) {
 	if len(events) != 2 || events[0].Kind != "started" || events[0].PID <= 0 ||
 		events[1].Kind != "exited" || events[1].PID != events[0].PID || events[1].ExitCode == nil || *events[1].ExitCode != 0 || events[1].Signal != "" {
 		t.Fatalf("неверный lifecycle процесса: %+v", events)
+	}
+}
+
+// TestPinnedDirectorySurvivesPathReplacement воспроизводит TOCTOU после
+// preflight: проверенный каталог переименован, а его прежнее имя стало симлинком
+// на другой объект. И chdir процесса, и RPC cwd обязаны остаться привязаны к
+// открытому дескриптору, поэтому подставной App Server увидит безопасный marker.
+func TestPinnedDirectorySurvivesPathReplacement(t *testing.T) {
+	base := t.TempDir()
+	checked := filepath.Join(base, "checked")
+	saved := filepath.Join(base, "saved")
+	outside := filepath.Join(base, "outside")
+	for _, path := range []string{checked, outside} {
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(checked, "cwd-marker"), []byte("проверенный каталог"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "cwd-marker"), []byte("подменённый каталог"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directory, err := OpenDirectory(checked)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = directory.Close() })
+	if err = os.Rename(checked, saved); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Symlink(outside, checked); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("LAWA_TEST_CODEX_SERVER", "pinned-directory")
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var trace bytes.Buffer
+	result, err := Run(t.Context(), Command{
+		Executable: binary, CWD: directory.Path(), Directory: directory,
+		Text: "literal '$()`\\n", Sandbox: "read-only", Title: "Test", Stderr: &trace,
+	})
+	if err != nil || result.Status != "completed" {
+		t.Fatalf("App Server ушёл в подменённый cwd: %+v, %v; server: %s", result, err, &trace)
 	}
 }
 

@@ -114,6 +114,9 @@ type Command struct {
 	Respond                               func(context.Context, Event) (any, error)
 	DynamicTools                          []DynamicTool
 	CallDynamicTool                       func(context.Context, DynamicToolCall) (string, error)
+	// Directory, если задан, удерживает cwd как файловую capability. CWD при
+	// этом остаётся каноническим именем для сообщений и сохранённых метаданных.
+	Directory *Directory
 }
 
 // Result сохраняет уже полученные ID даже при ошибке. Флаги попыток выставляются
@@ -213,7 +216,7 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 	// Экспериментальный historyMode не передаём: серверный режим по умолчанию
 	// поддерживает создание и resume через thread/read, тогда как paginated доступен не во
 	// всех версиях app-server и пока не гарантирует полный жизненный цикл чата.
-	params := map[string]any{"cwd": command.CWD, "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
+	params := map[string]any{"cwd": command.protocolCWD(), "approvalPolicy": "on-request", "approvalsReviewer": "auto_review"}
 	if len(command.DynamicTools) != 0 {
 		params["dynamicTools"] = dynamicToolSpecs(command.DynamicTools)
 	}
@@ -310,12 +313,21 @@ func prepareTurn(command Command) ([]map[string]any, error) {
 	if err := validateDynamicTools(command); err != nil {
 		return nil, err
 	}
-	info, err := os.Stat(command.CWD)
-	if err != nil {
-		return nil, fmt.Errorf("проверить cwd: %w", err)
-	}
-	if !info.IsDir() {
-		return nil, errors.New("cwd должен быть папкой")
+	if command.Directory != nil {
+		if command.CWD != command.Directory.Path() {
+			return nil, errors.New("cwd команды не совпадает с проверенным каталогом")
+		}
+		if err := command.Directory.validate(); err != nil {
+			return nil, fmt.Errorf("проверить удерживаемый cwd: %w", err)
+		}
+	} else {
+		info, err := os.Stat(command.CWD)
+		if err != nil {
+			return nil, fmt.Errorf("проверить cwd: %w", err)
+		}
+		if !info.IsDir() {
+			return nil, errors.New("cwd должен быть папкой")
+		}
 	}
 	text := command.Text
 	inputs := []map[string]any{}
@@ -327,6 +339,15 @@ func prepareTurn(command Command) ([]map[string]any, error) {
 		inputs = append(inputs, map[string]any{"type": "skill", "name": skill.Name, "path": skill.Path})
 	}
 	return append([]map[string]any{{"type": "text", "text": text, "text_elements": []any{}}}, inputs...), nil
+}
+
+// protocolCWD использует "." только вместе с fchdir-helper. Для обычной команды
+// сохраняется публичный абсолютный путь и прежний протокол.
+func (command Command) protocolCWD() string {
+	if command.Directory != nil {
+		return inheritedDirectoryPath
+	}
+	return command.CWD
 }
 
 // validateDynamicTools запрещает публиковать функцию без обработчика и
@@ -374,7 +395,7 @@ func dynamicToolSpecs(tools []DynamicTool) []map[string]any {
 // исходного запуска; новый процесс не должен молча расширять или терять права.
 func resumeThread(c *client, command Command, threadID string) error {
 	params := map[string]any{
-		"threadId": threadID, "cwd": command.CWD,
+		"threadId": threadID, "cwd": command.protocolCWD(),
 		"approvalPolicy": "on-request", "approvalsReviewer": "auto_review",
 	}
 	addRuntimeOverrides(params, command, false)
@@ -390,7 +411,8 @@ func resumeThread(c *client, command Command, threadID string) error {
 	if resumed.Thread.ID != threadID {
 		return fmt.Errorf("Codex возобновил чат %q вместо %q", resumed.Thread.ID, threadID)
 	}
-	if same, err := sameDirectory(resumed.Thread.CWD, command.CWD); err != nil {
+	connection := Connection{CWD: command.CWD, Directory: command.Directory}
+	if same, err := connectionDirectoryMatches(connection, resumed.Thread.CWD); err != nil {
 		return fmt.Errorf("проверить cwd возобновлённого чата %q: %w", threadID, err)
 	} else if !same {
 		return fmt.Errorf("чат %q относится к cwd %q, ожидался %q", threadID, resumed.Thread.CWD, command.CWD)

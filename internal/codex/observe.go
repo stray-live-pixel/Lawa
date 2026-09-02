@@ -18,6 +18,9 @@ import (
 type Connection struct {
 	Executable, CWD string
 	Stderr          io.Writer
+	// Directory защищает запуск служебной сессии тем же открытым каталогом,
+	// который используется для рабочих turn дочернего run.
+	Directory *Directory
 }
 
 // WorkStatus — нормализованный результат наблюдения сохранённого чата. Он не
@@ -64,6 +67,7 @@ func Check(ctx context.Context, connection Connection) (err error) {
 		Executable: connection.Executable,
 		CWD:        connection.CWD,
 		Stderr:     connection.Stderr,
+		Directory:  connection.Directory,
 	}, &result)
 	if err != nil {
 		return err
@@ -83,6 +87,7 @@ func OpenObserver(ctx context.Context, connection Connection) (*Observer, error)
 		Executable: connection.Executable,
 		CWD:        connection.CWD,
 		Stderr:     connection.Stderr,
+		Directory:  connection.Directory,
 	}, &result)
 	if err != nil {
 		return nil, err
@@ -151,7 +156,7 @@ func (o *Observer) Inspect(threadID string) (observation Observation, err error)
 	if response.Thread.ID != threadID {
 		return observation, fmt.Errorf("Codex вернул чат %q вместо %q", response.Thread.ID, threadID)
 	}
-	if same, pathErr := sameDirectory(response.Thread.CWD, o.connection.CWD); pathErr != nil {
+	if same, pathErr := connectionDirectoryMatches(o.connection, response.Thread.CWD); pathErr != nil {
 		return observation, fmt.Errorf("проверить cwd чата %q: %w", threadID, pathErr)
 	} else if !same {
 		return observation, fmt.Errorf("чат %q относится к cwd %q, ожидался %q", threadID, response.Thread.CWD, o.connection.CWD)
@@ -226,14 +231,32 @@ func validateConnection(ctx context.Context, connection Connection) error {
 	if !filepath.IsAbs(connection.CWD) || !utf8.ValidString(connection.CWD+connection.Executable) {
 		return errors.New("подключение Codex требует абсолютный cwd и параметры в UTF-8")
 	}
-	info, err := os.Stat(connection.CWD)
-	if err != nil {
-		return fmt.Errorf("проверить cwd: %w", err)
-	}
-	if !info.IsDir() {
-		return errors.New("cwd должен быть папкой")
+	if connection.Directory != nil {
+		if connection.CWD != connection.Directory.Path() {
+			return errors.New("cwd подключения не совпадает с проверенным каталогом")
+		}
+		if err := connection.Directory.validate(); err != nil {
+			return fmt.Errorf("проверить удерживаемый cwd: %w", err)
+		}
+	} else {
+		info, err := os.Stat(connection.CWD)
+		if err != nil {
+			return fmt.Errorf("проверить cwd: %w", err)
+		}
+		if !info.IsDir() {
+			return errors.New("cwd должен быть папкой")
+		}
 	}
 	return nil
+}
+
+// connectionDirectoryMatches сравнивает cwd ответа с capability, если служебная
+// сессия запущена безопасным способом, и сохраняет прежнюю проверку для CLI-вызовов.
+func connectionDirectoryMatches(connection Connection, path string) (bool, error) {
+	if connection.Directory != nil {
+		return connection.Directory.matches(path)
+	}
+	return sameDirectory(path, connection.CWD)
 }
 
 // validProtocolText проверяет обязательный внешний ID без предположения о его
