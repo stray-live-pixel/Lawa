@@ -70,7 +70,7 @@ type runNode struct {
 	Steps, ActiveSteps                                 []stepNode
 	Children                                           []*runNode
 	updatedAt, activityAt                              time.Time
-	searchText, treeState                              string
+	baseSearch, searchText, treeState                  string
 }
 
 // stepNode описывает лист дерева и доступность его сохранённой памяти.
@@ -79,6 +79,7 @@ type stepNode struct {
 	EventsURL, MemoryURL, TraceURL                     template.URL
 	HasMemory, Active                                  bool
 	updatedAt                                          time.Time
+	threadID, turnID                                   string
 }
 
 // Handler возвращает полностью автономный HTTP-интерфейс для абсолютного root.
@@ -123,9 +124,23 @@ type handler struct{ root string }
 func (h handler) live(w http.ResponseWriter, r *http.Request) {
 	view := page{Title: "Lawa", Refresh: "3"}
 	now := time.Now()
+	params := parseViewParams(r.URL.Query())
 	roots, problems := loadTree(h.root)
+	// Обычный polling сначала выбирает нужное временное окно по компактным
+	// meta.json. Содержимое журналов и memory требуется только карточкам,
+	// которые действительно попадут в HTML. Явный поиск остаётся полнотекстовым,
+	// поэтому для него подробности нужны до фильтрации.
+	if params.Query != "" {
+		problems = append(problems, hydrateRunNodes(h.root, roots, true)...)
+		for _, root := range roots {
+			finalizeTree(root)
+		}
+	}
 	scheduled, seriesProblems := loadScheduledRuns(h.root, now)
-	visible, filter, pagination := applyDashboardView(roots, parseViewParams(r.URL.Query()), now)
+	visible, filter, pagination := applyDashboardView(roots, params, now)
+	if params.Query == "" {
+		problems = append(problems, hydrateRunNodes(h.root, visible, false)...)
+	}
 	view.Roots, view.Scheduled, view.Problems = visible, scheduled, append(problems, seriesProblems...)
 	view.Filter, view.Pagination = filter, pagination
 	if len(roots) == 0 {
@@ -390,11 +405,8 @@ func loadTree(root string) ([]*runNode, []problem) {
 			problems = append(problems, problem{Name: entry.Name(), Message: diagnostic(loadErr)})
 			continue
 		}
-		node, eventErr := makeRunNode(root, snapshot)
+		node := makeRunNode(root, snapshot)
 		nodes[entry.Name()] = node
-		if eventErr != nil {
-			problems = append(problems, problem{Name: entry.Name(), Message: "журнал событий: " + diagnostic(eventErr)})
-		}
 	}
 	for _, node := range nodes {
 		if parentCycle(node, nodes) {
@@ -423,13 +435,11 @@ func loadTree(root string) ([]*runNode, []problem) {
 	return roots, problems
 }
 
-// makeRunNode добавляет только существующие память и PNG; отсутствие артефакта
-// превращается в неактивное действие, а не в ссылку на несуществующий файл.
-func makeRunNode(root string, snapshot runstore.Snapshot) (*runNode, error) {
+// makeRunNode строит дешёвый индекс только из meta.json и метаданных файлов.
+// Тяжёлые events.jsonl, memory и PNG читаются после фильтрации в hydrateRunNode.
+func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 	runID := snapshot.Meta.RunID
 	ticket := ticketFromTask(snapshot.Task)
-	events, eventErr := runstore.ReadEvents(root, runID)
-	summaries := runstore.SummarizeEvents(events)
 	node := &runNode{
 		ID: runID, ParentID: snapshot.Meta.ParentRunID, Name: snapshot.Workflow.ID,
 		State: workflowState(snapshot), TicketID: ticket.ID, TicketTitle: ticket.Title, TicketURL: ticket.URL,
@@ -461,52 +471,24 @@ func makeRunNode(root string, snapshot runstore.Snapshot) (*runNode, error) {
 		node.updatedAt = info.ModTime()
 		node.Updated = node.updatedAt.Format("2006-01-02 15:04:05")
 	}
-	if len(events) != 0 && events[len(events)-1].Time.After(node.updatedAt) {
-		node.updatedAt = events[len(events)-1].Time
+	// ModTime журнала достаточно для выбора временной страницы и не зависит от
+	// его размера. Точное время последнего события уточняется при гидратации.
+	if info, err := os.Stat(filepath.Join(root, runID, "events.jsonl")); err == nil && info.ModTime().After(node.updatedAt) {
+		node.updatedAt = info.ModTime()
 		node.Updated = node.updatedAt.Local().Format("2006-01-02 15:04:05")
 	}
-	if _, err := runstore.ReadStatusImage(root, runID); err == nil {
-		node.HasUML, node.UMLURL = true, template.URL("/uml/"+runID)
-	}
 	for _, step := range snapshot.Meta.Steps {
-		memory, err := runstore.ReadMemory(root, runID, step.ThreadID)
-		summary := summaries[step.ID]
-		runtime := ""
-		if summary.PID != 0 {
-			runtime = fmt.Sprintf("pid %d", summary.PID)
-		} else if summary.ExitCode != nil {
-			runtime = fmt.Sprintf("exit %d", *summary.ExitCode)
-		} else if summary.Signal != "" {
-			runtime = "signal " + summary.Signal
-		}
-		if step.TurnID != "" {
-			if runtime != "" {
-				runtime += " · "
-			}
-			runtime += "turn " + step.TurnID
-		}
-		if !summary.LastActivity.IsZero() {
-			if runtime != "" {
-				runtime += " · "
-			}
-			runtime += summary.LastActivity.Local().Format("15:04:05")
-		}
-		action := strings.Join(summary.ActiveItemTypes, ", ")
 		active := activeStepState(step.State)
-		updated := ""
-		if !summary.LastActivity.IsZero() {
-			updated = summary.LastActivity.Local().Format("15:04:05")
-		}
 		if step.State == scheduler.Succeeded {
 			node.CompletedSteps++
 		}
-		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State), string(memory), summary.Message, action)
+		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State))
 		node.Steps = append(node.Steps, stepNode{
-			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)), Runtime: runtime, Message: summary.Message, Action: action,
+			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
 			EventsURL: template.URL("/events/" + runID + "?step=" + url.QueryEscape(step.ID)),
-			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID), HasMemory: err == nil && len(memory) > 0,
-			TraceURL: template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
-			Active:   active, Updated: updated, updatedAt: summary.LastActivity,
+			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID),
+			TraceURL:  template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
+			Active:    active, threadID: step.ThreadID, turnID: step.TurnID,
 		})
 	}
 	sortSteps(node.Steps)
@@ -515,8 +497,97 @@ func makeRunNode(root string, snapshot runstore.Snapshot) (*runNode, error) {
 			node.ActiveSteps = append(node.ActiveSteps, step)
 		}
 	}
-	node.searchText = strings.Join(search, "\n")
-	return node, eventErr
+	node.baseSearch = strings.Join(search, "\n")
+	return node
+}
+
+// hydrateRunNodes загружает подробности только выбранных деревьев. Ошибка одного
+// журнала не мешает остальным карточкам и возвращается отдельной диагностикой.
+func hydrateRunNodes(root string, nodes []*runNode, fullTextSearch bool) []problem {
+	var problems []problem
+	for _, node := range nodes {
+		if err := hydrateRunNode(root, node, fullTextSearch); err != nil {
+			problems = append(problems, problem{Name: node.ID, Message: "журнал событий: " + diagnostic(err)})
+		}
+		problems = append(problems, hydrateRunNodes(root, node.Children, fullTextSearch)...)
+	}
+	return problems
+}
+
+func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
+	events, eventErr := runstore.ReadEvents(root, node.ID)
+	summaries := runstore.SummarizeEvents(events)
+	if len(events) != 0 && events[len(events)-1].Time.After(node.updatedAt) {
+		node.updatedAt = events[len(events)-1].Time
+		node.Updated = node.updatedAt.Local().Format("2006-01-02 15:04:05")
+	}
+	if regularFileExists(filepath.Join(root, node.ID, runstore.StatusImageFilename)) {
+		node.HasUML, node.UMLURL = true, template.URL("/uml/"+node.ID)
+	}
+	for index := range node.Steps {
+		step := &node.Steps[index]
+		summary := summaries[step.ID]
+		memoryPath := filepath.Join(root, node.ID, "memory", step.threadID+".md")
+		step.HasMemory = nonEmptyRegularFile(memoryPath)
+		step.Message, step.Action, step.updatedAt = summary.Message, strings.Join(summary.ActiveItemTypes, ", "), summary.LastActivity
+		step.Updated = ""
+		if !summary.LastActivity.IsZero() {
+			step.Updated = summary.LastActivity.Local().Format("15:04:05")
+		}
+		step.Runtime = formatStepRuntime(summary, step.turnID)
+		node.baseSearch += "\n" + summary.Message + "\n" + step.Action
+		if fullTextSearch && step.HasMemory {
+			if memory, err := runstore.ReadMemory(root, node.ID, step.threadID); err == nil {
+				node.baseSearch += "\n" + string(memory)
+			}
+		}
+	}
+	sortSteps(node.Steps)
+	node.ActiveSteps = node.ActiveSteps[:0]
+	for _, step := range node.Steps {
+		if step.Active {
+			node.ActiveSteps = append(node.ActiveSteps, step)
+		}
+	}
+	return eventErr
+}
+
+// regularFileExists проверяет артефакт без чтения его содержимого. Lstat не
+// принимает симлинк за доступный файл: защищённый HTTP-маршрут также его отвергнет.
+func regularFileExists(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func nonEmptyRegularFile(path string) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular() && info.Size() > 0
+}
+
+// formatStepRuntime собирает компактную строку карточки из последнего состояния
+// процесса и сохранённого turn. Она вызывается только для видимого кубика.
+func formatStepRuntime(summary runstore.EventSummary, turnID string) string {
+	runtime := ""
+	if summary.PID != 0 {
+		runtime = fmt.Sprintf("pid %d", summary.PID)
+	} else if summary.ExitCode != nil {
+		runtime = fmt.Sprintf("exit %d", *summary.ExitCode)
+	} else if summary.Signal != "" {
+		runtime = "signal " + summary.Signal
+	}
+	if turnID != "" {
+		if runtime != "" {
+			runtime += " · "
+		}
+		runtime += "turn " + turnID
+	}
+	if !summary.LastActivity.IsZero() {
+		if runtime != "" {
+			runtime += " · "
+		}
+		runtime += summary.LastActivity.Local().Format("15:04:05")
+	}
+	return runtime
 }
 
 func activeStepState(state scheduler.State) bool {

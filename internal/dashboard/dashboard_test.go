@@ -330,6 +330,32 @@ func TestCorruptedEventsRemainVisible(t *testing.T) {
 	}
 }
 
+// TestDashboardSkipsHiddenEventLogs защищает основной сценарий оптимизации:
+// polling активного представления не должен разбирать журнал завершённого run,
+// который отфильтрован и не попадёт в HTML. При явном переходе ко всем запускам
+// тот же журнал загружается и его повреждение становится видимой диагностикой.
+func TestDashboardSkipsHiddenEventLogs(t *testing.T) {
+	root := t.TempDir()
+	run := createRun(t, root, "hidden-completed", "")
+	setState(t, root, run, scheduler.Succeeded)
+	if err := os.WriteFile(filepath.Join(root, run.Meta.RunID, "events.jsonl"), []byte("not json\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	dashboard := Handler(root)
+	active := httptest.NewRecorder()
+	dashboard.ServeHTTP(active, httptest.NewRequest(http.MethodGet, "/", nil))
+	if strings.Contains(active.Body.String(), "журнал событий") {
+		t.Fatal("dashboard прочитал журнал скрытого завершённого run")
+	}
+
+	all := httptest.NewRecorder()
+	dashboard.ServeHTTP(all, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
+	if !strings.Contains(all.Body.String(), "журнал событий") {
+		t.Fatal("dashboard не прочитал журнал после показа завершённого run")
+	}
+}
+
 // TestPreview гарантирует, что макет использует production-шаблон и остаётся
 // достаточно сложным для визуальной оценки без run-хранилища.
 func TestPreview(t *testing.T) {
