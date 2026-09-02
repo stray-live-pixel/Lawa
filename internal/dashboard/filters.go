@@ -278,7 +278,14 @@ func finalizeTree(node *runNode) {
 	for _, step := range node.Steps {
 		node.HasFailed = node.HasFailed || isFailedState(step.State)
 	}
-	parts := []string{node.searchText}
+	baseSearch := node.baseSearch
+	// Ручные модели в unit-тестах и preview могут задавать уже готовый индекс.
+	// Production-узлы всегда имеют baseSearch и потому не переиспользуют ранее
+	// агрегированный текст потомков при повторной финализации после гидратации.
+	if baseSearch == "" {
+		baseSearch = node.searchText
+	}
+	parts := []string{baseSearch}
 	for _, child := range node.Children {
 		finalizeTree(child)
 		parts = append(parts, child.searchText)
