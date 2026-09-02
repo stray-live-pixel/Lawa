@@ -96,9 +96,9 @@ func TestDashboardStopHelper(t *testing.T) {
 	time.Sleep(time.Minute)
 }
 
-// TestStopAndDeleteRun проверяет опасный порядок операции: сначала завершается
-// реально существующая process group Codex, затем координатор освобождает lock,
-// и только после этого исчезает каталог run.
+// TestStopAndDeleteRun проверяет остановку живого run: занятый lock подтверждает
+// координатор, затем завершается его process group, а после освобождения lock
+// исчезает каталог run.
 func TestStopAndDeleteRun(t *testing.T) {
 	root := t.TempDir()
 	snapshot := createRun(t, root, "stoppable-workflow", "")
@@ -133,6 +133,45 @@ func TestStopAndDeleteRun(t *testing.T) {
 	}
 	if err = <-done; err != nil {
 		t.Fatal(err)
+	}
+	if _, err = os.Stat(filepath.Join(root, snapshot.Meta.RunID)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("каталог run не удалён: %v", err)
+	}
+}
+
+// TestStopAndDeleteDoesNotSignalStalePID защищает от повторного использования PID.
+// Если координатор уже освободил lock, сохранённый process_started мог пережить
+// исходный процесс и больше не доказывает, что группа принадлежит этому run.
+func TestStopAndDeleteDoesNotSignalStalePID(t *testing.T) {
+	root := t.TempDir()
+	snapshot := createRun(t, root, "stale-process-workflow", "")
+	run, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0], "-test.run=^TestDashboardStopHelper$")
+	command.Env = append(os.Environ(), "LAWA_TEST_STOP_HELPER=1")
+	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err = command.Start(); err != nil {
+		_ = run.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		_, _ = command.Process.Wait()
+	})
+	if err = run.AppendEvent(runstore.RuntimeEvent{StepID: "cube", Kind: "process_started", PID: command.Process.Pid}); err == nil {
+		err = run.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = stopAndRemoveRun(t.Context(), root, snapshot.Meta.RunID); err != nil {
+		t.Fatal(err)
+	}
+	if exists, checkErr := processGroupExists(command.Process.Pid); checkErr != nil || !exists {
+		t.Fatalf("посторонняя process group получила сигнал: exists=%t err=%v", exists, checkErr)
 	}
 	if _, err = os.Stat(filepath.Join(root, snapshot.Meta.RunID)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("каталог run не удалён: %v", err)

@@ -157,12 +157,20 @@ func (h handler) stopAndDelete(w http.ResponseWriter, r *http.Request) {
 // отдельную группу и не затрагивает координатор. ESRCH означает, что процесс уже
 // исчез, поэтому повтор и удаление остаются идемпотентными по отношению к stop.
 //
-// Список перечитывается до захвата lock: координатор мог запустить следующий
-// кубик между двумя попытками. Удаление разрешено лишь когда активных групп уже
-// нет и coordinator.lock свободен, то есть новых процессов больше не появится.
+// Каждая итерация сначала пытается захватить lock и удалить run. Если координатор
+// уже исчез, это не даёт устаревшему PID из журнала остановить постороннюю группу,
+// которой ОС успела повторно выдать тот же номер. Только занятый lock подтверждает,
+// что живой координатор ещё владеет run и записанный процесс можно останавливать.
+// После сигнала список перечитывается: координатор мог запустить следующий кубик
+// между попытками, а удаление допустимо только после освобождения lock.
 func stopAndRemoveRun(ctx context.Context, root, runID string) error {
 	terminated := make(map[int]time.Time)
 	for {
+		if err := runstore.Remove(root, runID); err == nil {
+			return nil
+		} else if !errors.Is(err, runstore.ErrRunLocked) {
+			return fmt.Errorf("удалить run %q: %w", runID, err)
+		}
 		events, err := runstore.ReadEvents(root, runID)
 		if err != nil {
 			return fmt.Errorf("прочитать процессы run %q: %w", runID, err)
@@ -179,7 +187,6 @@ func stopAndRemoveRun(ctx context.Context, root, runID string) error {
 				terminated[summary.PID] = now
 			}
 		}
-		active := false
 		for pid, started := range terminated {
 			exists, checkErr := processGroupExists(pid)
 			if checkErr != nil {
@@ -189,18 +196,10 @@ func stopAndRemoveRun(ctx context.Context, root, runID string) error {
 				delete(terminated, pid)
 				continue
 			}
-			active = true
 			if now.Sub(started) >= processStopGrace {
 				if err = signalProcessGroup(pid, syscall.SIGKILL); err != nil {
 					return err
 				}
-			}
-		}
-		if !active {
-			if err = runstore.Remove(root, runID); err == nil {
-				return nil
-			} else if !errors.Is(err, runstore.ErrRunLocked) {
-				return fmt.Errorf("удалить run %q: %w", runID, err)
 			}
 		}
 		select {
