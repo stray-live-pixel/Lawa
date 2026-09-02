@@ -6,10 +6,28 @@ import (
 	"os"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
+
+// TestEvaluateRejectsAgentGraphV2 не даёт новому валидному контракту попасть в
+// старый DAG-runtime. Без этого барьера пустой DependsOn у v2-кубиков выглядел бы
+// как независимый старт и мог бы запустить все ветки, включая невыбранные.
+func TestEvaluateRejectsAgentGraphV2(t *testing.T) {
+	input := `{"version":2,"id":"decision","start":["checker"],"steps":[` +
+		`{"id":"checker","type":"agent","prompt":"Выбери.","after":[],"decisions":{` +
+		`"done":{"finish":"succeeded"},"fail":{"finish":"failed"}}}]}`
+	w, err := workflow.Decode(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("валидатор v2: %v", err)
+	}
+	got, err := Evaluate(w, map[string]State{"checker": Pending})
+	if err == nil || !strings.Contains(err.Error(), "runtime workflow version=2 пока не поддерживается") || !reflect.DeepEqual(got, Plan{}) {
+		t.Fatalf("старый runtime принял v2: %+v, %v", got, err)
+	}
+}
 
 // reviewWorkflow берёт продуктовый пример: сборщик записан раньше родителей,
 // а два ревью должны выполняться независимо после общих метрик.
