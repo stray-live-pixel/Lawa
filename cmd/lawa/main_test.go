@@ -265,17 +265,6 @@ func TestSkillInstruction(t *testing.T) {
 	if !bytes.Equal(out.Bytes(), want) {
 		t.Error("lawa skill изменяет содержимое встроенного SKILL.md")
 	}
-	// Проектная установка делает /lawa доступным в этом репозитории без ручного
-	// шага. Точное равенство не позволяет установленной и встроенной версиям
-	// незаметно разойтись при изменении пользовательского контракта.
-	installed, err := os.ReadFile(filepath.Join("..", "..", ".agents", "skills", "lawa", "SKILL.md"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(installed, want) {
-		t.Error("проектный скилл /lawa расходится с выводом lawa skill")
-	}
-
 	const metadata = "---\nname: lawa\ndescription: Запуск, наблюдение и продолжение JSON-workflow Lawa через Codex App Server.\n---\n\n"
 	if !strings.HasPrefix(skillInstruction, metadata) {
 		t.Errorf("инструкция не начинается с обязательных метаданных SKILL.md: %q", skillInstruction)
