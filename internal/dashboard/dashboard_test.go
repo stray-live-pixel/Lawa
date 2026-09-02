@@ -172,6 +172,10 @@ TRACKER_CONTEXT_END`)
 	if strings.Contains(html, `class="tree-state"`) {
 		t.Fatal("дерево снова печатает текстовый статус справа от кубика")
 	}
+	if !strings.Contains(html, `class="uml-preview"`) || !strings.Contains(html, `target="_blank"`) ||
+		!strings.Contains(html, `<img src="/uml/`+parent.Meta.RunID+`?v=`) || strings.Contains(html, `>UML</`) {
+		t.Fatal("UML не показан ссылкой-превью или отдельная кнопка UML вернулась")
+	}
 	allRecorder := httptest.NewRecorder()
 	dashboard.ServeHTTP(allRecorder, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
 	allHTML := allRecorder.Body.String()
@@ -210,7 +214,7 @@ TRACKER_CONTEXT_END`)
 	}
 	recorder = httptest.NewRecorder()
 	dashboard.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/uml/"+parent.Meta.RunID, nil))
-	if recorder.Header().Get("Content-Type") != "image/png" || recorder.Body.String() != string(png) {
+	if recorder.Header().Get("Content-Type") != "image/png" || recorder.Header().Get("Cache-Control") != "no-store" || recorder.Body.String() != string(png) {
 		t.Fatalf("неверный UML: %s, %q", recorder.Header().Get("Content-Type"), recorder.Body.String())
 	}
 	recorder = httptest.NewRecorder()

@@ -377,6 +377,7 @@ func (h handler) uml(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "image/png")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(data)
 }
 
@@ -476,8 +477,11 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 	}
 	// Наличие артефактов определяется по метаданным файлов: обычный polling
 	// сохраняет рабочие ссылки, но не читает содержимое UML и memory.
-	if regularFileExists(filepath.Join(root, runID, runstore.StatusImageFilename)) {
-		node.HasUML, node.UMLURL = true, template.URL("/uml/"+runID)
+	if info, err := os.Lstat(filepath.Join(root, runID, runstore.StatusImageFilename)); err == nil && info.Mode().IsRegular() {
+		// Версия из ModTime меняет HTML при обновлении PNG. Polling заменяет
+		// карточку и браузер запрашивает новое изображение, не показывая старый кэш.
+		node.HasUML = true
+		node.UMLURL = template.URL("/uml/" + runID + "?v=" + strconv.FormatInt(info.ModTime().UnixNano(), 10))
 	}
 	for _, step := range snapshot.Meta.Steps {
 		active := activeStepState(step.State)
@@ -490,8 +494,8 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
 			EventsURL: template.URL("/events/" + runID + "?step=" + url.QueryEscape(step.ID)),
 			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID), HasMemory: nonEmptyRegularFile(memoryPath),
-			TraceURL:  template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
-			Active:    active, threadID: step.ThreadID, turnID: step.TurnID,
+			TraceURL: template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
+			Active:   active, threadID: step.ThreadID, turnID: step.TurnID,
 		})
 	}
 	sortSteps(node.Steps)
@@ -553,11 +557,6 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 
 // regularFileExists проверяет артефакт без чтения его содержимого. Lstat не
 // принимает симлинк за доступный файл: защищённый HTTP-маршрут также его отвергнет.
-func regularFileExists(path string) bool {
-	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular()
-}
-
 func nonEmptyRegularFile(path string) bool {
 	info, err := os.Lstat(path)
 	return err == nil && info.Mode().IsRegular() && info.Size() > 0
