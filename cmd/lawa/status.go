@@ -18,8 +18,8 @@ const defaultChatInterval = 5 * time.Minute
 // вызывается координатором последовательно, поэтому mutex не нужен: сначала
 // атомарно обновляются Markdown и PlantUML, затем при наступлении отдельного
 // пятиминутного срока печатается только короткая статистика и VS Code-ссылка.
-// Первый снимок и общий успех видны сразу, иначе пользователь мог бы пять минут
-// не знать runId или не получить своевременное подтверждение завершения.
+// Первый снимок и любой терминальный исход видны сразу, иначе пользователь мог
+// бы пять минут не знать runId или не получить подтверждение ошибки agent-графа.
 type statusPublisher struct {
 	ctx          context.Context
 	out          io.Writer
@@ -60,7 +60,7 @@ func newStatusPublisher(
 func (p *statusPublisher) Publish(status coordinator.Status) error {
 	_, artifactErr := statusreport.WriteReport(p.ctx, p.runDir, status, p.renderer)
 	now := p.now()
-	chatDue := !p.chatPrinted || status.Complete || !now.Before(p.lastChat.Add(p.chatInterval))
+	chatDue := !p.chatPrinted || status.Terminal || status.Complete || !now.Before(p.lastChat.Add(p.chatInterval))
 	if !chatDue {
 		return nil
 	}

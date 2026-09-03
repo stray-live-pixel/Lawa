@@ -212,6 +212,33 @@ func TestStatusPublisherUpdatesFilesButThrottlesChat(t *testing.T) {
 	}
 }
 
+// TestStatusPublisherPrintsFailedAgentTerminalImmediately проверяет, что
+// Terminal обходит пятиминутный throttle и для неуспешного agent-графа, где
+// Complete заведомо остаётся false.
+func TestStatusPublisherPrintsFailedAgentTerminalImmediately(t *testing.T) {
+	runDir := t.TempDir()
+	now := time.Date(2026, time.September, 3, 12, 0, 0, 0, time.UTC)
+	var out bytes.Buffer
+	publisher := newStatusPublisher(t.Context(), &out, runDir, successfulCLIRenderer(), 5*time.Minute, func() time.Time { return now })
+	status := coordinator.Status{
+		RunID: "run-v4", WorkflowID: "flow", RunState: runstore.RunRunning,
+		Steps: []coordinator.StepStatus{{ID: "cube", VisitID: "visit-1", Visit: 1, State: scheduler.Running}},
+	}
+	if err := publisher.Publish(status); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	status.RunState, status.Terminal = runstore.RunFailed, true
+	status.StopReason, status.Steps[0].State = "решение остановило workflow", scheduler.Failed
+	if err := publisher.Publish(status); err != nil {
+		t.Fatal(err)
+	}
+	if got := out.String(); strings.Count(got, "Всего:") != 2 ||
+		!strings.Contains(got, "Run run-v4 завершён: failed.") || !strings.Contains(got, "Причина: решение остановило workflow") {
+		t.Fatalf("неуспешный terminal задержан или описан неверно: %q", got)
+	}
+}
+
 // TestStatusPublisherKeepsWorkflowAliveWithoutPlantUML фиксирует границу отказа:
 // renderer может отсутствовать, но подробный Markdown и короткая чат-сводка
 // остаются доступны; координатору возвращается только ошибка самого stdout.
