@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -37,6 +38,100 @@ func TestDecode(t *testing.T) {
 	if err != nil || len(w.Steps) != 4 || w.Steps[0].ID != "summary" {
 		t.Fatalf("пример с параллельными ветками отклонён: %+v, %v", w, err)
 	}
+}
+
+// TestDocumentedExamplesValidate не даёт пользовательским примерам разойтись
+// со строгим декодером. Отдельные ожидания для двух v2-сценариев защищают их от
+// случайного возврата к legacy-семантике при последующей правке документации.
+func TestDocumentedExamplesValidate(t *testing.T) {
+	directory := "../../examples"
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantAgentGraphs := map[string]string{
+		"fix-until-green.json": "fix-until-green",
+		"risk-routing.json":    "risk-routing",
+	}
+	seen := map[string]bool{}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		path := filepath.Join(directory, entry.Name())
+		file, openErr := os.Open(path)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		definition, decodeErr := Decode(file)
+		closeErr := file.Close()
+		if decodeErr != nil || closeErr != nil {
+			t.Fatalf("пример %s не проходит валидацию: decode=%v close=%v", entry.Name(), decodeErr, closeErr)
+		}
+		if wantID, required := wantAgentGraphs[entry.Name()]; required {
+			seen[entry.Name()] = true
+			if definition.ID != wantID || definition.EffectiveVersion() != VersionAgentGraph {
+				t.Fatalf("пример %s потерял контракт v2: id=%q version=%d", entry.Name(), definition.ID, definition.EffectiveVersion())
+			}
+			switch entry.Name() {
+			case "fix-until-green.json":
+				assertFixUntilGreenExample(t, definition)
+			case "risk-routing.json":
+				assertRiskRoutingExample(t, definition)
+			}
+		}
+	}
+	for name := range wantAgentGraphs {
+		if !seen[name] {
+			t.Errorf("обязательный пример %s отсутствует", name)
+		}
+	}
+}
+
+// assertFixUntilGreenExample фиксирует именно многошаговый ограниченный цикл,
+// ради которого опубликован пример. Одной успешной валидации недостаточно:
+// редактор мог случайно превратить файл в тривиальный линейный v2-граф.
+func assertFixUntilGreenExample(t *testing.T, definition Workflow) {
+	t.Helper()
+	testStep := documentedExampleStep(t, definition, "test")
+	checker := documentedExampleStep(t, definition, "checker")
+	repeat, done, fail := checker.Decisions["repeat"], checker.Decisions["done"], checker.Decisions["fail"]
+	if len(definition.Steps) != 3 || !reflect.DeepEqual(definition.Start, []string{"test"}) ||
+		!reflect.DeepEqual(testStep.After, []string{"fix"}) || !reflect.DeepEqual(checker.After, []string{"test"}) ||
+		!reflect.DeepEqual(repeat.To, []string{"fix"}) || done.Finish == nil || *done.Finish != OutcomeSucceeded ||
+		fail.Finish == nil || *fail.Finish != OutcomeFailed || checker.MaxVisits == nil || *checker.MaxVisits != 4 ||
+		checker.OnLimit == nil || *checker.OnLimit != OutcomeFailed {
+		t.Fatalf("пример fix-until-green потерял цикл, решения или предел: %+v", definition)
+	}
+}
+
+// assertRiskRoutingExample защищает if/else, terminal-ветки и атомарный fan-out.
+// Итоговый summary обязан ждать обе независимые проверки найденного риска.
+func assertRiskRoutingExample(t *testing.T, definition Workflow) {
+	t.Helper()
+	checker := documentedExampleStep(t, definition, "risk-checker")
+	summary := documentedExampleStep(t, definition, "risk-summary")
+	risk, safe, unknown := checker.Decisions["risk"], checker.Decisions["safe"], checker.Decisions["cannot_assess"]
+	wantAudits := []string{"security-audit", "impact-audit"}
+	if len(definition.Steps) != 5 || !reflect.DeepEqual(definition.Start, []string{"scan"}) ||
+		!reflect.DeepEqual(checker.After, []string{"scan"}) || !reflect.DeepEqual(risk.To, wantAudits) ||
+		safe.Finish == nil || *safe.Finish != OutcomeSucceeded || unknown.Finish == nil || *unknown.Finish != OutcomeFailed ||
+		!reflect.DeepEqual(summary.After, wantAudits) {
+		t.Fatalf("пример risk-routing потерял if/else, fan-out или join: %+v", definition)
+	}
+}
+
+// documentedExampleStep делает проверки топологии читаемыми и сообщает точное
+// имя потерянного кубика вместо последующей ошибки сравнения нулевой структуры.
+func documentedExampleStep(t *testing.T, definition Workflow, stepID string) Step {
+	t.Helper()
+	for _, step := range definition.Steps {
+		if step.ID == stepID {
+			return step
+		}
+	}
+	t.Fatalf("пример %q не содержит обязательный кубик %q", definition.ID, stepID)
+	return Step{}
 }
 
 // TestLegacyVersionCompatibility фиксирует обе записи прежнего контракта:
