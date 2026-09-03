@@ -42,7 +42,7 @@ func agentGraphInput(t *testing.T) Input {
 func testAgentGraphRun(t *testing.T) (string, Snapshot, *LockedRun) {
 	t.Helper()
 	root := t.TempDir()
-	snapshot, err := CreateAgentGraph(root, agentGraphInput(t))
+	snapshot, err := Create(root, agentGraphInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -58,18 +58,13 @@ func testAgentGraphRun(t *testing.T) (string, Snapshot, *LockedRun) {
 	return root, snapshot, run
 }
 
-// TestCreateAgentGraph проверяет границу безопасного включения: публичный Create
-// всё ещё отказывает через legacy scheduler, а специальный API создаёт только
-// start-visits v4 и отдельную память по непрозрачному visitId.
-func TestCreateAgentGraph(t *testing.T) {
+// TestCreateSelectsMetadataFormat проверяет production-границу форматов: единый
+// Create выбирает v4 для workflow v2, но не мигрирует неявно старые определения
+// без version и явный version=1. Это позволяет всем entry points вызывать один
+// API, не смешивая Steps и Visits в одном run.
+func TestCreateSelectsMetadataFormat(t *testing.T) {
 	root, input := filepath.Join(t.TempDir(), "runs"), agentGraphInput(t)
-	if got, err := Create(root, input); err == nil || !strings.Contains(err.Error(), "runtime workflow version=2") || !reflect.DeepEqual(got, Snapshot{}) {
-		t.Fatalf("публичный Create включил v2 runtime: %+v, %v", got, err)
-	}
-	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("отказ Create оставил файлы: %v", err)
-	}
-	snapshot, err := CreateAgentGraph(root, input)
+	snapshot, err := Create(root, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,9 +111,19 @@ func TestCreateAgentGraph(t *testing.T) {
 		t.Fatal("v4 принял даже null legacy-поле steps")
 	}
 	mustWrite(t, filepath.Join(root, snapshot.Meta.RunID, "meta.json"), data)
-	legacy := testInput(t)
-	if got, err := CreateAgentGraph(root, legacy); err == nil || !reflect.DeepEqual(got, Snapshot{}) {
-		t.Fatalf("CreateAgentGraph принял legacy workflow: %+v, %v", got, err)
+	for name, definition := range map[string][]byte{
+		"version отсутствует": []byte(`{"id":"legacy-default","steps":[{"id":"work","type":"agent","prompt":"Работай","dependsOn":[]}]}`),
+		"version равен 1":     []byte(`{"version":1,"id":"legacy-explicit","steps":[{"id":"work","type":"agent","prompt":"Работай","dependsOn":[]}]}`),
+	} {
+		t.Run(name, func(t *testing.T) {
+			legacy, createErr := Create(root, Input{WorkflowJSON: definition, Task: "Legacy", CWD: t.TempDir()})
+			if createErr != nil {
+				t.Fatal(createErr)
+			}
+			if legacy.Meta.Version != 3 || legacy.Meta.RunState != "" || legacy.Meta.Visits != nil || len(legacy.Meta.Steps) != 1 {
+				t.Fatalf("legacy workflow записан не в v3: %+v", legacy.Meta)
+			}
+		})
 	}
 	if err := RemoveUnstarted(root, snapshot.Meta.RunID); err != nil {
 		t.Fatalf("не начатый v4 run не удалён: %v", err)

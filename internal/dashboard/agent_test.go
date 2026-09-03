@@ -21,7 +21,7 @@ import (
 func createAgentDashboardRun(t *testing.T) (string, runstore.Snapshot) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "runs")
-	snapshot, err := runstore.CreateAgentGraph(root, runstore.Input{
+	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(`{
   "version":2,"id":"dashboard-v2","start":["loop","unused"],"steps":[
     {"id":"loop","type":"agent","prompt":"Проверь","after":[],"maxVisits":2,"onLimit":"failed","decisions":{
@@ -200,7 +200,7 @@ func TestAgentDashboardVisitEndpoints(t *testing.T) {
 // в активном представлении и не попадает в фильтр провалов.
 func TestAgentDashboardUsesRunStateAfterHandledFailure(t *testing.T) {
 	root := t.TempDir()
-	snapshot, err := runstore.CreateAgentGraph(root, runstore.Input{
+	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(`{
   "version":2,"id":"handled-failure","start":["work"],"steps":[
     {"id":"work","type":"agent","prompt":"Работай","after":[]},

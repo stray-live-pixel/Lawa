@@ -341,10 +341,31 @@ func newCLIFakeClient() *cliFakeClient {
 	return &cliFakeClient{runs: map[string]int{}, continues: map[string]int{}, inspect: map[string]codex.WorkStatus{}, latest: map[string]string{}}
 }
 
+// cliAgentPromptField читает устойчивые служебные ID из visit-aware prompt.
+// Legacy-команды таких строк не имеют, поэтому вызывающий код оставляет для них
+// разбор заголовка. Разделение позволяет одному fake проходить оба runtime и не
+// склеивать повторные посещения одного логического кубика в один чат.
+func cliAgentPromptField(prompt, label string) string {
+	for _, line := range strings.Split(prompt, "\n") {
+		if strings.HasPrefix(line, label) {
+			return strings.TrimPrefix(line, label)
+		}
+	}
+	return ""
+}
+
 func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Result, error) {
-	parts := strings.SplitN(command.Title, " / ", 2)
-	stepID := strings.SplitN(parts[1], " [", 2)[0]
-	threadID := "chat-" + stepID
+	stepID := cliAgentPromptField(command.Text, "ID логического кубика (stepId): ")
+	visitID := cliAgentPromptField(command.Text, "ID посещения (visitId): ")
+	if stepID == "" {
+		parts := strings.SplitN(command.Title, " / ", 2)
+		stepID = strings.SplitN(parts[1], " [", 2)[0]
+	}
+	executionID := stepID
+	if visitID != "" {
+		executionID = visitID
+	}
+	threadID := "chat-" + executionID
 	c.mu.Lock()
 	c.runs[stepID]++
 	c.mu.Unlock()
@@ -355,26 +376,26 @@ func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Res
 		return codex.Result{ThreadID: threadID, CreationAttempted: true}, err
 	}
 	if command.OnTurn != nil {
-		if err := command.OnTurn("turn-"+stepID, func(context.Context) error { return nil }); err != nil {
-			return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, CreationAttempted: true, TurnAttempted: true}, err
+		if err := command.OnTurn("turn-"+executionID, func(context.Context) error { return nil }); err != nil {
+			return codex.Result{ThreadID: threadID, TurnID: "turn-" + executionID, CreationAttempted: true, TurnAttempted: true}, err
 		}
 	}
 	c.mu.Lock()
-	c.latest[threadID] = "turn-" + stepID
+	c.latest[threadID] = "turn-" + executionID
 	c.mu.Unlock()
 	if err := command.Notify(codex.Event{Method: "turn/started"}); err != nil {
 		return codex.Result{ThreadID: threadID, CreationAttempted: true, TurnAttempted: true}, err
 	}
 	if c.onCommand != nil {
 		if err := c.onCommand(command); err != nil {
-			return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, CreationAttempted: true, TurnAttempted: true}, err
+			return codex.Result{ThreadID: threadID, TurnID: "turn-" + executionID, CreationAttempted: true, TurnAttempted: true}, err
 		}
 	}
-	return codex.Result{ThreadID: threadID, TurnID: "turn-" + stepID, Status: "completed", CreationAttempted: true, TurnAttempted: true}, nil
+	return codex.Result{ThreadID: threadID, TurnID: "turn-" + executionID, Status: "completed", CreationAttempted: true, TurnAttempted: true}, nil
 }
 
 func (c *cliFakeClient) Continue(_ context.Context, threadID string, command codex.Command) (codex.Result, error) {
-	if command.Text != "continue" {
+	if command.Text != "continue" && cliAgentPromptField(command.Text, "ID посещения (visitId): ") == "" {
 		return codex.Result{ThreadID: threadID}, errors.New("resume передал неверный текст")
 	}
 	c.mu.Lock()
@@ -764,17 +785,100 @@ func TestRunCommand(t *testing.T) {
 	}
 }
 
+// TestRunCommandAgentGraph проходит тот же публичный CLI, что и пользователь,
+// и доказывает production-маршрут version=2: Create выбирает metadata v4, а
+// coordinate запускает visit-aware runtime и сохраняет успешный visit.
+func TestRunCommandAgentGraph(t *testing.T) {
+	root, cwd := filepath.Join(t.TempDir(), "runs"), t.TempDir()
+	workflowPath := filepath.Join(t.TempDir(), "workflow.json")
+	workflowJSON := []byte(`{"version":2,"id":"agent-run","start":["work"],"steps":[{"id":"work","type":"agent","prompt":"Сделай","after":[]}]}`)
+	if err := os.WriteFile(workflowPath, workflowJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := newCLIFakeClient()
+	checks := 0
+	deps := cliTestDependencies(client, func(context.Context, codex.Connection) error { checks++; return nil })
+	var out bytes.Buffer
+	if err := executeContext(t.Context(), []string{
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--root", root,
+	}, &out, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	fields := strings.Fields(out.String())
+	if len(fields) < 2 || fields[0] != "runId:" {
+		t.Fatalf("CLI не напечатал runId agent-графа: %q", out.String())
+	}
+	snapshot, err := runstore.Load(root, fields[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	workRuns := client.runs["work"]
+	client.mu.Unlock()
+	if checks != 1 || snapshot.Meta.Version != 4 || snapshot.Meta.RunState != runstore.RunSucceeded ||
+		len(snapshot.Meta.Visits) != 1 || snapshot.Meta.Visits[0].State != scheduler.Succeeded ||
+		snapshot.Meta.Visits[0].CodexThreadID == "" || workRuns != 1 || !strings.Contains(out.String(), "завершён: succeeded") {
+		t.Fatalf("публичный run не исполнил workflow v2: checks=%d runs=%d meta=%+v out=%q", checks, workRuns, snapshot.Meta, out.String())
+	}
+}
+
+// TestRecurringAgentGraphCreatesSeparateV4Runs проверяет series entry point:
+// каждый повтор регистрирует самостоятельный v4 run и дожидается его terminal,
+// вместо переиспользования visits или случайного возврата к legacy metadata.
+func TestRecurringAgentGraphCreatesSeparateV4Runs(t *testing.T) {
+	root, cwd := filepath.Join(t.TempDir(), "runs"), t.TempDir()
+	workflowPath := filepath.Join(t.TempDir(), "workflow.json")
+	workflowJSON := []byte(`{"version":2,"id":"agent-series","start":["work"],"steps":[{"id":"work","type":"agent","prompt":"Сделай","after":[]}]}`)
+	if err := os.WriteFile(workflowPath, workflowJSON, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := newCLIFakeClient()
+	deps := cliTestDependencies(client, func(context.Context, codex.Connection) error { return nil })
+	deps.waitUntil = func(context.Context, time.Time, func() time.Time, func() (bool, error)) error { return nil }
+	var out bytes.Buffer
+	if err := executeContext(t.Context(), []string{
+		"run", workflowPath, "--cwd", cwd, "--task", "Задача", "--root", root,
+		"--repeat", "immediate", "--max-runs", "2",
+	}, &out, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runIDs := map[string]bool{}
+	for _, entry := range entries {
+		if !entry.IsDir() || entry.Name() == "series" {
+			continue
+		}
+		snapshot, loadErr := runstore.Load(root, entry.Name())
+		if loadErr != nil {
+			t.Fatal(loadErr)
+		}
+		if snapshot.Meta.Version != 4 || snapshot.Meta.RunState != runstore.RunSucceeded ||
+			len(snapshot.Meta.Visits) != 1 || snapshot.Meta.Visits[0].State != scheduler.Succeeded {
+			t.Fatalf("повтор серии записан не как законченный v4 run: %+v", snapshot.Meta)
+		}
+		runIDs[snapshot.Meta.RunID] = true
+	}
+	if len(runIDs) != 2 || strings.Count(out.String(), "runId:") != 2 {
+		t.Fatalf("серия не создала два самостоятельных run: ids=%v out=%q", runIDs, out.String())
+	}
+}
+
 // TestNativeParentStartsRegisteredChild проходит весь внутренний путь задачи #60:
 // параллельные родительские turn вызывают run_child, получают один ID только после
 // публикации runstore, а координатор ждёт дочерний workflow. Точный повтор остаётся
-// идемпотентным, а новый запрос после успеха запускает тот же вход заново.
+// идемпотентным, а новый запрос после успеха запускает тот же вход заново. Child
+// использует workflow v2, поэтому тест одновременно проходит production-связку
+// run_child -> Create -> metadata v4 -> visit-aware coordinator.
 func TestNativeParentStartsRegisteredChild(t *testing.T) {
 	root, cwd := filepath.Join(t.TempDir(), "runs"), t.TempDir()
 	parentPath, childPath := filepath.Join(cwd, "parent.json"), filepath.Join(cwd, "child.json")
 	if err := os.WriteFile(parentPath, []byte(`{"id":"parent","steps":[{"id":"root-1","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-2","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-3","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-4","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-5","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-6","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-7","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]},{"id":"root-8","type":"agent","prompt":"Запусти ребёнка","dependsOn":[]}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(childPath, []byte(`{"id":"child","steps":[{"id":"worker","type":"agent","prompt":"Выполни","dependsOn":[]}]}`), 0o600); err != nil {
+	if err := os.WriteFile(childPath, []byte(`{"version":2,"id":"child","start":["worker"],"steps":[{"id":"worker","type":"agent","prompt":"Выполни","after":[]}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	client := newCLIFakeClient()
@@ -789,7 +893,7 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 	}
 	initialResults := make(chan childCallResult, 8)
 	client.onCommand = func(command codex.Command) error {
-		if strings.Contains(command.Title, "Lawa: child / worker [") {
+		if strings.Contains(command.Title, "Lawa: child / worker #1, итерация 1 [") {
 			workerStartedOnce.Do(func() { close(workerStarted) })
 			<-releaseWorker
 			return nil
@@ -845,7 +949,7 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 		deadline := time.Now().Add(5 * time.Second)
 		for {
 			child, loadErr := runstore.Load(root, firstRunID)
-			if loadErr == nil && child.Meta.Steps[0].State == scheduler.Succeeded {
+			if loadErr == nil && child.Meta.RunState == runstore.RunSucceeded {
 				break
 			}
 			if time.Now().After(deadline) {
@@ -874,7 +978,8 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 	for _, runID := range []string{firstRunID, secondRunID} {
 		child, loadErr := runstore.Load(root, runID)
 		if loadErr != nil || child.Workflow.ID != "child" || child.Meta.ParentRunID == "" ||
-			len(child.Meta.Steps) != 1 || child.Meta.Steps[0].State != scheduler.Succeeded {
+			child.Meta.Version != 4 || child.Meta.RunState != runstore.RunSucceeded ||
+			len(child.Meta.Visits) != 1 || child.Meta.Visits[0].State != scheduler.Succeeded {
 			t.Fatalf("дочерний workflow %s не завершён: %+v, %v", runID, child, loadErr)
 		}
 	}
@@ -1061,13 +1166,14 @@ func TestRunCommandParent(t *testing.T) {
 	}
 }
 
-// TestRunPreflightFailureLeavesNoRun защищает порядок побочных эффектов: при
-// недоступном app-server пользователь может повторить run без мусора и дублей.
+// TestRunPreflightFailureLeavesNoRun защищает порядок побочных эффектов для
+// workflow v2: при недоступном app-server пользователь может повторить run без
+// оставшегося v4 root, start-visits или дублей.
 func TestRunPreflightFailureLeavesNoRun(t *testing.T) {
 	parent, cwd := t.TempDir(), t.TempDir()
 	root := filepath.Join(parent, "runs")
 	workflowPath := filepath.Join(parent, "workflow.json")
-	if err := os.WriteFile(workflowPath, []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`), 0o600); err != nil {
+	if err := os.WriteFile(workflowPath, []byte(`{"version":2,"id":"one","start":["step"],"steps":[{"id":"step","type":"agent","prompt":"Сделай","after":[]}]}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	failure := errors.New("Codex unavailable")
@@ -1119,6 +1225,63 @@ func TestResumeCommand(t *testing.T) {
 	defer client.mu.Unlock()
 	if checks != 1 || client.runs["parent"] != 0 || client.continues["chat-parent"] != 1 || client.runs["child"] != 1 || !strings.Contains(out.String(), "успешно завершён") {
 		t.Fatalf("resume неверно продолжил чат: checks=%d, runs=%v, continues=%v, out=%q", checks, client.runs, client.continues, out.String())
+	}
+}
+
+// TestResumeCommandAgentGraph проверяет продолжение технически прерванного
+// visit через публичную команду. Новый turn обязан остаться в том же чате и
+// увеличить Attempt, а новый Run/visit для повторного исполнения не создаётся.
+func TestResumeCommandAgentGraph(t *testing.T) {
+	root, cwd := t.TempDir(), t.TempDir()
+	snapshot, err := runstore.Create(root, runstore.Input{
+		WorkflowJSON: []byte(`{"version":2,"id":"resume-agent","start":["work"],"steps":[{"id":"work","type":"agent","prompt":"Продолжи","after":[]}]}`),
+		Task:         "Задача", CWD: cwd,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	visitID := snapshot.Meta.Visits[0].VisitID
+	run, err := runstore.OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = run.ReserveVisits([]string{visitID}); err == nil {
+		err = run.UpdateVisit(visitID, scheduler.Unknown, "chat-work", "")
+	}
+	if err == nil {
+		err = run.SetVisitTurn(visitID, "turn-initial")
+	}
+	if err == nil {
+		err = run.UpdateVisit(visitID, scheduler.Cancelled, "chat-work", "turn interrupted")
+	}
+	if closeErr := run.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := newCLIFakeClient()
+	client.inspect["chat-work"] = codex.WorkInterrupted
+	client.latest["chat-work"] = "turn-initial"
+	checks := 0
+	deps := cliTestDependencies(client, func(context.Context, codex.Connection) error { checks++; return nil })
+	var out bytes.Buffer
+	if err = executeContext(t.Context(), []string{"resume", snapshot.Meta.RunID, "--root", root}, &out, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := runstore.Load(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.mu.Lock()
+	continues, newRuns := client.continues["chat-work"], client.runs["work"]
+	client.mu.Unlock()
+	if checks != 1 || continues != 1 || newRuns != 0 || finished.Meta.RunState != runstore.RunSucceeded ||
+		len(finished.Meta.Visits) != 1 || finished.Meta.Visits[0].VisitID != visitID ||
+		finished.Meta.Visits[0].CodexThreadID != "chat-work" || finished.Meta.Visits[0].Attempt != 2 ||
+		finished.Meta.Visits[0].State != scheduler.Succeeded || !strings.Contains(out.String(), "завершён: succeeded") {
+		t.Fatalf("resume v4 создал новую работу или потерял чат: checks=%d continue=%d runs=%d meta=%+v out=%q",
+			checks, continues, newRuns, finished.Meta, out.String())
 	}
 }
 

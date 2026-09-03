@@ -64,11 +64,11 @@ func Evaluate(w workflow.Workflow, states map[string]State) (Plan, error) {
 	if err := w.Validate(); err != nil {
 		return Plan{}, fmt.Errorf("планировщик: %w", err)
 	}
-	// Парсер и валидатор v2 поставляются раньше нового visit-aware runtime. Явный
-	// отказ здесь не позволяет runstore.Create записать v2-run в старом формате и
-	// затем ошибочно исполнить after как пустой legacy dependsOn.
+	// Evaluate обслуживает только legacy DAG. Workflow v2 планирует отдельный
+	// PlanAgentGraph поверх visits; явный отказ не позволяет случайно принять
+	// after/decisions как пустой DAG и запустить все шаги одновременно.
 	if w.EffectiveVersion() == workflow.VersionAgentGraph {
-		return Plan{}, fmt.Errorf("планировщик: runtime workflow version=2 пока не поддерживается")
+		return Plan{}, fmt.Errorf("legacy-планировщик не принимает workflow version=2")
 	}
 	if len(states) != len(w.Steps) {
 		return Plan{}, fmt.Errorf("планировщик: нужен снимок ровно для всех %d шагов; состояний: %d", len(w.Steps), len(states))
