@@ -13,6 +13,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // DefaultRefreshInterval ограничивает паузу между повторными снимками активного
@@ -105,14 +106,29 @@ func (c ProductionClient) OpenObserver(ctx context.Context, cwd string) (Observe
 	return codex.OpenObserver(ctx, codex.Connection{Executable: c.Executable, CWD: cwd, Stderr: c.Stderr, Directory: c.Directory})
 }
 
+// DecisionRouteStatus — статический разрешённый выход decision-кубика. Порядок
+// элементов в StepStatus детерминирован ключом, To сохраняет порядок workflow.
+type DecisionRouteStatus struct {
+	Key    string
+	To     []string
+	Finish *workflow.TerminalOutcome
+}
+
 // StepStatus — компактная строка отчёта без prompt, task.md и содержимого памяти.
 type StepStatus struct {
 	ID, ThreadID, CodexThreadID string
 	State                       scheduler.State
 	DependsOn                   []string
-	// VisitID заполнен только для meta v4. ID при этом остаётся
+	// VisitID и следующие durable-поля заполнены только для meta v4. ID остаётся
 	// логическим stepId, чтобы старые потребители статуса не теряли подписи.
-	VisitID string
+	VisitID                   string
+	Visit, Iteration, Attempt int
+	TechnicalError            string
+	Trigger                   runstore.VisitTrigger
+	Decision                  *runstore.DecisionRecord
+	DecisionRoutes            []DecisionRouteStatus
+	MaxVisits                 *int
+	OnLimit                   *workflow.TerminalOutcome
 }
 
 // Status — целостный снимок для терминала или другого интерфейса. Waiting
@@ -125,8 +141,10 @@ type Status struct {
 	Complete           bool
 	// RunState является авторитетным итогом meta v4. Terminal отделён от
 	// Complete: failed agent-graph завершён, но не является успешным.
-	RunState runstore.RunState
-	Terminal bool
+	RunState    runstore.RunState
+	StopReason  string
+	StopVisitID string
+	Terminal    bool
 }
 
 // Ticker скрывает реальное время за минимальной границей. Production использует
@@ -782,17 +800,39 @@ func currentStatus(run *runstore.LockedRun) (Status, string, error) {
 	}
 	status := Status{RunID: snapshot.Meta.RunID, WorkflowID: snapshot.Workflow.ID}
 	if snapshot.Meta.Version == 4 {
-		status.RunState = snapshot.Meta.RunState
+		status.RunState, status.StopReason, status.StopVisitID = snapshot.Meta.RunState, snapshot.Meta.StopReason, snapshot.Meta.StopVisitID
 		status.Terminal = snapshot.Meta.RunState != runstore.RunRunning
 		status.Complete = snapshot.Meta.RunState == runstore.RunSucceeded
+		steps := make(map[string]workflow.Step, len(snapshot.Workflow.Steps))
+		for _, step := range snapshot.Workflow.Steps {
+			steps[step.ID] = step
+		}
 		var signature strings.Builder
 		for _, visit := range snapshot.Meta.Visits {
+			step := steps[visit.StepID]
+			trigger := visit.Trigger
+			trigger.SourceVisitIDs = append([]string(nil), trigger.SourceVisitIDs...)
+			decision := cloneStatusDecision(visit.Decision)
+			maxVisits, onLimit := cloneOptionalInt(step.MaxVisits), cloneOptionalOutcome(step.OnLimit)
+			routes := statusDecisionRoutes(step)
 			status.Steps = append(status.Steps, StepStatus{
-				ID: visit.StepID, VisitID: visit.VisitID, CodexThreadID: visit.CodexThreadID, State: visit.State,
+				ID: visit.StepID, VisitID: visit.VisitID, CodexThreadID: visit.CodexThreadID,
+				State: visit.State, Visit: visit.Visit, Iteration: visit.Iteration, Attempt: visit.Attempt,
+				TechnicalError: visit.TechnicalError, Trigger: trigger, Decision: decision,
+				DecisionRoutes: routes, MaxVisits: maxVisits, OnLimit: onLimit,
 			})
-			fmt.Fprintf(&signature, "%q/%q=%q:%q:%q;", visit.StepID, visit.VisitID, visit.State, visit.CodexThreadID, visit.TurnID)
+			fmt.Fprintf(&signature, "%q/%q=%q:%q:%q:%d:%d:%d:trigger=%q/%q/%q:error=%q:max=%s:limit=%s;",
+				visit.StepID, visit.VisitID, visit.State, visit.CodexThreadID, visit.TurnID, visit.Visit, visit.Iteration, visit.Attempt,
+				trigger.Kind, trigger.SourceVisitIDs, trigger.DecisionKey, visit.TechnicalError, optionalIntText(maxVisits), optionalOutcomeText(onLimit))
+			if decision != nil {
+				fmt.Fprintf(&signature, "decision=%q:%q:%q:%s:%q:%t:%q;", decision.Key, decision.Explanation, decision.To,
+					optionalOutcomeText(decision.Finish), decision.Skipped, decision.Applied, decision.Error)
+			}
+			for _, route := range routes {
+				fmt.Fprintf(&signature, "route=%q:%q:%s;", route.Key, route.To, optionalOutcomeText(route.Finish))
+			}
 		}
-		fmt.Fprintf(&signature, "run=%s", status.RunState)
+		fmt.Fprintf(&signature, "run=%s;stop=%s:%s", status.RunState, status.StopVisitID, status.StopReason)
 		return status, signature.String(), nil
 	}
 
@@ -817,4 +857,62 @@ func currentStatus(run *runstore.LockedRun) (Status, string, error) {
 	status.Waiting, status.Complete = plan.Waiting, plan.Complete
 	fmt.Fprintf(&signature, "waiting=%s;complete=%t", strings.Join(plan.Waiting, ","), plan.Complete)
 	return status, signature.String(), nil
+}
+
+// cloneStatusDecision не отдаёт Notify срезы и указатель исходного Snapshot:
+// обработчик статуса может хранить или менять значение после возврата.
+func cloneStatusDecision(source *runstore.DecisionRecord) *runstore.DecisionRecord {
+	if source == nil {
+		return nil
+	}
+	result := *source
+	result.To = append([]string(nil), source.To...)
+	result.Skipped = append([]string(nil), source.Skipped...)
+	result.Finish = cloneOptionalOutcome(source.Finish)
+	return &result
+}
+
+// statusDecisionRoutes строит стабильную копию статических веток для Notify.
+func statusDecisionRoutes(step workflow.Step) []DecisionRouteStatus {
+	keys := sortedAgentDecisionKeys(step.Decisions)
+	result := make([]DecisionRouteStatus, 0, len(keys))
+	for _, key := range keys {
+		route := step.Decisions[key]
+		result = append(result, DecisionRouteStatus{Key: key, To: append([]string(nil), route.To...), Finish: cloneOptionalOutcome(route.Finish)})
+	}
+	return result
+}
+
+// cloneOptionalInt отделяет mutable указатель снимка от потребителя статуса.
+func cloneOptionalInt(source *int) *int {
+	if source == nil {
+		return nil
+	}
+	value := *source
+	return &value
+}
+
+// cloneOptionalOutcome копирует optional outcome для той же границы владения.
+func cloneOptionalOutcome(source *workflow.TerminalOutcome) *workflow.TerminalOutcome {
+	if source == nil {
+		return nil
+	}
+	value := *source
+	return &value
+}
+
+// optionalIntText даёт детерминированное значение без адреса указателя.
+func optionalIntText(value *int) string {
+	if value == nil {
+		return ""
+	}
+	return fmt.Sprint(*value)
+}
+
+// optionalOutcomeText даёт детерминированную сигнатуру terminal outcome.
+func optionalOutcomeText(value *workflow.TerminalOutcome) string {
+	if value == nil {
+		return ""
+	}
+	return string(*value)
 }
