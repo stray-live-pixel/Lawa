@@ -13,9 +13,10 @@ import (
 type AgentTriggerKind string
 
 const (
-	AgentTriggerStart    AgentTriggerKind = "start"
-	AgentTriggerAfter    AgentTriggerKind = "after"
-	AgentTriggerDecision AgentTriggerKind = "decision"
+	AgentTriggerStart           AgentTriggerKind = "start"
+	AgentTriggerAfter           AgentTriggerKind = "after"
+	AgentTriggerDecision        AgentTriggerKind = "decision"
+	AgentTriggerDecisionSkipped AgentTriggerKind = "decision_skipped"
 )
 
 // AgentTriggerView — минимальная проекция durable trigger, необходимая чистому
@@ -48,13 +49,15 @@ type AgentVisitView struct {
 	Decision  *AgentDecisionView
 }
 
-// AgentActivation полностью описывает новое Pending-посещение, кроме его
-// случайного VisitID. Persistence-слой генерирует ID, создаёт файл памяти и одним
-// атомарным commit сохраняет все активации вместе с применёнными решениями.
+// AgentActivation полностью описывает новое посещение, кроме его случайного
+// VisitID. Нулевой InitialState означает прежний Pending; Skipped позволяет
+// отдельному pure-плану сохранить недостижимую ветку без запуска агента.
+// Persistence-слой генерирует ID и атомарно сохраняет активации с решениями.
 type AgentActivation struct {
-	StepID    string
-	Iteration int
-	Trigger   AgentTriggerView
+	StepID       string
+	Iteration    int
+	Trigger      AgentTriggerView
+	InitialState State
 }
 
 // AgentTerminal — итог всего run. CauseVisitID связывает failed frontier, fatal
