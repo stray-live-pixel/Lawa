@@ -317,16 +317,16 @@ func TestLegacyRuntimeEventRejectsVisitID(t *testing.T) {
 func TestFormatEventEscapesTerminalControls(t *testing.T) {
 	event := RuntimeEvent{
 		Time: time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC), Kind: "error\x1b[2J",
-		StepID: "step\x07", ThreadID: "thread\u009b", Message: "первая\nвторая",
+		StepID: "step\x07", ThreadID: "thread\u009b", Message: "первая\nвторая\u2028третья\u2029четвёртая",
 		Usage: map[string]int64{"tokens\x1b]52;c;secret\x07": 1},
 	}
 	formatted := FormatEvent(event)
-	for _, forbidden := range []string{"\x1b", "\x07", "\u009b", "\n"} {
+	for _, forbidden := range []string{"\x1b", "\x07", "\u009b", "\n", "\u2028", "\u2029"} {
 		if strings.Contains(formatted, forbidden) {
 			t.Fatalf("FormatEvent оставил управляющий символ %q: %q", forbidden, formatted)
 		}
 	}
-	for _, visible := range []string{`\u001B[2J`, `step\u0007`, `thread\u009B`, `первая\u000Aвторая`, `\u001B]52;c;secret\u0007`} {
+	for _, visible := range []string{`\u001B[2J`, `step\u0007`, `thread\u009B`, `первая\u000Aвторая\u2028третья\u2029четвёртая`, `\u001B]52;c;secret\u0007`} {
 		if !strings.Contains(formatted, visible) {
 			t.Fatalf("FormatEvent потерял видимое экранирование %q: %q", visible, formatted)
 		}

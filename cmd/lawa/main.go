@@ -38,8 +38,8 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
       Сверить сохранённые thread и продолжить interrupted-кубики.
   lawa status <run-id>
       Показать состояния, thread/turn, процесс и последнюю активность кубиков.
-  lawa logs <run-id> [step-id] [--follow]
-      Показать краткий журнал событий всего run или одного кубика.
+  lawa logs <run-id> [step-id] [--visit <visit-id>] [--follow]
+      Показать журнал всего run, логического шага или точного посещения v2.
   lawa serve [--root <путь>] [--listen <адрес>]
       Запустить read-only dashboard; по умолчанию http://127.0.0.1:60800.
   lawa series-status <series-id>
@@ -80,6 +80,8 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
 
 Параметры status/logs:
   --root <путь>                То же хранилище run.
+  --visit <visit-id>           Для logs: одно точное посещение workflow v2;
+                               взаимоисключающе с позиционным step-id.
   --follow                     Для logs: ждать новые события до завершения или сигнала.
 
 Параметры serve:
