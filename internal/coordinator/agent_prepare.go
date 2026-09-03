@@ -20,6 +20,16 @@ import (
 
 const chooseDecisionToolName = "choose_decision"
 
+var errAgentRunBecameTerminal = errors.New("agent-graph завершился во время подготовки")
+
+// agentTerminalPreparationError отделяет управляющий terminal-сигнал от ошибки
+// освобождения capacity. Execution обязан завершить и прервать active turn, а
+// затем присоединить Cleanup к итоговой диагностике, не маскируя её sentinel.
+type agentTerminalPreparationError struct{ Cleanup error }
+
+func (e *agentTerminalPreparationError) Error() string { return errAgentRunBecameTerminal.Error() }
+func (e *agentTerminalPreparationError) Unwrap() error { return errAgentRunBecameTerminal }
+
 // agentWorkKind отделяет создание нового Codex-чата от нового turn уже
 // сохранённого чата. Оба вида работы занимают одинаковый slot параллельности и
 // адресуются visitId; stepId после появления циклов перестаёт быть уникальным.
@@ -167,9 +177,28 @@ func prepareAgentVisits(
 		}
 	}
 	if err = run.ReserveVisits(reserved); err != nil {
+		releaseErr := releaseAgentWork(prepared.Work)
+		if errors.Is(err, runstore.ErrAgentDecisionPoisoned) {
+			advanced, advanceErr := run.AdvanceAgentGraph()
+			if advanceErr != nil {
+				return agentPreparation{}, errors.Join(
+					fmt.Errorf("координатор agent-graph: завершить конфликтующее решение: %w", advanceErr), releaseErr,
+				)
+			}
+			if advanced.Snapshot.Meta.RunState == runstore.RunRunning {
+				return agentPreparation{}, errors.Join(
+					errors.New("координатор agent-graph: planner не завершил конфликтующее решение"), releaseErr,
+				)
+			}
+			return agentPreparation{}, &agentTerminalPreparationError{Cleanup: releaseErr}
+		}
+		latest, loadErr := run.Load()
+		if loadErr == nil && latest.Meta.RunState != runstore.RunRunning {
+			return agentPreparation{}, &agentTerminalPreparationError{Cleanup: releaseErr}
+		}
 		return agentPreparation{}, errors.Join(
 			fmt.Errorf("координатор agent-graph: зарезервировать посещения: %w", err),
-			releaseAgentWork(prepared.Work),
+			releaseErr, loadErr,
 		)
 	}
 	return prepared, nil

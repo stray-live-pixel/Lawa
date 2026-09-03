@@ -13,16 +13,29 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
+// ErrAgentDecisionPoisoned сообщает coordinator, что после последнего planning
+// commit появился конфликт решения. Новую работу резервировать нельзя: сначала
+// AdvanceAgentGraph обязан атомарно сохранить terminal outcome.
+var ErrAgentDecisionPoisoned = errors.New("agent-graph содержит конфликтующее решение")
+
 // ReserveVisits атомарно фиксирует намерение запустить всю волну Pending-visits.
 // Метод принимает только visitId: stepId неоднозначен после первого прохода
 // цикла. До успешной публикации metadata сетевые запросы делать нельзя.
 func (r *LockedRun) ReserveVisits(visitIDs []string) error {
 	return r.mutateVisits((*os.File).Sync, func(s *Snapshot) (bool, error) {
-		if len(visitIDs) == 0 {
-			return false, nil
-		}
 		if s.Meta.RunState != RunRunning {
 			return false, fmt.Errorf("завершённый run не принимает новые посещения")
+		}
+		// Decision callback может завершиться между AdvanceAgentGraph и этим
+		// commit. Проверка выполняется даже для волны одних continuation: иначе
+		// пустой список позволил бы отправить новый turn после durable poison.
+		for _, visit := range s.Meta.Visits {
+			if visit.Decision != nil && visit.Decision.Error != "" {
+				return false, ErrAgentDecisionPoisoned
+			}
+		}
+		if len(visitIDs) == 0 {
+			return false, nil
 		}
 		indices := visitIndices(s.Meta.Visits)
 		seen := make(map[string]bool, len(visitIDs))
@@ -191,9 +204,11 @@ func (r *LockedRun) commitDecision(visitID, chat, turnID, key, explanation, call
 		}
 		conflict := fmt.Errorf("посещение %q уже сохранило другое решение", visitID)
 		// После применения или terminal нельзя менять даже диагностику. До этой
-		// границы сохраняем безопасный poison marker, чтобы resume не применил
+		// границы одним commit сохраняем poison marker, чтобы resume не применил
 		// первый маршрут после обнаруженного второго противоречивого tool call.
-		if visitTerminal(visit.State) || existing.Applied || existing.Error != "" {
+		// RunState меняет planner: callback не вправе завершить run, пока соседний
+		// уже созданный Codex-turn ещё сохраняет свой ID для адресного interrupt.
+		if s.Meta.RunState != RunRunning || visitTerminal(visit.State) || existing.Applied || existing.Error != "" {
 			return existing, conflict
 		}
 		existing.Error = "агент повторно вызвал решение с другим callId или payload"

@@ -127,8 +127,16 @@ func TestCommitDecisionIdempotency(t *testing.T) {
 		t.Fatal("второе противоречивое решение принято")
 	}
 	stored, err := run.Load()
-	if err != nil || stored.Meta.Visits[0].Decision.Key != "go" || stored.Meta.Visits[0].Decision.To[0] != "work" || stored.Meta.Visits[0].Decision.Error == "" {
+	if err != nil || stored.Meta.Visits[0].Decision.Key != "go" || stored.Meta.Visits[0].Decision.To[0] != "work" || stored.Meta.Visits[0].Decision.Error == "" ||
+		stored.Meta.RunState != RunRunning || stored.Meta.StopVisitID != "" {
 		t.Fatalf("первый маршрут или poison marker потерян: %+v, %v", stored.Meta.Visits[0].Decision, err)
+	}
+	if err := run.ReserveVisits(nil); !errors.Is(err, ErrAgentDecisionPoisoned) {
+		t.Fatalf("poison не остановил пустую волну continuation: %v", err)
+	}
+	advanced, err := run.AdvanceAgentGraph()
+	if err != nil || advanced.Snapshot.Meta.RunState != RunFailed || advanced.Snapshot.Meta.StopVisitID != visitID {
+		t.Fatalf("planner не сохранил terminal poison: %+v, %v", advanced.Snapshot.Meta, err)
 	}
 	if err := run.UpdateVisit(visitID, scheduler.Succeeded, "chat", ""); err != nil {
 		t.Fatalf("технический результат poisoned turn не сохранён: %v", err)
