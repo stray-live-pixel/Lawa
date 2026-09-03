@@ -110,6 +110,9 @@ type StepStatus struct {
 	ID, ThreadID, CodexThreadID string
 	State                       scheduler.State
 	DependsOn                   []string
+	// VisitID заполнен только для meta v4. ID при этом остаётся
+	// логическим stepId, чтобы старые потребители статуса не теряли подписи.
+	VisitID string
 }
 
 // Status — целостный снимок для терминала или другого интерфейса. Waiting
@@ -120,6 +123,10 @@ type Status struct {
 	Waiting            []string
 	WaitingForCapacity []string
 	Complete           bool
+	// RunState является авторитетным итогом meta v4. Terminal отделён от
+	// Complete: failed agent-graph завершён, но не является успешным.
+	RunState runstore.RunState
+	Terminal bool
 }
 
 // Ticker скрывает реальное время за минимальной границей. Production использует
@@ -167,7 +174,7 @@ type Options struct {
 
 // ErrRunUnsuccessful отличает терминальный failed/interrupted от сбоя самого
 // координатора. В обоих случаях серия останавливается, но причина остаётся явной.
-var ErrRunUnsuccessful = errors.New("run завершён неуспешно; серия остановлена по политике stop-on-failure")
+var ErrRunUnsuccessful = errors.New("run завершён неуспешно")
 
 // Outcome сообщает управляющему циклу, достиг ли сохранённый run терминала.
 // Ошибка ExecuteWithOutcome описывает причину остановки координатора, но сама по
@@ -278,6 +285,9 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 	initial, err := run.Load()
 	if err != nil {
 		return Outcome{}, fmt.Errorf("координатор: прочитать запуск: %w", err)
+	}
+	if initial.Meta.Version == 4 {
+		return executeAgentGraph(ctx, run, options, initial)
 	}
 	observer := &sharedObserver{ctx: ctx, client: options.Client, cwd: initial.Meta.CWD}
 	// Закрытие наблюдения регистрируется до defer активных turn ниже. На Ctrl+C
@@ -426,6 +436,9 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 // Неуспешный шаг является терминалом только для автоматической серии; обычный
 // run оставляет тот же чат доступным для ручного продолжения.
 func terminalOutcome(status Status, returnOnFailure bool) Outcome {
+	if status.RunState != "" {
+		return Outcome{Terminal: status.Terminal, Successful: status.RunState == runstore.RunSucceeded}
+	}
 	if status.Complete {
 		return Outcome{Terminal: true, Successful: true}
 	}
@@ -767,8 +780,23 @@ func currentStatus(run *runstore.LockedRun) (Status, string, error) {
 	if err != nil {
 		return Status{}, "", fmt.Errorf("координатор: прочитать статус запуска: %w", err)
 	}
-	states := make(map[string]scheduler.State, len(snapshot.Meta.Steps))
 	status := Status{RunID: snapshot.Meta.RunID, WorkflowID: snapshot.Workflow.ID}
+	if snapshot.Meta.Version == 4 {
+		status.RunState = snapshot.Meta.RunState
+		status.Terminal = snapshot.Meta.RunState != runstore.RunRunning
+		status.Complete = snapshot.Meta.RunState == runstore.RunSucceeded
+		var signature strings.Builder
+		for _, visit := range snapshot.Meta.Visits {
+			status.Steps = append(status.Steps, StepStatus{
+				ID: visit.StepID, VisitID: visit.VisitID, CodexThreadID: visit.CodexThreadID, State: visit.State,
+			})
+			fmt.Fprintf(&signature, "%q/%q=%q:%q:%q;", visit.StepID, visit.VisitID, visit.State, visit.CodexThreadID, visit.TurnID)
+		}
+		fmt.Fprintf(&signature, "run=%s", status.RunState)
+		return status, signature.String(), nil
+	}
+
+	states := make(map[string]scheduler.State, len(snapshot.Meta.Steps))
 	dependencies := make(map[string][]string, len(snapshot.Workflow.Steps))
 	for _, step := range snapshot.Workflow.Steps {
 		dependencies[step.ID] = step.DependsOn

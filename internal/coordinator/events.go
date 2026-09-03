@@ -14,9 +14,21 @@ import (
 // appendProcessEvent переводит жизненный цикл дочернего App Server в устойчивый
 // журнал Lawa. Командная строка, env и stderr намеренно не копируются.
 func appendProcessEvent(run *runstore.LockedRun, stepID, threadID, turnID string, process codex.ProcessEvent) error {
+	return appendScopedProcessEvent(run, "", stepID, threadID, turnID, process)
+}
+
+// appendAgentProcessEvent сохраняет тот же безопасный lifecycle, но связывает
+// его с конкретным посещением v4. Один stepId может встретиться многократно,
+// поэтому журнал нового runtime нельзя адресовать только логическим кубиком.
+func appendAgentProcessEvent(run *runstore.LockedRun, visitID, stepID, threadID, turnID string, process codex.ProcessEvent) error {
+	return appendScopedProcessEvent(run, visitID, stepID, threadID, turnID, process)
+}
+
+// appendScopedProcessEvent — общая запись lifecycle для legacy и v4 scope.
+func appendScopedProcessEvent(run *runstore.LockedRun, visitID, stepID, threadID, turnID string, process codex.ProcessEvent) error {
 	kind := "process_" + process.Kind
 	return run.AppendEvent(runstore.RuntimeEvent{
-		Time: process.Time, StepID: stepID, ThreadID: threadID, TurnID: turnID,
+		Time: process.Time, VisitID: visitID, StepID: stepID, ThreadID: threadID, TurnID: turnID,
 		Kind: kind, PID: process.PID, ExitCode: process.ExitCode, Signal: process.Signal,
 	})
 }
@@ -29,6 +41,17 @@ func appendProcessEvent(run *runstore.LockedRun, stepID, threadID, turnID string
 // секреты из рабочего процесса. Сырые reasoning, аргументы/result инструментов
 // и неизвестные payload не сериализуются даже частично.
 func appendCodexEvent(run *runstore.LockedRun, stepID, threadID, turnID string, event codex.Event) error {
+	return appendScopedCodexEvent(run, "", stepID, threadID, turnID, event)
+}
+
+// appendAgentCodexEvent добавляет visitId к нормализованному событию v4,
+// сохраняя один фильтр содержимого для обоих форматов журнала.
+func appendAgentCodexEvent(run *runstore.LockedRun, visitID, stepID, threadID, turnID string, event codex.Event) error {
+	return appendScopedCodexEvent(run, visitID, stepID, threadID, turnID, event)
+}
+
+// appendScopedCodexEvent нормализует один протокольный event до durable scope.
+func appendScopedCodexEvent(run *runstore.LockedRun, visitID, stepID, threadID, turnID string, event codex.Event) error {
 	if event.Method == "item/reasoning/textDelta" || event.Method == "item/reasoning/delta" {
 		return nil
 	}
@@ -46,7 +69,7 @@ func appendCodexEvent(run *runstore.LockedRun, stepID, threadID, turnID string, 
 	if err != nil {
 		return fmt.Errorf("нормализовать событие %s: %w", event.Method, err)
 	}
-	normalized := runstore.RuntimeEvent{StepID: stepID, ThreadID: threadID, TurnID: turnID}
+	normalized := runstore.RuntimeEvent{VisitID: visitID, StepID: stepID, ThreadID: threadID, TurnID: turnID}
 	switch event.Method {
 	case "turn/started":
 		normalized.Kind, normalized.State = "turn_started", "running"
