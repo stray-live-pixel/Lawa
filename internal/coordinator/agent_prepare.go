@@ -276,7 +276,8 @@ func buildAgentPrompt(snapshot runstore.Snapshot, step workflow.Step, visit runs
 
 	var history strings.Builder
 	for _, saved := range snapshot.Meta.Visits {
-		if saved.VisitID == visit.VisitID || causal[saved.VisitID] || saved.State != scheduler.Succeeded && saved.State != scheduler.Failed {
+		if saved.VisitID == visit.VisitID || causal[saved.VisitID] ||
+			saved.State != scheduler.Succeeded && saved.State != scheduler.Failed && saved.State != scheduler.Skipped {
 			continue
 		}
 		writeAgentVisitContext(&history, runDir, saved)
