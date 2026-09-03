@@ -33,8 +33,13 @@ const (
 	// Cancelled не удовлетворяет зависимость и не запускает автоматический повтор.
 	// Явный resume может продолжить тот же чат этого legacy-шага или v2 visit.
 	Cancelled State = "cancelled"
+	// Skipped — терминальное состояние только посещения workflow v2. Оно означает,
+	// что агент не запускался: до этого кубика не дошёл выбранный маршрут либо все
+	// его after-источники тоже были пропущены. Legacy dependsOn это состояние не
+	// принимает, чтобы изменение v2 не меняло контракт сохранённых DAG.
+	Skipped State = "skipped"
 	// Succeeded — единственное состояние, удовлетворяющее legacy dependsOn. В v2
-	// технический after принимает оба терминальных состояния: Succeeded и Failed.
+	// технический after принимает Succeeded, Failed и Skipped.
 	Succeeded State = "succeeded"
 )
 
