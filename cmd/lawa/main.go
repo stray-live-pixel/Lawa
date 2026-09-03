@@ -35,9 +35,9 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
   lawa run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>)
       Создать run, запустить готовые кубики и наблюдать их до результата.
   lawa resume <run-id>
-      Сверить сохранённые thread и продолжить interrupted-кубики.
+      Сверить thread и продолжить interrupted-кубики / cancelled-посещения v2.
   lawa status <run-id>
-      Показать состояния, thread/turn, процесс и последнюю активность кубиков.
+      Показать состояния и активность; для v2 — visits, решения и причину итога.
   lawa logs <run-id> [step-id] [--visit <visit-id>] [--follow]
       Показать журнал всего run, логического шага или точного посещения v2.
   lawa serve [--root <путь>] [--listen <адрес>]
@@ -47,7 +47,7 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
   lawa series-stop <series-id>
       Запретить будущие run серии; уже работающий run спокойно завершается.
   lawa validate <workflow.json>
-      Проверить поля, ссылки и отсутствие циклов без создания run.
+      Проверить версию, ссылки и безопасность маршрутов/циклов без создания run.
   lawa skill
       Вывести готовый SKILL.md для установки скилла /lawa.
   lawa version
@@ -98,7 +98,8 @@ status, logs, serve, validate, skill, version, update и help не запуск�
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
-Resume отправляет continue только interrupted-чатам; failed продолжите вручную.
+Resume отправляет continue только interrupted-чатам и cancelled-посещениям v2;
+технически failed visit не повторяется, но может быть источником v2 after.
 Run и resume печатают краткую статистику и VS Code-ссылку не чаще раза в 5 минут;
 первый и финальный снимки выводятся сразу. Подробный workflow-status.md и схема
 обновляются локально при изменениях и не реже раза в минуту.

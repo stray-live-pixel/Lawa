@@ -27,11 +27,14 @@ const (
 	Running State = "running"
 	// WaitingForApproval означает ожидание пользователя, а не успешное завершение.
 	WaitingForApproval State = "waiting_for_approval"
-	// Failed оставляет зависимые шаги в ожидании ручного продолжения того же чата.
+	// Failed оставляет legacy dependsOn в ожидании. Для v2 это терминальный visit,
+	// который может удовлетворить технический after, но сам не создаёт route.
 	Failed State = "failed"
-	// Cancelled, как и ошибка, не завершает workflow и не запускает автоматический повтор.
+	// Cancelled не удовлетворяет зависимость и не запускает автоматический повтор.
+	// Явный resume может продолжить тот же чат этого legacy-шага или v2 visit.
 	Cancelled State = "cancelled"
-	// Succeeded — единственное состояние, удовлетворяющее зависимость.
+	// Succeeded — единственное состояние, удовлетворяющее legacy dependsOn. В v2
+	// технический after принимает оба терминальных состояния: Succeeded и Failed.
 	Succeeded State = "succeeded"
 )
 

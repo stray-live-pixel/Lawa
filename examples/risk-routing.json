@@ -1,0 +1,42 @@
+{
+  "version": 2,
+  "id": "risk-routing",
+  "start": ["scan"],
+  "steps": [
+    {
+      "id": "scan",
+      "type": "agent",
+      "prompt": "Исследуй изменение и сохрани в памяти только проверенные признаки риска, источники и техническую диагностику. Не выбирай маршрут самостоятельно.",
+      "after": []
+    },
+    {
+      "id": "risk-checker",
+      "type": "agent",
+      "prompt": "Оцени память и технический статус scan. Если существенного риска нет, выбери safe. Если нужен углублённый анализ, выбери risk. Если данных недостаточно и безопасный вывод невозможен, выбери cannot_assess. Вызови choose_decision ровно один раз и объясни основание.",
+      "after": ["scan"],
+      "decisions": {
+        "safe": {"finish": "succeeded"},
+        "risk": {"to": ["security-audit", "impact-audit"]},
+        "cannot_assess": {"finish": "failed"}
+      }
+    },
+    {
+      "id": "security-audit",
+      "type": "agent",
+      "prompt": "Проверь технические и эксплуатационные угрозы найденного риска. Сохрани доказательства и рекомендации в памяти.",
+      "after": []
+    },
+    {
+      "id": "impact-audit",
+      "type": "agent",
+      "prompt": "Независимо оцени пользовательское влияние найденного риска и сохрани выводы в памяти.",
+      "after": []
+    },
+    {
+      "id": "risk-summary",
+      "type": "agent",
+      "prompt": "Собери итог по памяти security-audit и impact-audit, явно отделяя факты, ограничения и рекомендуемые действия.",
+      "after": ["security-audit", "impact-audit"]
+    }
+  ]
+}

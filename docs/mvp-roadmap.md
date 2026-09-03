@@ -5,18 +5,22 @@
 
 ## Реализовано
 
-- строгий JSON workflow и проверка DAG;
-- атомарное резервирование доступной части готовой волны;
-- отдельный App Server и thread на кубик;
+- взаимоисключающие JSON-контракты: legacy DAG и agent-граф version 2;
+- агентные решения через `choose_decision`, статические route/fan-out/finish и
+  диагностируемый отказ при отсутствующем или конфликтующем выборе;
+- технический `after`, ограниченные decision-циклы и отдельная история visits;
+- атомарное резервирование доступной части готовой волны или Pending-visits;
+- отдельный App Server и thread на исполнение: legacy-шаг или visit v2;
 - параллельный запуск независимых кубиков;
 - сохраняемый общий `--max-parallel` для всех процессов одного root;
 - сохранение thread/turn до ожидания результата;
 - reconcile через read-only `thread/read`;
 - точечный `turn/interrupt` и безопасный `resume`;
-- память кубиков и локальные Markdown/PlantUML-отчёты;
+- память исполнений и локальные Markdown/PlantUML-отчёты с решениями, ветками,
+  итерациями, лимитом и причиной остановки;
 - повторяющиеся серии immediate/after/cron;
 - связанные run через `parentRunId`;
-- `status`, нормализованные `logs` и read-only dashboard;
+- `status`, visit-aware `logs` и read-only dashboard;
 - PID/exit/signal и безопасные lifecycle-события;
 - установка и обновление бинарника и скилла на macOS/Linux.
 

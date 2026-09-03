@@ -39,7 +39,7 @@ func TestCLI(t *testing.T) {
 		want string
 	}{
 		{"без аргументов", nil, "Команды:"},
-		{"справка", []string{"help"}, "Команды:"},
+		{"справка", []string{"help"}, "для v2 — visits, решения"},
 		{"короткая справка", []string{"-h"}, "Команды:"},
 		{"длинная справка", []string{"--help"}, "Команды:"},
 		{"инструкция скилла", []string{"skill"}, "# Lawa"},
@@ -314,9 +314,17 @@ func TestSkillInstruction(t *testing.T) {
 		"Не добавляй `--mode`",
 		"lawa status <run-id>",
 		"lawa logs <run-id>",
+		"--visit <visit-id>",
 		"сырые rollout Codex",
 		"lawa resume <run-id>",
 		"Исторические app-native run",
+		"version: 2",
+		"`start`",
+		"`after`",
+		"`decisions`",
+		"choose_decision",
+		"maxVisits",
+		"onLimit",
 		"пишет только собственный файл памяти",
 	} {
 		if !strings.Contains(skillInstruction, fragment) {
