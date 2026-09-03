@@ -94,8 +94,9 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 	if err := s.Workflow.Validate(); err != nil {
 		return fmt.Errorf("workflow v4: %w", err)
 	}
+	hasLimitProof := m.StopLimitStepID != "" || m.StopLimitTrigger != nil || m.StopLimitIteration != 0
 	if m.RunState != RunRunning && m.RunState != RunSucceeded && m.RunState != RunFailed ||
-		m.RunState == RunRunning && (m.StopReason != "" || m.StopVisitID != "") ||
+		m.RunState == RunRunning && (m.StopReason != "" || m.StopVisitID != "" || hasLimitProof) ||
 		m.RunState != RunRunning && !safeStoredText(m.StopReason, true) {
 		return fmt.Errorf("runState не соответствует безопасной причине остановки")
 	}
@@ -119,6 +120,9 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		numbers[visit.StepID]++
 		if visit.Visit != numbers[visit.StepID] || visit.Iteration < 1 || visit.Attempt < 0 {
 			return fmt.Errorf("посещение %q: нарушена нумерация visit/iteration/attempt", visit.VisitID)
+		}
+		if step.MaxVisits != nil && visit.Visit > *step.MaxVisits {
+			return fmt.Errorf("посещение %q превышает maxVisits=%d шага %q", visit.VisitID, *step.MaxVisits, visit.StepID)
 		}
 		if err := validateVisitState(visit, chats); err != nil {
 			return fmt.Errorf("посещение %q: %w", visit.VisitID, err)
@@ -171,14 +175,62 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 	if matchingFinishID != "" && m.StopVisitID != matchingFinishID {
 		return fmt.Errorf("terminal finish требует свой visitId как причину остановки")
 	}
+	limitTerminal := false
+	if hasLimitProof {
+		if m.StopLimitStepID == "" || m.StopLimitTrigger == nil || m.StopLimitIteration < 1 {
+			return fmt.Errorf("остановка по maxVisits требует полный trigger и iteration")
+		}
+		limitedStep, exists := steps[m.StopLimitStepID]
+		if !exists || limitedStep.MaxVisits == nil {
+			return fmt.Errorf("stopLimitStepId не ссылается на шаг с maxVisits")
+		}
+		if !hasStopVisit || stopVisit.StepID != limitedStep.ID || stopVisit.Visit != *limitedStep.MaxVisits || numbers[limitedStep.ID] != *limitedStep.MaxVisits {
+			return fmt.Errorf("остановка по maxVisits требует последний разрешённый visit ограниченного шага")
+		}
+		outcome, expected := workflow.OutcomeFailed, RunFailed
+		if limitedStep.OnLimit != nil {
+			outcome = *limitedStep.OnLimit
+		}
+		if outcome == workflow.OutcomeSucceeded {
+			expected = RunSucceeded
+		}
+		if m.RunState != expected {
+			return fmt.Errorf("onLimit шага %q не совпадает с runState", limitedStep.ID)
+		}
+		if matchingFinishID != "" {
+			return fmt.Errorf("остановка по maxVisits не может одновременно содержать applied finish")
+		}
+		// Planner допускает route/after/limit только после закрытия текущей
+		// decision-wave. Это свойство монотонно после terminal: новые visits и
+		// turns запрещены, а незавершённые внешние Result могут лишь закрыть волну.
+		if err := validateLimitDecisionBarrier(m.Visits, steps); err != nil {
+			return fmt.Errorf("остановка по maxVisits обошла decision-wave: %w", err)
+		}
+		// Проверяем сохранённую неслучившуюся активацию локально. Полный planner
+		// переигрывать нельзя: terminal drain может завершить независимый visit и
+		// открыть более ранний маршрут, не меняя уже опубликованный исход.
+		if err := validateLimitTrigger(
+			limitedStep, *m.StopLimitTrigger, m.StopLimitIteration, m.Visits,
+			seen, steps, numbers, active, afterUses, decisionUses,
+		); err != nil {
+			return fmt.Errorf("остановка по maxVisits не подтверждена trigger: %w", err)
+		}
+		limitTerminal = true
+	}
 	fatalDecision := false
 	if hasStopVisit {
 		step := steps[stopVisit.StepID]
 		fatalDecision = len(step.Decisions) != 0 && (stopVisit.Decision != nil && stopVisit.Decision.Error != "" ||
 			stopVisit.Decision == nil && stopVisit.State == scheduler.Succeeded)
 	}
+	if limitTerminal && fatalDecision {
+		return fmt.Errorf("остановка по maxVisits не может одновременно ссылаться на ошибку решения")
+	}
 	if m.RunState != RunRunning && matchingFinishID == "" {
 		switch {
+		case limitTerminal:
+			// Структурное доказательство проверено выше; активные независимые
+			// visits допустимы, потому что limit, как и finish, завершает весь run.
 		case fatalDecision:
 			if m.RunState != RunFailed {
 				return fmt.Errorf("ошибка решения может завершить run только как failed")
@@ -198,10 +250,117 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 			}
 		}
 	}
-	if m.RunState != RunRunning && len(active) != 0 && matchingFinishID == "" && !fatalDecision {
-		return fmt.Errorf("терминальный run с незавершёнными visits требует применённый finish или ошибку решения")
+	if m.RunState != RunRunning && len(active) != 0 && matchingFinishID == "" && !fatalDecision && !limitTerminal {
+		return fmt.Errorf("терминальный run с незавершёнными visits требует finish, maxVisits или ошибку решения")
 	}
 	return nil
+}
+
+// validateLimitDecisionBarrier сохраняет только те приоритеты planner, которые
+// можно доказать и после terminal drain. Незавершённое решение, fatal marker или
+// explicit finish обязательно предшествовали бы limit; обычные route допустимы,
+// поскольку planner мог отбросить уже собранные activations ради атомарного итога.
+func validateLimitDecisionBarrier(history []Visit, steps map[string]workflow.Step) error {
+	for _, visit := range history {
+		step := steps[visit.StepID]
+		if len(step.Decisions) == 0 || visit.Decision != nil && visit.Decision.Applied {
+			continue
+		}
+		if visit.Decision != nil && visit.Decision.Error != "" {
+			return fmt.Errorf("посещение %q содержит приоритетную ошибку решения", visit.VisitID)
+		}
+		if !visitTerminal(visit.State) {
+			return fmt.Errorf("посещение %q ещё не завершило decision-wave", visit.VisitID)
+		}
+		if visit.State != scheduler.Succeeded {
+			continue
+		}
+		if visit.Decision == nil {
+			return fmt.Errorf("посещение %q завершилось без обязательного решения", visit.VisitID)
+		}
+		if route := step.Decisions[visit.Decision.Key]; route.Finish != nil {
+			return fmt.Errorf("посещение %q содержит более приоритетный explicit finish", visit.VisitID)
+		}
+	}
+	return nil
+}
+
+// validateLimitTrigger доказывает конкретную неслучившуюся активацию N+1, не
+// сравнивая её с глобальным приоритетом изменившегося после terminal frontier.
+// Terminal visits неизменяемы, а новые visits после остановки запрещены, поэтому
+// локальные source/route/FIFO-связи остаются истинными после drain соседей.
+func validateLimitTrigger(
+	step workflow.Step,
+	trigger VisitTrigger,
+	iteration int,
+	history []Visit,
+	seen map[string]Visit,
+	steps map[string]workflow.Step,
+	numbers map[string]int,
+	active map[string]bool,
+	afterUses map[afterCause]bool,
+	decisionUses map[decisionCause]bool,
+) error {
+	if active[step.ID] {
+		return fmt.Errorf("ограниченный шаг ещё имеет активное посещение")
+	}
+	switch trigger.Kind {
+	case TriggerAfter:
+		proof := Visit{VisitID: "limit-proof", StepID: step.ID, Iteration: iteration, Trigger: trigger}
+		return validateTrigger(len(history), proof, step, nil, history, seen, afterUses, decisionUses)
+	case TriggerDecision:
+		if len(trigger.SourceVisitIDs) != 1 || trigger.DecisionKey == "" {
+			return fmt.Errorf("decision-limit требует один источник и ключ")
+		}
+		source, exists := seen[trigger.SourceVisitIDs[0]]
+		if !exists || source.State != scheduler.Succeeded || source.Decision == nil || source.Decision.Applied || source.Decision.Error != "" ||
+			source.Decision.Key != trigger.DecisionKey {
+			return fmt.Errorf("decision-limit ссылается не на готовое неприменённое решение")
+		}
+		route, exists := steps[source.StepID].Decisions[trigger.DecisionKey]
+		if !exists || route.Finish != nil || !slices.Contains(route.To, step.ID) ||
+			decisionUses[decisionCause{step.ID, source.VisitID}] || iteration != source.Iteration+1 {
+			return fmt.Errorf("decision-limit не совпадает с маршрутом, target или iteration")
+		}
+		firstLimited := ""
+		for _, target := range route.To {
+			if active[target] {
+				return fmt.Errorf("fanout decision-limit заблокирован активным target %q", target)
+			}
+			targetStep := steps[target]
+			if firstLimited == "" && targetStep.MaxVisits != nil && numbers[target] >= *targetStep.MaxVisits {
+				firstLimited = target
+			}
+		}
+		if firstLimited != step.ID {
+			return fmt.Errorf("decision-limit не является первой исчерпанной целью route.to")
+		}
+		return nil
+	default:
+		return fmt.Errorf("maxVisits не может быть вызван trigger %q", trigger.Kind)
+	}
+}
+
+// agentVisitViews копирует только семантику, которой владеет scheduler. Внешние
+// thread/turn, память и диагностика остаются деталями persistence/coordinator.
+// Helper живёт рядом с полной проверкой исходной истории, которую затем передаёт
+// pure planner атомарная операция AdvanceAgentGraph.
+func agentVisitViews(visits []Visit) []scheduler.AgentVisitView {
+	views := make([]scheduler.AgentVisitView, 0, len(visits))
+	for _, visit := range visits {
+		view := scheduler.AgentVisitView{
+			VisitID: visit.VisitID, StepID: visit.StepID, Iteration: visit.Iteration, State: visit.State,
+			Trigger: scheduler.AgentTriggerView{
+				Kind: scheduler.AgentTriggerKind(visit.Trigger.Kind), SourceVisitIDs: slices.Clone(visit.Trigger.SourceVisitIDs),
+				DecisionKey: visit.Trigger.DecisionKey,
+			},
+		}
+		if visit.Decision != nil {
+			view.Decision = &scheduler.AgentDecisionView{Key: visit.Decision.Key, Applied: visit.Decision.Applied, Error: visit.Decision.Error}
+		}
+		views = append(views, view)
+	}
+	return views
 }
 
 // Причины активации сравниваются составными ключами без склейки пользовательских

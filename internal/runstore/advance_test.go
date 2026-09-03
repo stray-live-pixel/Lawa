@@ -9,11 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // advanceInput даёт fanout из одного решения и общий after-barrier. Второй
@@ -34,6 +36,24 @@ func advanceInput(t *testing.T) Input {
     {"id":"join","type":"agent","prompt":"Объединить","after":["left","right"]}
   ]
 }`), Task: "Продвинуть граф", Comment: "Тест persistence bridge", CWD: t.TempDir()}
+}
+
+// boundedLoopInput оставляет параллельный Pending visit, чтобы остановка по
+// квоте доказывала семантику всего run, а не только естественную quiescence.
+func boundedLoopInput(t *testing.T, successfulLimit bool) Input {
+	t.Helper()
+	limit := `"maxVisits":2`
+	if successfulLimit {
+		limit += `,"onLimit":"succeeded"`
+	}
+	workflowJSON := strings.Replace(`{
+  "version":2,"id":"bounded-loop","start":["loop","parallel"],"steps":[
+    {"id":"loop","type":"agent","prompt":"Повтори","after":[],"maxVisits":2,"decisions":{
+      "repeat":{"to":["loop"]},"done":{"finish":"succeeded"}}},
+    {"id":"parallel","type":"agent","prompt":"Параллельно","after":[]}
+  ]
+}`, `"maxVisits":2`, limit, 1)
+	return Input{WorkflowJSON: []byte(workflowJSON), Task: "Проверить ограниченный цикл", CWD: t.TempDir()}
 }
 
 func testAdvanceRun(t *testing.T) (string, Snapshot, *LockedRun) {
@@ -57,16 +77,17 @@ func testAdvanceRun(t *testing.T) (string, Snapshot, *LockedRun) {
 
 func finishDecisionVisit(t *testing.T, run *LockedRun, visitID, key string) {
 	t.Helper()
+	chatID, turnID, callID := "chat-"+visitID, "turn-"+visitID, "call-"+visitID
 	if err := run.ReserveVisits([]string{visitID}); err == nil {
-		err = run.UpdateVisit(visitID, scheduler.Unknown, "chat-decision", "")
+		err = run.UpdateVisit(visitID, scheduler.Unknown, chatID, "")
 		if err == nil {
-			err = run.SetVisitTurn(visitID, "turn-decision")
+			err = run.SetVisitTurn(visitID, turnID)
 		}
 		if err == nil {
-			_, err = run.CommitDecision(visitID, "chat-decision", "turn-decision", key, "выбран маршрут", "call-decision")
+			_, err = run.CommitDecision(visitID, chatID, turnID, key, "выбран маршрут", callID)
 		}
 		if err == nil {
-			err = run.UpdateVisit(visitID, scheduler.Succeeded, "chat-decision", "")
+			err = run.UpdateVisit(visitID, scheduler.Succeeded, chatID, "")
 		}
 		if err != nil {
 			t.Fatal(err)
@@ -74,6 +95,100 @@ func finishDecisionVisit(t *testing.T, run *LockedRun, visitID, key string) {
 	} else {
 		t.Fatal(err)
 	}
+}
+
+// finishPlainVisit проводит обычное посещение через те же durable-фазы, что и
+// coordinator. Тесты переходов не подменяют metadata напрямую, поэтому каждый
+// промежуточный снимок проходит production-валидацию.
+func finishPlainVisit(t *testing.T, run *LockedRun, visitID string) {
+	t.Helper()
+	chatID, turnID := "chat-"+visitID, "turn-"+visitID
+	if err := run.ReserveVisits([]string{visitID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.UpdateVisit(visitID, scheduler.Unknown, chatID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.SetVisitTurn(visitID, turnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.UpdateVisit(visitID, scheduler.Succeeded, chatID, ""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runDecisionVisit сохраняет выбор, но оставляет turn активным. Это позволяет
+// воспроизвести окно, в котором tool уже commit-нул route, а финальный Result
+// Codex ещё не сделал decision visit технически завершённым.
+func runDecisionVisit(t *testing.T, run *LockedRun, visitID, key string) string {
+	t.Helper()
+	chatID, turnID := "chat-"+visitID, "turn-"+visitID
+	if err := run.ReserveVisits([]string{visitID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.UpdateVisit(visitID, scheduler.Unknown, chatID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.SetVisitTurn(visitID, turnID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.CommitDecision(visitID, chatID, turnID, key, "выбран маршрут", "call-"+visitID); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.UpdateVisit(visitID, scheduler.Running, chatID, ""); err != nil {
+		t.Fatal(err)
+	}
+	return chatID
+}
+
+// runDecisionlessVisit оставляет обычный turn Running для проверки terminal
+// drain: после остановки такой уже начатый внешний запрос ещё может сообщить
+// финальное техническое состояние, но не вправе изменить исход всего run.
+func runDecisionlessVisit(t *testing.T, run *LockedRun, visitID string) string {
+	t.Helper()
+	chatID, turnID := "chat-"+visitID, "turn-"+visitID
+	if err := run.ReserveVisits([]string{visitID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.UpdateVisit(visitID, scheduler.Unknown, chatID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.SetVisitTurn(visitID, turnID); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.UpdateVisit(visitID, scheduler.Running, chatID, ""); err != nil {
+		t.Fatal(err)
+	}
+	return chatID
+}
+
+// testBoundedLoopAtLimit создаёт оба разрешённых посещения и сохраняет решение
+// repeat у второго, но намеренно не вызывает последний Advance. Возвращённый
+// snapshot остаётся Running, а следующий переход обязан быть limit-terminal.
+func testBoundedLoopAtLimit(t *testing.T, successfulLimit bool) (string, Snapshot, *LockedRun, Visit) {
+	t.Helper()
+	root := t.TempDir()
+	initial, err := CreateAgentGraph(root, boundedLoopInput(t, successfulLimit))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := OpenLocked(root, initial.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := run.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	finishDecisionVisit(t, run, initial.Meta.Visits[0].VisitID, "repeat")
+	first, err := run.AdvanceAgentGraph()
+	if err != nil || len(first.CreatedVisits) != 1 || first.CreatedVisits[0].StepID != "loop" || first.CreatedVisits[0].Visit != 2 || first.CreatedVisits[0].Iteration != 2 {
+		t.Fatalf("второе посещение цикла не создано: %+v, %v", first, err)
+	}
+	second := first.CreatedVisits[0]
+	finishDecisionVisit(t, run, second.VisitID, "repeat")
+	return root, initial, run, second
 }
 
 // TestAdvanceAgentGraphRouteAndAfter проверяет два последовательных durable
@@ -297,8 +412,240 @@ func TestAdvanceAgentGraphMemoryBeforeMetadata(t *testing.T) {
 	}
 }
 
-// TestAdvanceAgentGraphGuards отклоняет legacy, циклическую и повреждённую
-// историю до любой новой памяти или metadata.
+// TestAdvanceAgentGraphBoundedLoop проверяет durable-границу квоты. Ошибка Sync
+// до Rename не публикует частичный terminal, а reopen детерминированно строит тот
+// же StopVisitID/StopLimitStepID без третьего visit и без Applied у решения.
+func TestAdvanceAgentGraphBoundedLoop(t *testing.T) {
+	t.Run("default failed survives crash and reopen", func(t *testing.T) {
+		root, initial, run, second := testBoundedLoopAtLimit(t, false)
+		result, err := run.advanceAgentGraph(func(*os.File) error { return syscall.EIO })
+		if !errors.Is(err, syscall.EIO) || !reflect.DeepEqual(result, AgentAdvance{}) {
+			t.Fatalf("отказ записи limit-terminal не воспроизведён: %+v, %v", result, err)
+		}
+		onDisk, err := Load(root, initial.Meta.RunID)
+		if err != nil || onDisk.Meta.RunState != RunRunning || onDisk.Meta.StopReason != "" || onDisk.Meta.StopVisitID != "" ||
+			onDisk.Meta.StopLimitStepID != "" || onDisk.Meta.StopLimitTrigger != nil || onDisk.Meta.StopLimitIteration != 0 ||
+			len(onDisk.Meta.Visits) != 3 || onDisk.Meta.Visits[2].Decision.Applied {
+			t.Fatalf("Sync до Rename частично опубликовал limit: %+v, %v", onDisk.Meta, err)
+		}
+		if err := run.Close(); err != nil {
+			t.Fatal(err)
+		}
+		reopened, err := OpenLocked(root, initial.Meta.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer reopened.Close()
+		result, err = reopened.AdvanceAgentGraph()
+		if err != nil || !result.Changed || result.Snapshot.Meta.RunState != RunFailed ||
+			result.Snapshot.Meta.StopVisitID != second.VisitID || result.Snapshot.Meta.StopLimitStepID != "loop" ||
+			result.Snapshot.Meta.StopLimitTrigger == nil || result.Snapshot.Meta.StopLimitTrigger.Kind != TriggerDecision ||
+			!slices.Equal(result.Snapshot.Meta.StopLimitTrigger.SourceVisitIDs, []string{second.VisitID}) ||
+			result.Snapshot.Meta.StopLimitTrigger.DecisionKey != "repeat" || result.Snapshot.Meta.StopLimitIteration != 3 ||
+			result.Plan.Terminal == nil || result.Plan.Terminal.LimitStepID != "loop" ||
+			result.Plan.Terminal.LimitTrigger.Kind != scheduler.AgentTriggerDecision ||
+			!slices.Equal(result.Plan.Terminal.LimitTrigger.SourceVisitIDs, []string{second.VisitID}) ||
+			result.Plan.Terminal.LimitTrigger.DecisionKey != "repeat" || result.Plan.Terminal.LimitIteration != 3 || len(result.CreatedVisits) != 0 ||
+			len(result.Snapshot.Meta.Visits) != 3 ||
+			result.Snapshot.Meta.Visits[2].Decision.Applied {
+			t.Fatalf("reopen не опубликовал точный limit-terminal: %+v, %v", result, err)
+		}
+
+		// Каждая подмена ломает отдельную часть структурного proof: тип причины,
+		// последний разрешённый visit, onLimit outcome либо сам предел N.
+		for name, mutate := range map[string]func(*Snapshot){
+			"missing marker":       func(s *Snapshot) { s.Meta.StopLimitStepID = "" },
+			"missing trigger":      func(s *Snapshot) { s.Meta.StopLimitTrigger = nil },
+			"missing iteration":    func(s *Snapshot) { s.Meta.StopLimitIteration = 0 },
+			"step without limit":   func(s *Snapshot) { s.Meta.StopLimitStepID = "parallel" },
+			"wrong stop visit":     func(s *Snapshot) { s.Meta.StopVisitID = initial.Meta.Visits[0].VisitID },
+			"wrong outcome":        func(s *Snapshot) { s.Meta.RunState = RunSucceeded },
+			"wrong trigger source": func(s *Snapshot) { s.Meta.StopLimitTrigger.SourceVisitIDs = []string{initial.Meta.Visits[0].VisitID} },
+			"wrong trigger key":    func(s *Snapshot) { s.Meta.StopLimitTrigger.DecisionKey = "done" },
+			"wrong iteration":      func(s *Snapshot) { s.Meta.StopLimitIteration = 4 },
+			"open decision wave": func(s *Snapshot) {
+				s.Workflow.Steps = slices.Clone(s.Workflow.Steps)
+				outcome := workflow.OutcomeSucceeded
+				s.Workflow.Steps[1].Decisions = map[string]workflow.Route{"done": {Finish: &outcome}}
+			},
+			"no pending activation": func(s *Snapshot) {
+				s.Meta.Visits[2].State, s.Meta.Visits[2].Decision = scheduler.Failed, nil
+				s.Meta.Visits[2].TechnicalError = "цикл завершился до новой активации"
+			},
+			"visit beyond limit": func(s *Snapshot) {
+				s.Meta.Visits = append(s.Meta.Visits, Visit{
+					VisitID: newID(), StepID: "loop", Visit: 3, Iteration: 3, State: scheduler.Pending,
+					Trigger: VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{second.VisitID}, DecisionKey: "repeat"},
+				})
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				damaged := cloneSnapshotMetadata(t, result.Snapshot)
+				mutate(&damaged)
+				if err := damaged.validate(damaged.Meta.RunID); err == nil {
+					t.Fatal("повреждённое доказательство maxVisits принято")
+				}
+			})
+		}
+	})
+
+	t.Run("explicit onLimit succeeds with active visit", func(t *testing.T) {
+		_, _, run, second := testBoundedLoopAtLimit(t, true)
+		result, err := run.AdvanceAgentGraph()
+		if err != nil || result.Snapshot.Meta.RunState != RunSucceeded || result.Snapshot.Meta.StopVisitID != second.VisitID ||
+			result.Snapshot.Meta.StopLimitStepID != "loop" || result.Snapshot.Meta.StopLimitTrigger == nil ||
+			result.Snapshot.Meta.StopLimitIteration != 3 || result.Plan.Terminal == nil ||
+			result.Plan.Terminal.Outcome != workflow.OutcomeSucceeded || result.Snapshot.Meta.Visits[1].State != scheduler.Pending {
+			t.Fatalf("onLimit не завершил run при активной параллельной ветке: %+v, %v", result, err)
+		}
+	})
+}
+
+// TestAdvanceAgentGraphLimitWaitsForDecisionWave воспроизводит гонку между
+// готовой after-активацией N+1 и уже сохранённым, но ещё не завершившимся
+// choose_decision. Пока Result второго агента не получен, limit не публикуется;
+// после Result явный finish обязан победить независимо от скорости callback.
+func TestAdvanceAgentGraphLimitWaitsForDecisionWave(t *testing.T) {
+	root := t.TempDir()
+	input := Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"limit-versus-decision","start":["first","second"],"steps":[
+    {"id":"first","type":"agent","prompt":"Первый источник","after":[],"decisions":{"go":{"to":["source"]}}},
+    {"id":"second","type":"agent","prompt":"Второй источник","after":[],"decisions":{"go":{"to":["source"]}}},
+    {"id":"source","type":"agent","prompt":"Источник","after":[]},
+    {"id":"limited","type":"agent","prompt":"Ограниченная ветка","after":["source"],"maxVisits":1},
+    {"id":"choice","type":"agent","prompt":"Финальное решение","after":["source"],"decisions":{"done":{"finish":"succeeded"}}}
+  ]
+}`), Task: "Проверить барьер решений перед лимитом", CWD: t.TempDir()}
+	initial, err := CreateAgentGraph(root, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := OpenLocked(root, initial.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+
+	finishDecisionVisit(t, run, initial.Meta.Visits[0].VisitID, "go")
+	finishDecisionVisit(t, run, initial.Meta.Visits[1].VisitID, "go")
+	firstWave, err := run.AdvanceAgentGraph()
+	if err != nil || len(firstWave.CreatedVisits) != 1 || firstWave.CreatedVisits[0].StepID != "source" {
+		t.Fatalf("первая волна не сериализовала общий target: %+v, %v", firstWave, err)
+	}
+	finishPlainVisit(t, run, firstWave.CreatedVisits[0].VisitID)
+
+	secondWave, err := run.AdvanceAgentGraph()
+	if err != nil || len(secondWave.CreatedVisits) != 3 {
+		t.Fatalf("вторая волна не создала source и обе after-ветки: %+v, %v", secondWave, err)
+	}
+	created := make(map[string]Visit, len(secondWave.CreatedVisits))
+	for _, visit := range secondWave.CreatedVisits {
+		created[visit.StepID] = visit
+	}
+	for _, stepID := range []string{"source", "limited", "choice"} {
+		if created[stepID].VisitID == "" {
+			t.Fatalf("во второй волне нет шага %q: %+v", stepID, secondWave.CreatedVisits)
+		}
+	}
+	finishPlainVisit(t, run, created["source"].VisitID)
+	finishPlainVisit(t, run, created["limited"].VisitID)
+	choiceChatID := runDecisionVisit(t, run, created["choice"].VisitID, "done")
+
+	waiting, err := run.AdvanceAgentGraph()
+	if err != nil || waiting.Changed || waiting.Snapshot.Meta.RunState != RunRunning || waiting.Plan.Terminal != nil {
+		t.Fatalf("after-limit обошёл незавершённую decision-wave: %+v, %v", waiting, err)
+	}
+	if err := run.UpdateVisit(created["choice"].VisitID, scheduler.Succeeded, choiceChatID, ""); err != nil {
+		t.Fatal(err)
+	}
+	finished, err := run.AdvanceAgentGraph()
+	if err != nil || !finished.Changed || finished.Snapshot.Meta.RunState != RunSucceeded ||
+		finished.Snapshot.Meta.StopVisitID != created["choice"].VisitID || finished.Snapshot.Meta.StopLimitStepID != "" ||
+		finished.Snapshot.Meta.StopLimitTrigger != nil || finished.Snapshot.Meta.StopLimitIteration != 0 ||
+		finished.Plan.Terminal == nil || finished.Plan.Terminal.Outcome != workflow.OutcomeSucceeded {
+		t.Fatalf("завершённая decision-wave не выбрала explicit finish: %+v, %v", finished, err)
+	}
+}
+
+// TestAgentLimitProofSurvivesTerminalDrain фиксирует монотонность durable
+// maxVisits-proof. После публикации limit-a независимый Running source-b может
+// завершиться и открыть более ранний по Workflow limit-b с другим onLimit.
+// Сохранённый исход уже необратим и проверяется своей локальной причиной, а не
+// повторным планированием изменившегося глобального frontier.
+func TestAgentLimitProofSurvivesTerminalDrain(t *testing.T) {
+	root := t.TempDir()
+	input := Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"stable-limit-proof","start":["a1","a2","b1","b2"],"steps":[
+    {"id":"a1","type":"agent","prompt":"A1","after":[],"decisions":{"go":{"to":["source-a"]}}},
+    {"id":"a2","type":"agent","prompt":"A2","after":[],"decisions":{"go":{"to":["source-a"]}}},
+    {"id":"b1","type":"agent","prompt":"B1","after":[],"decisions":{"go":{"to":["source-b"]}}},
+    {"id":"b2","type":"agent","prompt":"B2","after":[],"decisions":{"go":{"to":["source-b"]}}},
+    {"id":"source-a","type":"agent","prompt":"Источник A","after":[]},
+    {"id":"source-b","type":"agent","prompt":"Источник B","after":[]},
+    {"id":"limit-b","type":"agent","prompt":"Лимит B","after":["source-b"],"maxVisits":1,"onLimit":"succeeded"},
+    {"id":"limit-a","type":"agent","prompt":"Лимит A","after":["source-a"],"maxVisits":1}
+  ]
+}`), Task: "Проверить стабильность причины лимита", CWD: t.TempDir()}
+	initial, err := CreateAgentGraph(root, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := OpenLocked(root, initial.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+	for _, visit := range initial.Meta.Visits {
+		finishDecisionVisit(t, run, visit.VisitID, "go")
+	}
+
+	firstWave, err := run.AdvanceAgentGraph()
+	if err != nil || len(firstWave.CreatedVisits) != 2 {
+		t.Fatalf("первые общие targets не созданы: %+v, %v", firstWave, err)
+	}
+	for _, visit := range firstWave.CreatedVisits {
+		finishPlainVisit(t, run, visit.VisitID)
+	}
+	secondWave, err := run.AdvanceAgentGraph()
+	if err != nil || len(secondWave.CreatedVisits) != 4 {
+		t.Fatalf("вторые sources и первые limit-visits не созданы: %+v, %v", secondWave, err)
+	}
+	created := make(map[string]Visit, len(secondWave.CreatedVisits))
+	for _, visit := range secondWave.CreatedVisits {
+		created[visit.StepID] = visit
+	}
+	for _, stepID := range []string{"source-a", "source-b", "limit-a", "limit-b"} {
+		if created[stepID].VisitID == "" {
+			t.Fatalf("во второй волне нет шага %q: %+v", stepID, secondWave.CreatedVisits)
+		}
+	}
+	finishPlainVisit(t, run, created["source-a"].VisitID)
+	sourceBChatID := runDecisionlessVisit(t, run, created["source-b"].VisitID)
+	finishPlainVisit(t, run, created["limit-a"].VisitID)
+	finishPlainVisit(t, run, created["limit-b"].VisitID)
+
+	limited, err := run.AdvanceAgentGraph()
+	if err != nil || !limited.Changed || limited.Snapshot.Meta.RunState != RunFailed ||
+		limited.Snapshot.Meta.StopLimitStepID != "limit-a" || limited.Snapshot.Meta.StopLimitTrigger == nil ||
+		!slices.Equal(limited.Snapshot.Meta.StopLimitTrigger.SourceVisitIDs, []string{created["source-a"].VisitID}) {
+		t.Fatalf("готовый limit-a не опубликован: %+v, %v", limited, err)
+	}
+	if err := run.UpdateVisit(created["source-b"].VisitID, scheduler.Succeeded, sourceBChatID, ""); err != nil {
+		t.Fatalf("terminal drain инвалидировал сохранённый limit-proof: %v", err)
+	}
+	drained, err := run.Load()
+	if err != nil || drained.Meta.RunState != RunFailed || drained.Meta.StopLimitStepID != "limit-a" {
+		t.Fatalf("terminal drain изменил опубликованный исход: %+v, %v", drained.Meta, err)
+	}
+	replanned, err := scheduler.PlanAgentGraph(drained.Workflow, agentVisitViews(drained.Meta.Visits))
+	if err != nil || replanned.Terminal == nil || replanned.Terminal.LimitStepID != "limit-b" ||
+		replanned.Terminal.Outcome != workflow.OutcomeSucceeded {
+		t.Fatalf("fixture не открыла конкурирующий limit-b после drain: %+v, %v", replanned, err)
+	}
+}
+
+// TestAdvanceAgentGraphGuards отклоняет legacy и повреждённую историю до любой
+// новой памяти или metadata.
 func TestAdvanceAgentGraphGuards(t *testing.T) {
 	t.Run("legacy", func(t *testing.T) {
 		root := t.TempDir()
@@ -313,25 +660,6 @@ func TestAdvanceAgentGraphGuards(t *testing.T) {
 		defer run.Close()
 		if _, err := run.AdvanceAgentGraph(); err == nil {
 			t.Fatal("legacy run принят visit-aware bridge")
-		}
-	})
-	t.Run("cycle", func(t *testing.T) {
-		input := advanceInput(t)
-		input.WorkflowJSON = []byte(`{"version":2,"id":"cycle","start":["loop"],"steps":[
-          {"id":"loop","type":"agent","prompt":"Повтори","after":[],"maxVisits":2,
-           "decisions":{"repeat":{"to":["loop"]},"done":{"finish":"succeeded"}}}]}`)
-		root := t.TempDir()
-		snapshot, err := CreateAgentGraph(root, input)
-		if err != nil {
-			t.Fatal(err)
-		}
-		run, err := OpenLocked(root, snapshot.Meta.RunID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer run.Close()
-		if _, err := run.AdvanceAgentGraph(); !errors.Is(err, scheduler.ErrAgentGraphCycle) {
-			t.Fatalf("циклический workflow прошёл первый runtime: %v", err)
 		}
 	})
 	t.Run("tampered", func(t *testing.T) {

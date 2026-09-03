@@ -84,6 +84,16 @@ func (r *LockedRun) advanceAgentGraph(syncFile func(*os.File) error) (AgentAdvan
 		}
 		snapshot.Meta.StopReason = compactAgentStopReason(plan.Terminal.Reason)
 		snapshot.Meta.StopVisitID = plan.Terminal.CauseVisitID
+		snapshot.Meta.StopLimitStepID = plan.Terminal.LimitStepID
+		if plan.Terminal.LimitStepID != "" {
+			trigger := VisitTrigger{
+				Kind:           TriggerKind(plan.Terminal.LimitTrigger.Kind),
+				SourceVisitIDs: slices.Clone(plan.Terminal.LimitTrigger.SourceVisitIDs),
+				DecisionKey:    plan.Terminal.LimitTrigger.DecisionKey,
+			}
+			snapshot.Meta.StopLimitTrigger = &trigger
+			snapshot.Meta.StopLimitIteration = plan.Terminal.LimitIteration
+		}
 		// Защитный fallback сохраняет проверяемую причину даже при регрессии
 		// planner: штатный explicit finish уже возвращает свой CauseVisitID.
 		if snapshot.Meta.StopVisitID == "" && len(plan.ApplyDecisionVisitIDs) == 1 {
@@ -181,26 +191,6 @@ func materializeAgentVisits(history []Visit, decision, after []scheduler.AgentAc
 		})
 	}
 	return created
-}
-
-// agentVisitViews копирует только семантику, которой владеет scheduler. Внешние
-// thread/turn, память и диагностика остаются деталями persistence/coordinator.
-func agentVisitViews(visits []Visit) []scheduler.AgentVisitView {
-	views := make([]scheduler.AgentVisitView, 0, len(visits))
-	for _, visit := range visits {
-		view := scheduler.AgentVisitView{
-			VisitID: visit.VisitID, StepID: visit.StepID, Iteration: visit.Iteration, State: visit.State,
-			Trigger: scheduler.AgentTriggerView{
-				Kind: scheduler.AgentTriggerKind(visit.Trigger.Kind), SourceVisitIDs: slices.Clone(visit.Trigger.SourceVisitIDs),
-				DecisionKey: visit.Trigger.DecisionKey,
-			},
-		}
-		if visit.Decision != nil {
-			view.Decision = &scheduler.AgentDecisionView{Key: visit.Decision.Key, Applied: visit.Decision.Applied, Error: visit.Decision.Error}
-		}
-		views = append(views, view)
-	}
-	return views
 }
 
 // createAgentVisitMemories синхронизирует каждый inode и затем имя в memory/.

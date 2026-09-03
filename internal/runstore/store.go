@@ -70,18 +70,24 @@ type Input struct {
 // v2; пустое значение у прежнего v1 означает корень дерева. ChildRequestID есть
 // у app-server детей v3/v4 и не содержит исходный callId. Steps принадлежат лишь
 // legacy v1-v3, а v4 хранит общий RunState и append-only Visits.
+// StopLimit-поля присутствуют только при terminal maxVisits: StopVisitID
+// указывает на последний разрешённый visit, а trigger/iteration описывают
+// следующую активацию N+1, которую planner намеренно не материализовал.
 type Metadata struct {
-	Version           int      `json:"version"`
-	RunID             string   `json:"runId"`
-	ParentRunID       string   `json:"parentRunId,omitempty"`
-	ChildRequestID    string   `json:"childRequestId,omitempty"`
-	CWD               string   `json:"cwd"`
-	InitiatorThreadID string   `json:"initiatorThreadId,omitempty"` // Только чтение форматов v1/v2.
-	Steps             []Step   `json:"steps,omitempty"`
-	RunState          RunState `json:"runState,omitempty"`
-	StopReason        string   `json:"stopReason,omitempty"`
-	StopVisitID       string   `json:"stopVisitId,omitempty"`
-	Visits            []Visit  `json:"visits,omitempty"`
+	Version            int           `json:"version"`
+	RunID              string        `json:"runId"`
+	ParentRunID        string        `json:"parentRunId,omitempty"`
+	ChildRequestID     string        `json:"childRequestId,omitempty"`
+	CWD                string        `json:"cwd"`
+	InitiatorThreadID  string        `json:"initiatorThreadId,omitempty"` // Только чтение форматов v1/v2.
+	Steps              []Step        `json:"steps,omitempty"`
+	RunState           RunState      `json:"runState,omitempty"`
+	StopReason         string        `json:"stopReason,omitempty"`
+	StopVisitID        string        `json:"stopVisitId,omitempty"`
+	StopLimitStepID    string        `json:"stopLimitStepId,omitempty"`
+	StopLimitTrigger   *VisitTrigger `json:"stopLimitTrigger,omitempty"`
+	StopLimitIteration int           `json:"stopLimitIteration,omitzero"`
+	Visits             []Visit       `json:"visits,omitempty"`
 }
 
 // Step связывает legacy ID из графа с отдельным файлом памяти, thread и последним
@@ -554,7 +560,8 @@ func validateMetadataShape(data []byte, metadata Metadata) error {
 		}
 		return nil
 	}
-	if metadata.Version >= 1 && metadata.Version <= 3 && (has("runState") || has("stopReason") || has("stopVisitId") || has("visits")) {
+	if metadata.Version >= 1 && metadata.Version <= 3 && (has("runState") || has("stopReason") || has("stopVisitId") || has("stopLimitStepId") ||
+		has("stopLimitTrigger") || has("stopLimitIteration") || has("visits")) {
 		return fmt.Errorf("legacy metadata не может содержать поля v4")
 	}
 	return nil
@@ -575,7 +582,8 @@ func (s Snapshot) validate(runID string) error {
 		m.ChildRequestID != "" && (m.Version != 3 || m.ParentRunID == "" || !validID(m.ChildRequestID)) ||
 		!filepath.IsAbs(m.CWD) || !validText(m.CWD) || strings.ContainsRune(m.CWD, 0) ||
 		oldFormat && !validText(m.InitiatorThreadID) || m.Version == 3 && m.InitiatorThreadID != "" ||
-		m.RunState != "" || m.StopReason != "" || m.StopVisitID != "" || m.Visits != nil ||
+		m.RunState != "" || m.StopReason != "" || m.StopVisitID != "" || m.StopLimitStepID != "" || m.StopLimitTrigger != nil ||
+		m.StopLimitIteration != 0 || m.Visits != nil ||
 		len(m.Steps) != len(s.Workflow.Steps) {
 		return fmt.Errorf("повреждены входы, версия или состав meta.json")
 	}
