@@ -116,6 +116,50 @@ func (r *LockedRun) Load() (Snapshot, error) {
 	return load(r.dir, r.runID)
 }
 
+// ResolveDirectory подтверждает, что root/runId обозначает тот же каталог,
+// который уже открыт и удерживается этим LockedRun, и возвращает его абсолютный
+// путь без симлинков в root. Одного совпадения runId и содержимого meta.json
+// недостаточно: в другом root может существовать похожий запуск, тогда
+// координатор записывал бы состояние через r.dir, а prompt и права агента
+// указывали бы в чужое дерево.
+//
+// Сам каталог runId обязан быть настоящим каталогом, а не симлинком. Симлинки в
+// пути до root допустимы и разворачиваются до выдачи пути наружу: это сохраняет
+// обычные пользовательские алиасы, но не оставляет в permission profile
+// неоднозначный путь. Проверка identity выполняется под mutex вместе с check,
+// чтобы закрытый или сломанный владелец не мог подтвердить новое обращение.
+func (r *LockedRun) ResolveDirectory(root string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.check(); err != nil {
+		return "", err
+	}
+	absolute, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("определить абсолютный root запуска: %w", err)
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", fmt.Errorf("разрешить root запуска: %w", err)
+	}
+	candidate := filepath.Join(resolvedRoot, r.runID)
+	candidateInfo, err := os.Lstat(candidate)
+	if err != nil {
+		return "", fmt.Errorf("проверить каталог запуска %q: %w", r.runID, err)
+	}
+	if !candidateInfo.IsDir() {
+		return "", fmt.Errorf("каталог запуска %q должен быть настоящим каталогом без симлинка", r.runID)
+	}
+	lockedInfo, err := r.dir.Stat(".")
+	if err != nil {
+		return "", fmt.Errorf("проверить открытый каталог запуска %q: %w", r.runID, err)
+	}
+	if !os.SameFile(candidateInfo, lockedInfo) {
+		return "", fmt.Errorf("root указывает не на открытый каталог запуска %q", r.runID)
+	}
+	return candidate, nil
+}
+
 // Update меняет только состояние и связь одного шага. Pending может перейти
 // только в Starting без ID: успешная запись этого намерения предшествует запросу
 // создания чата. Из Starting можно привязать подтверждённый/восстановленный ID;
