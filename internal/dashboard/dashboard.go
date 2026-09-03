@@ -27,6 +27,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 	"github.com/stray-live-pixel/Lawa/internal/series"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 const DefaultAddress = "127.0.0.1:60800"
@@ -70,9 +71,11 @@ type scheduledRun struct {
 type runNode struct {
 	ID, ParentID, Name, State, Tone, Updated           string
 	TicketID, TicketTitle                              string
+	StopReason, StopVisit, StopLimit                   string
 	EventsURL, VSCodeURL, UMLURL, DeleteURL            template.URL
 	TicketURL                                          template.URL
 	HasUML, Open, HasUnfinished, HasWorking, HasFailed bool
+	AgentGraph                                         bool
 	CompletedSteps, TotalSteps                         int
 	Steps, ActiveSteps                                 []stepNode
 	Children                                           []*runNode
@@ -82,10 +85,14 @@ type runNode struct {
 
 // stepNode описывает лист дерева и доступность его сохранённой памяти.
 type stepNode struct {
-	ID, State, Tone, Runtime, Message, Action, Updated string
-	EventsURL, MemoryURL, TraceURL                     template.URL
-	HasMemory, Active                                  bool
-	threadID, turnID                                   string
+	Key, ID, StepID, VisitID                                   string
+	State, Tone, Runtime, Message, Action, Updated             string
+	Trigger, Decision, Explanation, Transition, Skipped, Limit string
+	TechnicalError, DecisionError                              string
+	Visit, Iteration, Attempt                                  int
+	EventsURL, MemoryURL, TraceURL                             template.URL
+	HasMemory, Active                                          bool
+	memoryID, turnID                                           string
 }
 
 // Handler возвращает полностью автономный HTTP-интерфейс для абсолютного root.
@@ -392,22 +399,29 @@ type traceEvent struct {
 	TurnID   string    `json:"turnId,omitempty"`
 }
 
-// trace отдаёт инкрементальный приватный поток только для известного шага.
+// trace отдаёт инкрементальный приватный поток только для известного шага или
+// точного посещения. Сгенерированные ссылки v4 всегда используют visitId, чтобы
+// повторные проходы одного шага не смешивали item lifecycle и live-вывод.
 // Byte cursor относится ко всему events.jsonl: даже отфильтрованные lifecycle-
 // события двигают позицию и больше не перечитываются следующим polling. JSON
 // экранирует данные, а браузер вставляет Content только через textContent.
 func (h handler) trace(w http.ResponseWriter, r *http.Request) {
-	runID, stepID := r.PathValue("run"), strings.TrimSpace(r.URL.Query().Get("step"))
+	runID := r.PathValue("run")
+	scope, err := parseEventScope(r.URL.Query(), true)
+	if err != nil {
+		http.Error(w, diagnostic(err), http.StatusBadRequest)
+		return
+	}
 	offset, err := strconv.ParseInt(r.URL.Query().Get("after"), 10, 64)
 	if r.URL.Query().Get("after") == "" {
 		offset, err = 0, nil
 	}
-	if err != nil || offset < 0 || stepID == "" {
-		http.Error(w, "неверная позиция или шаг", http.StatusBadRequest)
+	if err != nil || offset < 0 {
+		http.Error(w, "неверная позиция журнала", http.StatusBadRequest)
 		return
 	}
 	snapshot, err := runstore.LoadForDashboard(h.root, runID)
-	if err != nil || !snapshotHasStep(snapshot, stepID) {
+	if err != nil || !snapshotHasEventScope(snapshot, scope) {
 		http.NotFound(w, r)
 		return
 	}
@@ -418,7 +432,7 @@ func (h handler) trace(w http.ResponseWriter, r *http.Request) {
 	}
 	response := traceResponse{Next: next}
 	for _, event := range events {
-		if event.StepID != stepID || event.Content == "" && event.Kind != "error" {
+		if !eventInScope(event, scope) || event.Content == "" && event.Kind != "error" {
 			continue
 		}
 		response.Events = append(response.Events, traceEvent{
@@ -432,15 +446,6 @@ func (h handler) trace(w http.ResponseWriter, r *http.Request) {
 	if err = json.NewEncoder(w).Encode(response); err != nil {
 		return
 	}
-}
-
-func snapshotHasStep(snapshot runstore.Snapshot, stepID string) bool {
-	for _, step := range snapshot.Meta.Steps {
-		if step.ID == stepID {
-			return true
-		}
-	}
-	return false
 }
 
 // memory отдаёт содержимое как text/plain. Даже память с тегами script остаётся
@@ -457,10 +462,20 @@ func (h handler) memory(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(data)
 }
 
-// events отдаёт только нормализованный журнал Lawa. Опциональный step query
+// events отдаёт только нормализованный журнал Lawa. Опциональный step/visit
 // фильтрует уже разобранные события и никогда не становится именем файла.
 func (h handler) events(w http.ResponseWriter, r *http.Request) {
-	runID, stepID := r.PathValue("run"), strings.TrimSpace(r.URL.Query().Get("step"))
+	runID := r.PathValue("run")
+	scope, err := parseEventScope(r.URL.Query(), false)
+	if err != nil {
+		http.Error(w, diagnostic(err), http.StatusBadRequest)
+		return
+	}
+	snapshot, err := runstore.LoadForDashboard(h.root, runID)
+	if err != nil || !snapshotHasEventScope(snapshot, scope) {
+		http.NotFound(w, r)
+		return
+	}
 	events, err := runstore.ReadEvents(h.root, runID)
 	if err != nil {
 		http.NotFound(w, r)
@@ -469,10 +484,84 @@ func (h handler) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	for _, event := range events {
-		if stepID != "" && event.StepID != stepID {
+		if !eventInScope(event, scope) {
 			continue
 		}
 		_, _ = fmt.Fprintln(w, runstore.FormatEvent(event))
+	}
+}
+
+// eventScope — уже разобранная логическая или точная область HTTP-журнала.
+// field ограничен внутренними значениями step/visit и не используется как путь.
+type eventScope struct{ field, value string }
+
+// parseEventScope отличает отсутствующий query от явно пустого. Иначе опечатка
+// `?visit=` неожиданно раскрыла бы журнал всего run вместо ожидаемого фильтра.
+func parseEventScope(values url.Values, required bool) (eventScope, error) {
+	step, hasStep := values["step"]
+	visit, hasVisit := values["visit"]
+	if hasStep && hasVisit {
+		return eventScope{}, errors.New("step и visit взаимоисключающие")
+	}
+	if !hasStep && !hasVisit {
+		if required {
+			return eventScope{}, errors.New("нужен step или visit")
+		}
+		return eventScope{}, nil
+	}
+	field, candidates := "step", step
+	if hasVisit {
+		field, candidates = "visit", visit
+	}
+	if len(candidates) != 1 || strings.TrimSpace(candidates[0]) == "" {
+		return eventScope{}, fmt.Errorf("%s должен быть одним непустым значением", field)
+	}
+	return eventScope{field: field, value: strings.TrimSpace(candidates[0])}, nil
+}
+
+// snapshotHasEventScope связывает query с проверенным snapshot до чтения данных.
+// Step v2 ищется в неизменяемом workflow, поэтому допустим до первого посещения.
+func snapshotHasEventScope(snapshot runstore.Snapshot, scope eventScope) bool {
+	if scope.field == "" {
+		return true
+	}
+	if scope.field == "visit" {
+		if snapshot.Meta.Version != 4 {
+			return false
+		}
+		for _, visit := range snapshot.Meta.Visits {
+			if visit.VisitID == scope.value {
+				return true
+			}
+		}
+		return false
+	}
+	if snapshot.Meta.Version == 4 {
+		for _, step := range snapshot.Workflow.Steps {
+			if step.ID == scope.value {
+				return true
+			}
+		}
+		return false
+	}
+	for _, step := range snapshot.Meta.Steps {
+		if step.ID == scope.value {
+			return true
+		}
+	}
+	return false
+}
+
+// eventInScope применяется только к разобранному RuntimeEvent и сравнивает ID
+// как строки; query никогда не превращается в шаблон, регулярку или имя файла.
+func eventInScope(event runstore.RuntimeEvent, scope eventScope) bool {
+	switch scope.field {
+	case "step":
+		return event.StepID == scope.value
+	case "visit":
+		return event.VisitID == scope.value
+	default:
+		return true
 	}
 }
 
@@ -551,19 +640,29 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		State: workflowState(snapshot), TicketID: ticket.ID, TicketTitle: ticket.Title, TicketURL: ticket.URL,
 		EventsURL: template.URL("/events/" + runID), VSCodeURL: vscodeFileURL(filepath.Join(root, runID)),
 		DeleteURL:  template.URL("/api/runs/" + runID + "/stop-and-delete"),
+		AgentGraph: snapshot.Meta.Version == 4, StopReason: snapshot.Meta.StopReason,
+		StopVisit:  snapshot.Meta.StopVisitID,
 		TotalSteps: len(snapshot.Meta.Steps),
+	}
+	if node.AgentGraph {
+		node.TotalSteps = len(snapshot.Meta.Visits)
+		node.StopLimit = formatStopLimit(snapshot.Meta)
 	}
 	node.Tone = tone(node.State)
 	search := []string{
 		snapshot.Workflow.ID, runID, snapshot.Meta.ParentRunID, snapshot.Meta.CWD,
-		snapshot.Task, node.State,
+		snapshot.Task, node.State, node.StopReason, node.StopVisit, node.StopLimit,
 		ticket.ID, ticket.Title, string(ticket.URL),
 	}
 	if snapshot.Workflow.Model != nil {
 		search = append(search, *snapshot.Workflow.Model)
 	}
 	for _, definition := range snapshot.Workflow.Steps {
-		search = append(search, definition.ID, definition.Type, definition.Prompt, strings.Join(definition.DependsOn, " "))
+		search = append(search, definition.ID, definition.Type, definition.Prompt,
+			strings.Join(definition.DependsOn, " "), strings.Join(definition.After, " "), formatVisitLimit(definition))
+		for _, key := range sortedRouteKeys(definition.Decisions) {
+			search = append(search, key, formatRouteDestination(definition.Decisions[key]))
+		}
 		if definition.Model != nil {
 			search = append(search, *definition.Model)
 		}
@@ -606,12 +705,29 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State))
 		memoryPath := filepath.Join(root, runID, "memory", step.ThreadID+".md")
 		node.Steps = append(node.Steps, stepNode{
-			ID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
+			Key: step.ID, ID: step.ID, StepID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
 			EventsURL: template.URL("/events/" + runID + "?step=" + url.QueryEscape(step.ID)),
 			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID), HasMemory: nonEmptyRegularFile(memoryPath),
 			TraceURL: template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
-			Active:   active, threadID: step.ThreadID, turnID: step.TurnID,
+			Active:   active, memoryID: step.ThreadID, turnID: step.TurnID,
 		})
+	}
+	if node.AgentGraph {
+		definitions := make(map[string]workflow.Step, len(snapshot.Workflow.Steps))
+		for _, definition := range snapshot.Workflow.Steps {
+			definitions[definition.ID] = definition
+		}
+		for _, visit := range snapshot.Meta.Visits {
+			definition := definitions[visit.StepID]
+			item := makeAgentStepNode(root, runID, visit, definition)
+			node.Steps = append(node.Steps, item)
+			if visit.State == scheduler.Succeeded || visit.State == scheduler.Failed {
+				node.CompletedSteps++
+			}
+			search = append(search, item.Key, item.ID, item.StepID, item.VisitID, item.State,
+				item.Trigger, item.Decision, item.Explanation, item.Transition, item.Skipped, item.Limit,
+				item.TechnicalError, item.DecisionError, visit.CodexThreadID, visit.TurnID)
+		}
 	}
 	for _, step := range node.Steps {
 		if step.Active {
@@ -620,6 +736,97 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 	}
 	node.baseSearch = strings.Join(search, "\n")
 	return node
+}
+
+// makeAgentStepNode превращает один append-only visit в самостоятельный лист.
+// Key равен VisitID и поэтому остаётся уникальным даже у повторов одного StepID;
+// ID — короткая человекочитаемая подпись, не используемая как адрес хранилища.
+func makeAgentStepNode(root, runID string, visit runstore.Visit, definition workflow.Step) stepNode {
+	query := url.QueryEscape(visit.VisitID)
+	memoryPath := filepath.Join(root, runID, "memory", visit.VisitID+".md")
+	item := stepNode{
+		Key: visit.VisitID, ID: fmt.Sprintf("%s#%d", visit.StepID, visit.Visit),
+		StepID: visit.StepID, VisitID: visit.VisitID, Visit: visit.Visit,
+		Iteration: visit.Iteration, Attempt: visit.Attempt,
+		State: string(visit.State), Tone: tone(string(visit.State)), Active: activeStepState(visit.State),
+		Trigger: formatVisitTrigger(visit.Trigger), Limit: formatVisitLimit(definition),
+		TechnicalError: visit.TechnicalError,
+		EventsURL:      template.URL("/events/" + runID + "?visit=" + query),
+		TraceURL:       template.URL("/api/trace/" + runID + "?visit=" + query),
+		MemoryURL:      template.URL("/memory/" + runID + "/" + visit.VisitID),
+		HasMemory:      nonEmptyRegularFile(memoryPath), memoryID: visit.VisitID, turnID: visit.TurnID,
+	}
+	if visit.Decision != nil {
+		item.Decision = fmt.Sprintf("%s · applied=%t", visit.Decision.Key, visit.Decision.Applied)
+		item.Explanation = visit.Decision.Explanation
+		item.Transition = formatDecisionDestination(*visit.Decision)
+		item.Skipped = strings.Join(visit.Decision.Skipped, ", ")
+		item.DecisionError = visit.Decision.Error
+	}
+	return item
+}
+
+// formatVisitTrigger сохраняет causal порядок sourceVisitIds из metadata.
+func formatVisitTrigger(trigger runstore.VisitTrigger) string {
+	result := string(trigger.Kind)
+	if trigger.DecisionKey != "" {
+		result += ":" + trigger.DecisionKey
+	}
+	if len(trigger.SourceVisitIDs) != 0 {
+		result += " ← " + strings.Join(trigger.SourceVisitIDs, ", ")
+	}
+	return result
+}
+
+// formatDecisionDestination читает материализованный маршрут из metadata, а не
+// из текущего workflow: это сохраняет точный исторический выбор после resume.
+func formatDecisionDestination(decision runstore.DecisionRecord) string {
+	if decision.Finish != nil {
+		return "finish:" + string(*decision.Finish)
+	}
+	return strings.Join(decision.To, ", ")
+}
+
+// formatRouteDestination нужен только полнотекстовому индексу неизменяемого
+// workflow и одинаково представляет ветвление к шагам и terminal outcome.
+func formatRouteDestination(route workflow.Route) string {
+	if route.Finish != nil {
+		return "finish:" + string(*route.Finish)
+	}
+	return strings.Join(route.To, ", ")
+}
+
+// sortedRouteKeys устраняет случайный порядок Go map в поисковом индексе.
+func sortedRouteKeys(routes map[string]workflow.Route) []string {
+	keys := make([]string, 0, len(routes))
+	for key := range routes {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// formatVisitLimit показывает эффективный исход: отсутствие onLimit означает
+// failed по контракту v2, а не неизвестное значение.
+func formatVisitLimit(step workflow.Step) string {
+	if step.MaxVisits == nil {
+		return ""
+	}
+	outcome := workflow.OutcomeFailed
+	if step.OnLimit != nil {
+		outcome = *step.OnLimit
+	}
+	return fmt.Sprintf("maxVisits=%d · onLimit=%s", *step.MaxVisits, outcome)
+}
+
+// formatStopLimit описывает не созданную активацию N+1, которая остановила run.
+// Сохранённый trigger однозначно связывает её с последним причинным visit.
+func formatStopLimit(meta runstore.Metadata) string {
+	if meta.StopLimitStepID == "" || meta.StopLimitTrigger == nil {
+		return ""
+	}
+	return fmt.Sprintf("%s · iteration=%d · %s", meta.StopLimitStepID,
+		meta.StopLimitIteration, formatVisitTrigger(*meta.StopLimitTrigger))
 }
 
 // hydrateRunNodes загружает подробности всех деревьев только для явного
@@ -645,7 +852,7 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 	}
 	for index := range node.Steps {
 		step := &node.Steps[index]
-		summary := summaries[step.ID]
+		summary := summaries[step.Key]
 		step.Message, step.Action = summary.Message, strings.Join(summary.ActiveItemTypes, ", ")
 		step.Updated = ""
 		if !summary.LastActivity.IsZero() {
@@ -654,7 +861,7 @@ func hydrateRunNode(root string, node *runNode, fullTextSearch bool) error {
 		step.Runtime = formatStepRuntime(summary, step.turnID)
 		node.baseSearch += "\n" + summary.Message + "\n" + step.Action
 		if fullTextSearch && step.HasMemory {
-			if memory, err := runstore.ReadMemory(root, node.ID, step.threadID); err == nil {
+			if memory, err := runstore.ReadMemory(root, node.ID, step.memoryID); err == nil {
 				node.baseSearch += "\n" + string(memory)
 			}
 		}
@@ -705,9 +912,13 @@ func activeStepState(state scheduler.State) bool {
 	return state == scheduler.Starting || state == scheduler.Running || state == scheduler.WaitingForApproval
 }
 
-// workflowState сворачивает состояния кубиков в три цветных итога и нейтральное
-// ожидание. Ошибка приоритетнее работы, а успех требует успеха каждого кубика.
+// workflowState для v4 использует только авторитетный RunState: отдельный Failed
+// visit может быть штатным входом after-проверки и не означает провал workflow.
+// Legacy сохраняет прежнюю свёртку состояний кубиков.
 func workflowState(snapshot runstore.Snapshot) string {
+	if snapshot.Meta.Version == 4 {
+		return string(snapshot.Meta.RunState)
+	}
 	allSucceeded := len(snapshot.Meta.Steps) > 0
 	active := false
 	for _, step := range snapshot.Meta.Steps {
@@ -851,7 +1062,7 @@ func previewPage(params viewParams, now time.Time) page {
 		if state == "running" {
 			currentAction = "commandExecution"
 		}
-		return stepNode{ID: id, State: state, Tone: tone(state), Runtime: "pid 4201 · turn turn-preview · 18:42:10", Action: currentAction, EventsURL: action, MemoryURL: action, TraceURL: action, HasMemory: memory, Active: activeStepState(scheduler.State(state)), Updated: "18:42:10"}
+		return stepNode{Key: id, ID: id, StepID: id, State: state, Tone: tone(state), Runtime: "pid 4201 · turn turn-preview · 18:42:10", Action: currentAction, EventsURL: action, MemoryURL: action, TraceURL: action, HasMemory: memory, Active: activeStepState(scheduler.State(state)), Updated: "18:42:10"}
 	}
 	run := func(id, name, state string, age time.Duration, steps ...stepNode) *runNode {
 		search := []string{id, name, state}

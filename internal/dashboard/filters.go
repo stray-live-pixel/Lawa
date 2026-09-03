@@ -275,8 +275,10 @@ func finalizeTree(node *runNode) {
 	node.HasUnfinished = node.State != "failed" && node.State != "succeeded"
 	node.HasWorking = isWorkingState(node.State) || len(node.ActiveSteps) != 0
 	node.HasFailed = isFailedState(node.State)
-	for _, step := range node.Steps {
-		node.HasFailed = node.HasFailed || isFailedState(step.State)
+	if !node.AgentGraph {
+		for _, step := range node.Steps {
+			node.HasFailed = node.HasFailed || isFailedState(step.State)
+		}
 	}
 	baseSearch := node.baseSearch
 	// Ручные модели в unit-тестах и preview могут задавать уже готовый индекс.
@@ -347,9 +349,16 @@ func failedTree(node *runNode) *runNode {
 		}
 	}
 	steps := make([]stepNode, 0, len(node.Steps))
-	for _, step := range node.Steps {
-		if isFailedState(step.State) {
-			steps = append(steps, step)
+	if node.AgentGraph && node.State == "failed" {
+		// У собственного failed agent-run вся visit-история объясняет маршрут и
+		// причину исхода, даже если отдельные visits завершились успешно.
+		steps = append(steps, node.Steps...)
+	} else if !node.AgentGraph {
+		steps = make([]stepNode, 0, len(node.Steps))
+		for _, step := range node.Steps {
+			if isFailedState(step.State) {
+				steps = append(steps, step)
+			}
 		}
 	}
 	clone := *node
