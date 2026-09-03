@@ -17,6 +17,9 @@ import (
 func TestVisitLifecycle(t *testing.T) {
 	root, initial, run := testAgentGraphRun(t)
 	first, second := initial.Meta.Visits[0].VisitID, initial.Meta.Visits[1].VisitID
+	if err := run.UpdateVisit(first, scheduler.Skipped, "", ""); err == nil {
+		t.Fatal("публичный UpdateVisit создал synthetic Skipped без причинного trigger")
+	}
 	if err := run.Reserve([]string{"choice"}); err == nil {
 		t.Fatal("legacy Reserve неожиданно управляет v4")
 	}

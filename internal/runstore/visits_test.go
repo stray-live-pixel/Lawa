@@ -354,6 +354,186 @@ func TestAgentGraphMetadataValidation(t *testing.T) {
 	}
 }
 
+// skippedJournalSnapshot собирает журнал, в котором выбранная ветка решения
+// сосуществует с причинной волной пропущенных альтернатив. Вложенный decision
+// распространяет ту же волну дальше, а after различает полностью пропущенный и
+// смешанный набор источников. Fixture не использует runtime-планировщик: этот
+// срез проверяет только durable-формат, который тот будет атомарно записывать.
+func skippedJournalSnapshot(t *testing.T) Snapshot {
+	t.Helper()
+	snapshot, err := Create(t.TempDir(), Input{
+		WorkflowJSON: []byte(`{
+  "version": 2,
+  "id": "skipped-journal",
+  "start": ["choice", "real"],
+  "steps": [
+    {"id":"choice","type":"agent","prompt":"Выбери ветку","after":[],"decisions":{
+      "main":{"to":["selected"]},"alpha":{"to":["inner"]},"zeta":{"to":["inner"]}}},
+    {"id":"real","type":"agent","prompt":"Выполни реальную ветку","after":[]},
+    {"id":"selected","type":"agent","prompt":"Выполни выбранную ветку","after":[]},
+    {"id":"inner","type":"agent","prompt":"Вложенное решение","after":[],"maxVisits":2,"decisions":{
+      "a":{"to":["leaf","inner"]},"b":{"to":["leaf"]}}},
+    {"id":"leaf","type":"agent","prompt":"Вложенный лист","after":[]},
+    {"id":"all-skipped","type":"agent","prompt":"Полностью пропущенный join","after":["inner","leaf"]},
+    {"id":"mixed","type":"agent","prompt":"Смешанный join","after":["real","inner"]}
+  ]
+}`),
+		Task: "Проверить журнал пропусков", CWD: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	choice, real := &snapshot.Meta.Visits[0], &snapshot.Meta.Visits[1]
+	choice.State, choice.CodexThreadID, choice.TurnID, choice.Attempt = scheduler.Succeeded, "chat-choice", "turn-choice", 1
+	choice.Decision = &DecisionRecord{
+		Key: "main", TurnID: "turn-choice", CallID: "call-choice", To: []string{"selected"},
+		Skipped: []string{"alpha", "zeta"}, Applied: true,
+	}
+	real.State, real.CodexThreadID, real.TurnID, real.Attempt = scheduler.Succeeded, "chat-real", "turn-real", 1
+	selectedID, innerID, leafID := newID(), newID(), newID()
+	snapshot.Meta.Visits = append(snapshot.Meta.Visits,
+		Visit{
+			VisitID: selectedID, StepID: "selected", Visit: 1, Iteration: 2,
+			Trigger: VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{choice.VisitID}, DecisionKey: "main"},
+			State:   scheduler.Succeeded, CodexThreadID: "chat-selected", TurnID: "turn-selected", Attempt: 1,
+		},
+		Visit{
+			VisitID: innerID, StepID: "inner", Visit: 1, Iteration: 2,
+			Trigger: VisitTrigger{Kind: TriggerDecisionSkipped, SourceVisitIDs: []string{choice.VisitID}, DecisionKey: "alpha"},
+			State:   scheduler.Skipped,
+		},
+		Visit{
+			VisitID: leafID, StepID: "leaf", Visit: 1, Iteration: 3,
+			Trigger: VisitTrigger{Kind: TriggerDecisionSkipped, SourceVisitIDs: []string{innerID}, DecisionKey: "a"},
+			State:   scheduler.Skipped,
+		},
+		Visit{
+			VisitID: newID(), StepID: "all-skipped", Visit: 1, Iteration: 3,
+			Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{innerID, leafID}}, State: scheduler.Skipped,
+		},
+		Visit{
+			VisitID: newID(), StepID: "mixed", Visit: 1, Iteration: 2,
+			Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{real.VisitID, innerID}}, State: scheduler.Pending,
+		},
+	)
+	if err := snapshot.validate(snapshot.Meta.RunID); err != nil {
+		t.Fatalf("допустимый skipped-журнал не прошёл проверку: %v", err)
+	}
+	return snapshot
+}
+
+// TestAgentGraphSkippedJournalValidation закрепляет причинность synthetic
+// Skipped. Ключ alternative каноничен, вложенная волна конечна даже на route-
+// цикле, а состояние after выводится только из фактических состояний источников.
+func TestAgentGraphSkippedJournalValidation(t *testing.T) {
+	valid := skippedJournalSnapshot(t)
+	clone := func() Snapshot { return cloneSnapshotMetadata(t, valid) }
+	for name, mutate := range map[string]func(*Snapshot){
+		"skipped с данными запуска": func(s *Snapshot) {
+			s.Meta.Visits[3].CodexThreadID = "forged-chat"
+		},
+		"неканоничный ключ общей альтернативы": func(s *Snapshot) {
+			s.Meta.Visits[3].Trigger.DecisionKey = "zeta"
+		},
+		"decision_skipped не является skipped": func(s *Snapshot) {
+			s.Meta.Visits[3].State = scheduler.Pending
+		},
+		"all-skipped after запущен": func(s *Snapshot) {
+			s.Meta.Visits[5].State = scheduler.Pending
+		},
+		"mixed after пропущен": func(s *Snapshot) {
+			s.Meta.Visits[6].State = scheduler.Skipped
+		},
+		"route-цикл повторно достигнут той же волной": func(s *Snapshot) {
+			s.Meta.Visits = append(s.Meta.Visits, Visit{
+				VisitID: newID(), StepID: "inner", Visit: 2, Iteration: 3,
+				Trigger: VisitTrigger{Kind: TriggerDecisionSkipped, SourceVisitIDs: []string{s.Meta.Visits[3].VisitID}, DecisionKey: "a"},
+				State:   scheduler.Skipped,
+			})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			damaged := clone()
+			mutate(&damaged)
+			if err := damaged.validate(damaged.Meta.RunID); err == nil {
+				t.Fatal("повреждённый skipped-журнал принят")
+			}
+		})
+	}
+}
+
+// TestAgentGraphSkippedDoesNotConsumeMaxVisits проверяет общий target двух
+// решений. Synthetic-запись сохраняет собственный ordinal visit, но не занимает
+// квоту и не мешает выбранной ветке создать единственный реальный запуск.
+func TestAgentGraphSkippedDoesNotConsumeMaxVisits(t *testing.T) {
+	snapshot, err := Create(t.TempDir(), Input{
+		WorkflowJSON: []byte(`{
+  "version": 2,
+  "id": "skipped-quota",
+  "start": ["skip", "run"],
+  "steps": [
+    {"id":"skip","type":"agent","prompt":"Пропусти target","after":[],"decisions":{
+      "main":{"to":["other"]},"unused":{"to":["target"]}}},
+    {"id":"run","type":"agent","prompt":"Выбери target","after":[],"decisions":{"go":{"to":["target"]}}},
+    {"id":"other","type":"agent","prompt":"Другая ветка","after":[]},
+    {"id":"target","type":"agent","prompt":"Общий target","after":[],"maxVisits":1}
+  ]
+}`),
+		Task: "Проверить квоту пропуска", CWD: t.TempDir(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skip, run := &snapshot.Meta.Visits[0], &snapshot.Meta.Visits[1]
+	skip.State, skip.CodexThreadID, skip.TurnID, skip.Attempt = scheduler.Succeeded, "chat-skip", "turn-skip", 1
+	skip.Decision = &DecisionRecord{Key: "main", TurnID: "turn-skip", CallID: "call-skip", To: []string{"other"}, Skipped: []string{"unused"}, Applied: true}
+	run.State, run.CodexThreadID, run.TurnID, run.Attempt = scheduler.Succeeded, "chat-run", "turn-run", 1
+	run.Decision = &DecisionRecord{Key: "go", TurnID: "turn-run", CallID: "call-run", To: []string{"target"}, Applied: true}
+	snapshot.Meta.Visits = append(snapshot.Meta.Visits,
+		Visit{
+			VisitID: newID(), StepID: "other", Visit: 1, Iteration: 2,
+			Trigger: VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{skip.VisitID}, DecisionKey: "main"}, State: scheduler.Pending,
+		},
+		Visit{
+			VisitID: newID(), StepID: "target", Visit: 1, Iteration: 2,
+			Trigger: VisitTrigger{Kind: TriggerDecisionSkipped, SourceVisitIDs: []string{skip.VisitID}, DecisionKey: "unused"}, State: scheduler.Skipped,
+		},
+		Visit{
+			VisitID: newID(), StepID: "target", Visit: 2, Iteration: 2,
+			Trigger: VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{run.VisitID}, DecisionKey: "go"}, State: scheduler.Pending,
+		},
+	)
+	if err := snapshot.validate(snapshot.Meta.RunID); err != nil {
+		t.Fatalf("Skipped ошибочно занял maxVisits общего target: %v", err)
+	}
+	overLimit := cloneSnapshotMetadata(t, snapshot)
+	overLimit.Meta.Visits[4].State = scheduler.Succeeded
+	overLimit.Meta.Visits[4].CodexThreadID, overLimit.Meta.Visits[4].TurnID, overLimit.Meta.Visits[4].Attempt = "chat-target", "turn-target", 1
+	overLimit.Meta.Visits = append(overLimit.Meta.Visits, Visit{
+		VisitID: newID(), StepID: "target", Visit: 3, Iteration: 3,
+		Trigger: VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{run.VisitID}, DecisionKey: "go"}, State: scheduler.Pending,
+	})
+	if err := overLimit.validate(overLimit.Meta.RunID); err == nil || !strings.Contains(err.Error(), "maxVisits") {
+		t.Fatalf("второй реальный запуск общего target обошёл квоту: %v", err)
+	}
+}
+
+// TestCanonicalSkippedTargetKey не позволяет пропустить target, который есть у
+// выбранного route, даже если на него указывает и невыбранная альтернатива.
+func TestCanonicalSkippedTargetKey(t *testing.T) {
+	step := workflow.Step{Decisions: map[string]workflow.Route{
+		"main":  {To: []string{"shared"}},
+		"alpha": {To: []string{"shared", "only-skipped"}},
+		"zeta":  {To: []string{"only-skipped"}},
+	}}
+	if key, ok := canonicalSkippedTargetKey(step, "main", "shared"); ok || key != "" {
+		t.Fatalf("выбранный общий target помечен как Skipped ключом %q", key)
+	}
+	if key, ok := canonicalSkippedTargetKey(step, "main", "only-skipped"); !ok || key != "alpha" {
+		t.Fatalf("не выбран канонический ключ общей альтернативы: %q, %v", key, ok)
+	}
+}
+
 // TestAfterTriggerFIFO не позволяет переставить причинность уже завершённых
 // посещений: каждый after-barrier обязан потреблять их в durable-порядке Visits.
 func TestAfterTriggerFIFO(t *testing.T) {
@@ -365,7 +545,7 @@ func TestAfterTriggerFIFO(t *testing.T) {
 	trigger := func(source Visit) error {
 		return validateTrigger(2, Visit{StepID: "check", Iteration: source.Iteration,
 			Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{source.VisitID}}},
-			workflow.Step{ID: "check", After: []string{"work"}}, nil, history, seen, uses, map[decisionCause]bool{})
+			workflow.Step{ID: "check", After: []string{"work"}}, nil, history, seen, nil, uses, map[decisionCause]bool{})
 	}
 	if err := trigger(second); err == nil {
 		t.Fatal("after принял более поздний источник раньше первого")
@@ -375,6 +555,21 @@ func TestAfterTriggerFIFO(t *testing.T) {
 	}
 	if err := trigger(second); err != nil {
 		t.Fatalf("after не перешёл к следующему источнику: %v", err)
+	}
+
+	// Незавершённый ранний instance остаётся первым в FIFO. Более поздний
+	// synthetic Skipped нельзя использовать как обход блокирующего Running.
+	running := Visit{VisitID: newID(), StepID: "work", State: scheduler.Running, Iteration: 1, CodexThreadID: "chat", TurnID: "turn", Attempt: 1}
+	skipped := Visit{VisitID: newID(), StepID: "work", State: scheduler.Skipped, Iteration: 2}
+	history = []Visit{running, skipped}
+	seen = map[string]Visit{running.VisitID: running, skipped.VisitID: skipped}
+	_, err := validateTriggerWithSkipWaves(2, Visit{
+		StepID: "check", Iteration: 2, State: scheduler.Skipped,
+		Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{skipped.VisitID}},
+	}, workflow.Step{ID: "check", After: []string{"work"}}, nil, history, seen, nil,
+		map[afterCause]bool{}, map[decisionCause]bool{}, map[string][]string{skipped.VisitID: {newID()}}, map[skipReach]bool{})
+	if err == nil {
+		t.Fatal("after обошёл ранний Running через более поздний Skipped")
 	}
 }
 

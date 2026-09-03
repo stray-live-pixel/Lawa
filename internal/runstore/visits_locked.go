@@ -88,6 +88,12 @@ func (r *LockedRun) UpdateVisit(visitID string, state scheduler.State, codexThre
 
 // updateVisit принимает Sync для регрессионных тестов атомарной публикации.
 func (r *LockedRun) updateVisit(visitID string, state scheduler.State, chat, diagnostic string, syncFile func(*os.File) error) error {
+	// Skipped является результатом планирования графа, а не внешним статусом
+	// Codex. Только атомарная materialization-процедура вправе создать такую
+	// запись вместе с причинным trigger.
+	if state == scheduler.Skipped {
+		return fmt.Errorf("посещение %q: Skipped может сохранить только планировщик", visitID)
+	}
 	return r.mutateVisits(syncFile, func(s *Snapshot) (bool, error) {
 		index, err := findVisit(s.Meta.Visits, visitID)
 		if err != nil {
