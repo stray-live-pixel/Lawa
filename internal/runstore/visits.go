@@ -95,7 +95,8 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		return fmt.Errorf("workflow v4: %w", err)
 	}
 	if m.RunState != RunRunning && m.RunState != RunSucceeded && m.RunState != RunFailed ||
-		m.RunState == RunRunning && m.StopReason != "" || m.RunState != RunRunning && !safeStoredText(m.StopReason, true) {
+		m.RunState == RunRunning && (m.StopReason != "" || m.StopVisitID != "") ||
+		m.RunState != RunRunning && !safeStoredText(m.StopReason, true) {
 		return fmt.Errorf("runState не соответствует безопасной причине остановки")
 	}
 
@@ -106,6 +107,7 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 	seen, chats := make(map[string]Visit), make(map[string]bool)
 	numbers, active := make(map[string]int), make(map[string]bool)
 	afterUses, decisionUses := make(map[afterCause]bool), make(map[decisionCause]bool)
+	advanced := make(map[string]bool)
 	for index, visit := range m.Visits {
 		step, exists := steps[visit.StepID]
 		if !exists || !validID(visit.VisitID) {
@@ -133,9 +135,12 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		if err := validateDecision(visit, step); err != nil {
 			return fmt.Errorf("посещение %q: %w", visit.VisitID, err)
 		}
+		for _, sourceID := range visit.Trigger.SourceVisitIDs {
+			advanced[sourceID] = true
+		}
 		seen[visit.VisitID] = visit
 	}
-	matchingFinish := false
+	matchingFinishID := ""
 	for _, visit := range m.Visits {
 		if visit.Decision == nil || !visit.Decision.Applied {
 			continue
@@ -153,11 +158,48 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 			if m.RunState != expected {
 				return fmt.Errorf("finish посещения %q не совпадает с runState", visit.VisitID)
 			}
-			matchingFinish = true
+			if matchingFinishID != "" {
+				return fmt.Errorf("run содержит больше одного применённого finish")
+			}
+			matchingFinishID = visit.VisitID
 		}
 	}
-	if m.RunState != RunRunning && len(active) != 0 && !matchingFinish {
-		return fmt.Errorf("терминальный run с незавершёнными visits требует применённый finish")
+	stopVisit, hasStopVisit := seen[m.StopVisitID]
+	if m.StopVisitID != "" && !hasStopVisit {
+		return fmt.Errorf("stopVisitId не ссылается на сохранённое посещение")
+	}
+	if matchingFinishID != "" && m.StopVisitID != matchingFinishID {
+		return fmt.Errorf("terminal finish требует свой visitId как причину остановки")
+	}
+	fatalDecision := false
+	if hasStopVisit {
+		step := steps[stopVisit.StepID]
+		fatalDecision = len(step.Decisions) != 0 && (stopVisit.Decision != nil && stopVisit.Decision.Error != "" ||
+			stopVisit.Decision == nil && stopVisit.State == scheduler.Succeeded)
+	}
+	if m.RunState != RunRunning && matchingFinishID == "" {
+		switch {
+		case fatalDecision:
+			if m.RunState != RunFailed {
+				return fmt.Errorf("ошибка решения может завершить run только как failed")
+			}
+		case m.RunState == RunFailed:
+			if !hasStopVisit || stopVisit.State != scheduler.Failed || advanced[stopVisit.VisitID] {
+				return fmt.Errorf("natural failed требует stopVisitId необработанного Failed-посещения")
+			}
+		case m.RunState == RunSucceeded:
+			if m.StopVisitID != "" {
+				return fmt.Errorf("natural succeeded не должен содержать stopVisitId")
+			}
+			for _, visit := range m.Visits {
+				if visit.State == scheduler.Failed && !advanced[visit.VisitID] {
+					return fmt.Errorf("natural succeeded содержит необработанное Failed-посещение %q", visit.VisitID)
+				}
+			}
+		}
+	}
+	if m.RunState != RunRunning && len(active) != 0 && matchingFinishID == "" && !fatalDecision {
+		return fmt.Errorf("терминальный run с незавершёнными visits требует применённый finish или ошибку решения")
 	}
 	return nil
 }
@@ -306,10 +348,12 @@ func sameOutcome(left, right *workflow.TerminalOutcome) bool {
 	return left == nil && right == nil || left != nil && right != nil && *left == *right
 }
 
+const maxStoredTextBytes = 4096
+
 // safeStoredText не даёт непроверенной диагностике сохранить управляющие
 // символы для будущего terminal/dashboard. Ограничение защищает и размер meta.
 func safeStoredText(value string, required bool) bool {
-	if !utf8.ValidString(value) || len(value) > 4096 || strings.IndexFunc(value, unicode.IsControl) >= 0 {
+	if !utf8.ValidString(value) || len(value) > maxStoredTextBytes || strings.IndexFunc(value, unicode.IsControl) >= 0 {
 		return false
 	}
 	return !required || strings.TrimSpace(value) != ""

@@ -166,7 +166,7 @@ func TestTerminalRunDoesNotReserve(t *testing.T) {
 		choice := &snapshot.Meta.Visits[0]
 		choice.State, choice.CodexThreadID, choice.TurnID, choice.Attempt = scheduler.Succeeded, "chat", "turn", 1
 		choice.Decision = &DecisionRecord{Key: "done", TurnID: "turn", CallID: "call", Finish: cloneOutcome(snapshot.Workflow.Steps[0].Decisions["done"].Finish), Skipped: []string{"fail", "go"}, Applied: true}
-		snapshot.Meta.RunState, snapshot.Meta.StopReason = RunSucceeded, "агент выбрал успешное завершение"
+		snapshot.Meta.RunState, snapshot.Meta.StopReason, snapshot.Meta.StopVisitID = RunSucceeded, "агент выбрал успешное завершение", choice.VisitID
 		return true, nil
 	})
 	if err != nil {

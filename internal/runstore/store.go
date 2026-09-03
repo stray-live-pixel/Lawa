@@ -80,6 +80,7 @@ type Metadata struct {
 	Steps             []Step   `json:"steps,omitempty"`
 	RunState          RunState `json:"runState,omitempty"`
 	StopReason        string   `json:"stopReason,omitempty"`
+	StopVisitID       string   `json:"stopVisitId,omitempty"`
 	Visits            []Visit  `json:"visits,omitempty"`
 }
 
@@ -553,7 +554,7 @@ func validateMetadataShape(data []byte, metadata Metadata) error {
 		}
 		return nil
 	}
-	if metadata.Version >= 1 && metadata.Version <= 3 && (has("runState") || has("stopReason") || has("visits")) {
+	if metadata.Version >= 1 && metadata.Version <= 3 && (has("runState") || has("stopReason") || has("stopVisitId") || has("visits")) {
 		return fmt.Errorf("legacy metadata не может содержать поля v4")
 	}
 	return nil
@@ -574,7 +575,7 @@ func (s Snapshot) validate(runID string) error {
 		m.ChildRequestID != "" && (m.Version != 3 || m.ParentRunID == "" || !validID(m.ChildRequestID)) ||
 		!filepath.IsAbs(m.CWD) || !validText(m.CWD) || strings.ContainsRune(m.CWD, 0) ||
 		oldFormat && !validText(m.InitiatorThreadID) || m.Version == 3 && m.InitiatorThreadID != "" ||
-		m.RunState != "" || m.StopReason != "" || m.Visits != nil ||
+		m.RunState != "" || m.StopReason != "" || m.StopVisitID != "" || m.Visits != nil ||
 		len(m.Steps) != len(s.Workflow.Steps) {
 		return fmt.Errorf("повреждены входы, версия или состав meta.json")
 	}

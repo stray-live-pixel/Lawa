@@ -137,8 +137,9 @@ func TestLegacyMetadataRejectsV4Fields(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*Metadata){
-		"runState":   func(meta *Metadata) { meta.RunState = RunRunning },
-		"stopReason": func(meta *Metadata) { meta.StopReason = "неожиданное поле" },
+		"runState":    func(meta *Metadata) { meta.RunState = RunRunning },
+		"stopReason":  func(meta *Metadata) { meta.StopReason = "неожиданное поле" },
+		"stopVisitId": func(meta *Metadata) { meta.StopVisitID = newID() },
 		"visits": func(meta *Metadata) {
 			meta.Visits = []Visit{{VisitID: newID(), StepID: "чужой"}}
 		},
@@ -218,7 +219,7 @@ func TestAgentGraphMetadataValidation(t *testing.T) {
 		finish := *route.Finish
 		choice.Decision = &DecisionRecord{Key: key, TurnID: "turn-finish", CallID: "call-finish", Finish: &finish, Skipped: []string{"done", "fail", "go"}, Applied: true}
 		choice.Decision.Skipped = slices.DeleteFunc(choice.Decision.Skipped, func(candidate string) bool { return candidate == key })
-		result.Meta.RunState, result.Meta.StopReason = state, reason
+		result.Meta.RunState, result.Meta.StopReason, result.Meta.StopVisitID = state, reason, choice.VisitID
 		return result
 	}
 	terminalWithPending := finishSnapshot("done", RunSucceeded, "агент выбрал успешное завершение")
@@ -239,6 +240,45 @@ func TestAgentGraphMetadataValidation(t *testing.T) {
 	if err := terminalWithCancelled.validate(terminalWithCancelled.Meta.RunID); err != nil {
 		t.Fatalf("terminal run не принял оставшееся Cancelled-посещение: %v", err)
 	}
+	// Без explicit finish итог обязан быть доказан causal frontier: техническая
+	// ошибка, уже потреблённая after, не мешает успеху, а необработанный Failed
+	// является единственно допустимой причиной natural failed.
+	natural := cloneSnapshotMetadata(t, snapshot)
+	natural.Meta.Visits[1].State, natural.Meta.Visits[1].CodexThreadID = scheduler.Succeeded, "chat-audit"
+	natural.Meta.Visits[1].TurnID, natural.Meta.Visits[1].Attempt = "turn-audit", 1
+	natural.Meta.Visits[3].State, natural.Meta.Visits[3].CodexThreadID = scheduler.Succeeded, "chat-check"
+	natural.Meta.Visits[3].TurnID, natural.Meta.Visits[3].Attempt = "turn-check", 1
+	natural.Meta.RunState, natural.Meta.StopReason = RunSucceeded, "workflow достиг естественного завершения"
+	if err := natural.validate(natural.Meta.RunID); err != nil {
+		t.Fatalf("доказанный natural success отклонён: %v", err)
+	}
+	handledFailure := cloneSnapshotMetadata(t, natural)
+	handledFailure.Meta.Visits[2].State, handledFailure.Meta.Visits[2].TechnicalError = scheduler.Failed, "тест упал"
+	if err := handledFailure.validate(handledFailure.Meta.RunID); err != nil {
+		t.Fatalf("обработанный Failed ошибочно отравил natural success: %v", err)
+	}
+	naturalFailure := cloneSnapshotMetadata(t, natural)
+	naturalFailure.Meta.Visits[1].State, naturalFailure.Meta.Visits[1].TechnicalError = scheduler.Failed, "аудит упал"
+	naturalFailure.Meta.RunState, naturalFailure.Meta.StopReason = RunFailed, "необработанное terminal-посещение завершилось с ошибкой"
+	naturalFailure.Meta.StopVisitID = naturalFailure.Meta.Visits[1].VisitID
+	if err := naturalFailure.validate(naturalFailure.Meta.RunID); err != nil {
+		t.Fatalf("доказанный natural failed отклонён: %v", err)
+	}
+	wrongNaturalCause := cloneSnapshotMetadata(t, naturalFailure)
+	wrongNaturalCause.Meta.StopVisitID = wrongNaturalCause.Meta.Visits[0].VisitID
+	if err := wrongNaturalCause.validate(wrongNaturalCause.Meta.RunID); err == nil {
+		t.Fatal("natural failed принял не-Failed причину")
+	}
+	falseSuccess := cloneSnapshotMetadata(t, naturalFailure)
+	falseSuccess.Meta.RunState, falseSuccess.Meta.StopReason, falseSuccess.Meta.StopVisitID = RunSucceeded, "ложный успех", ""
+	if err := falseSuccess.validate(falseSuccess.Meta.RunID); err == nil {
+		t.Fatal("natural succeeded принял необработанный Failed frontier")
+	}
+	falseSuccessCause := cloneSnapshotMetadata(t, natural)
+	falseSuccessCause.Meta.StopVisitID = falseSuccessCause.Meta.Visits[0].VisitID
+	if err := falseSuccessCause.validate(falseSuccessCause.Meta.RunID); err == nil {
+		t.Fatal("natural succeeded принял произвольный stopVisitId")
+	}
 	clone := func() Snapshot {
 		return cloneSnapshotMetadata(t, snapshot)
 	}
@@ -258,6 +298,7 @@ func TestAgentGraphMetadataValidation(t *testing.T) {
 		"unmaterialized route": func(s *Snapshot) {
 			s.Meta.Visits = s.Meta.Visits[:2]
 		},
+		"unknown stop visit": func(s *Snapshot) { s.Meta.StopVisitID = newID() },
 		"failed decision source": func(s *Snapshot) {
 			s.Meta.Visits[0].State = scheduler.Failed
 		},
