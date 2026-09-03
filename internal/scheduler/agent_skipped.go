@@ -100,11 +100,13 @@ type agentSkippedContext struct {
 	steps        map[string]workflow.Step
 	active       map[string]bool
 	visitCount   map[string]int
+	lastVisit    map[string]AgentVisitView
 	visitsByStep map[string][]AgentVisitView
 	usedAfter    map[agentAfterCause]bool
 	decisionUses map[agentDecisionCause]bool
 	skipRoots    map[string][]string
 	skipReached  map[agentSkipCause]bool
+	advanced     map[string]bool
 }
 
 // agentSkipCause ограничивает decision-fanout одной причинной волны. Одинаковый
@@ -123,9 +125,11 @@ func validateAgentSkippedViews(
 ) (agentSkippedContext, error) {
 	context := agentSkippedContext{
 		steps: make(map[string]workflow.Step, len(w.Steps)), active: make(map[string]bool),
-		visitCount: make(map[string]int), visitsByStep: make(map[string][]AgentVisitView),
-		usedAfter: make(map[agentAfterCause]bool), decisionUses: make(map[agentDecisionCause]bool),
+		visitCount: make(map[string]int), lastVisit: make(map[string]AgentVisitView),
+		visitsByStep: make(map[string][]AgentVisitView),
+		usedAfter:    make(map[agentAfterCause]bool), decisionUses: make(map[agentDecisionCause]bool),
 		skipRoots: make(map[string][]string), skipReached: make(map[agentSkipCause]bool),
+		advanced: make(map[string]bool),
 	}
 	for _, step := range w.Steps {
 		context.steps[step.ID] = step
@@ -150,6 +154,7 @@ func validateAgentSkippedViews(
 		// может сосуществовать с выполняющимся visit того же шага.
 		if visit.State != Skipped {
 			context.visitCount[visit.StepID]++
+			context.lastVisit[visit.StepID] = visit
 			if step.MaxVisits != nil && context.visitCount[visit.StepID] > *step.MaxVisits {
 				return agentSkippedContext{}, fmt.Errorf("посещение %q превышает maxVisits=%d шага %q", visit.VisitID, *step.MaxVisits, visit.StepID)
 			}
@@ -215,6 +220,9 @@ func validateAgentSkippedViews(
 		}
 		seen[visit.VisitID] = visit
 		context.visitsByStep[visit.StepID] = append(context.visitsByStep[visit.StepID], visit)
+		for _, sourceID := range visit.Trigger.SourceVisitIDs {
+			context.advanced[sourceID] = true
+		}
 	}
 
 	// Applied — durable-обещание полного перехода. Выбранные runnable targets

@@ -16,8 +16,8 @@ import (
 )
 
 // agentObservabilityRun создаёт два законченных прохода self-loop и достигает
-// maxVisits при третьей активации. Второй стартовый шаг остаётся Pending: это
-// штатная история terminal outcome, а не незаписанное событие исполнителя.
+// maxVisits при третьей активации. Второй стартовый шаг становится Skipped:
+// terminal outcome не оставляет видимость будущего запуска Codex.
 func agentObservabilityRun(t *testing.T) (string, runstore.Snapshot, runstore.Visit, runstore.Visit) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "runs")
@@ -57,6 +57,9 @@ func agentObservabilityRun(t *testing.T) (string, runstore.Snapshot, runstore.Vi
 	terminal, err := run.AdvanceAgentGraph()
 	if err != nil || terminal.Snapshot.Meta.RunState != runstore.RunFailed {
 		t.Fatalf("maxVisits не завершил run: %+v, %v", terminal, err)
+	}
+	if terminal.Snapshot.Meta.Visits[1].State != scheduler.Skipped {
+		t.Fatalf("не запущенная ветка не получила terminal skipped: %+v", terminal.Snapshot.Meta.Visits)
 	}
 	return root, terminal.Snapshot, first, second
 }
@@ -115,9 +118,9 @@ func TestAgentStatusShowsVisitsRoutesAndLimit(t *testing.T) {
 		"решение: again, applied=false",
 		"переход: loop",
 		"объяснение: Нужна ещё проверка",
-		"skipped: done",
+		"skipped keys: done",
 		"сообщение: первый проход",
-		"unused#1 [",
+		"unused#1 [" + snapshot.Meta.Visits[1].VisitID + "]: skipped",
 	} {
 		if !strings.Contains(text, fragment) {
 			t.Errorf("status не содержит %q:\n%s", fragment, text)
@@ -193,8 +196,8 @@ func TestAgentLogsRejectInvalidVisitFilters(t *testing.T) {
 }
 
 // TestAgentLogsFollowDrainsVisitEventAndIgnoresUnstarted проверяет три границы
-// завершения: terminal RunState не опережает финальный JSONL, но Pending и
-// зарезервированный Starting без thread/turn не требуют несуществующих событий.
+// завершения: terminal RunState не опережает финальный JSONL, но Skipped без
+// запуска Codex и зарезервированный Starting без thread/turn не требуют событий.
 func TestAgentLogsFollowDrainsVisitEventAndIgnoresUnstarted(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "runs")
 	snapshot, err := runstore.Create(root, runstore.Input{
@@ -238,6 +241,13 @@ func TestAgentLogsFollowDrainsVisitEventAndIgnoresUnstarted(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	terminal, err := run.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if terminal.Meta.Visits[1].State != scheduler.Skipped {
+		t.Fatalf("terminal finish оставил не запущенную ветку в %s", terminal.Meta.Visits[1].State)
 	}
 
 	ctx, cancel := context.WithCancel(t.Context())

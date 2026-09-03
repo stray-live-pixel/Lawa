@@ -251,10 +251,9 @@ func TestPlanAgentSkippedClosureRejectsForgery(t *testing.T) {
 	})
 }
 
-// TestPlanAgentGraphDoesNotProduceSkipped сохраняет границу этого PR: основному
-// producer ещё не поручено материализовывать альтернативы. Новый pure API можно
-// интегрировать отдельно, не меняя поведение уже работающего планировщика.
-func TestPlanAgentGraphDoesNotProduceSkipped(t *testing.T) {
+// TestPlanAgentGraphProducesSkipped проверяет подключение pure-замыкания к
+// обычному producer: выбранный target запускается, а альтернатива не запускается.
+func TestPlanAgentGraphProducesSkipped(t *testing.T) {
 	w := agentWorkflow([]string{"choice"},
 		agentStep("choice", nil, map[string]workflow.Route{
 			"run": {To: []string{"live"}}, "unused": {To: []string{"unused"}},
@@ -264,9 +263,11 @@ func TestPlanAgentGraphDoesNotProduceSkipped(t *testing.T) {
 	plan, err := PlanAgentGraph(w, []AgentVisitView{
 		agentStartVisit("choice-1", "choice", Succeeded, 1, &AgentDecisionView{Key: "run"}),
 	})
-	if err != nil || len(plan.DecisionActivations) != 1 || plan.DecisionActivations[0].StepID != "live" ||
-		plan.DecisionActivations[0].InitialState != "" || plan.DecisionActivations[0].Trigger.Kind != AgentTriggerDecision {
-		t.Fatalf("основной producer неожиданно изменил поведение: %#v, %v", plan, err)
+	if err != nil || len(plan.DecisionActivations) != 2 || plan.DecisionActivations[0].StepID != "live" ||
+		plan.DecisionActivations[0].InitialState != "" || plan.DecisionActivations[0].Trigger.Kind != AgentTriggerDecision ||
+		plan.DecisionActivations[1].StepID != "unused" || plan.DecisionActivations[1].InitialState != Skipped ||
+		plan.DecisionActivations[1].Trigger.Kind != AgentTriggerDecisionSkipped {
+		t.Fatalf("основной producer не разделил выбранную и пропущенную ветки: %#v, %v", plan, err)
 	}
 }
 

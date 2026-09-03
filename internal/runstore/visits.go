@@ -97,6 +97,11 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		return fmt.Errorf("workflow v4: %w", err)
 	}
 	hasLimitProof := m.StopLimitStepID != "" || m.StopLimitTrigger != nil || m.StopLimitIteration != 0
+	limitDecisionSourceID := ""
+	if m.RunState != RunRunning && m.StopLimitTrigger != nil && m.StopLimitTrigger.Kind == TriggerDecision &&
+		len(m.StopLimitTrigger.SourceVisitIDs) == 1 {
+		limitDecisionSourceID = m.StopLimitTrigger.SourceVisitIDs[0]
+	}
 	if m.RunState != RunRunning && m.RunState != RunSucceeded && m.RunState != RunFailed ||
 		m.RunState == RunRunning && (m.StopReason != "" || m.StopVisitID != "" || hasLimitProof) ||
 		m.RunState != RunRunning && !safeStoredText(m.StopReason, true) {
@@ -153,7 +158,7 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		}
 		roots, err := validateTriggerWithSkipWaves(
 			index, visit, step, s.Workflow.Start, m.Visits[:index], seen, steps,
-			afterUses, decisionUses, skipWaves, skipReached,
+			afterUses, decisionUses, skipWaves, skipReached, m.RunState != RunRunning, limitDecisionSourceID,
 		)
 		if err != nil {
 			return fmt.Errorf("посещение %q: %w", visit.VisitID, err)
@@ -161,6 +166,9 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		if len(roots) != 0 {
 			skipWaves[visit.VisitID] = roots
 			skipReached[skipReach{waveKey: skipWaveKey(roots), targetStepID: visit.StepID}] = true
+		}
+		if err := validateSkippedVisit(m.RunState, visit, seen); err != nil {
+			return fmt.Errorf("посещение %q: %w", visit.VisitID, err)
 		}
 		if err := validateDecision(visit, step); err != nil {
 			return fmt.Errorf("посещение %q: %w", visit.VisitID, err)
@@ -459,7 +467,7 @@ func validateTrigger(
 ) error {
 	_, err := validateTriggerWithSkipWaves(
 		index, visit, step, start, history, seen, steps,
-		afterUses, decisionUses, nil, nil,
+		afterUses, decisionUses, nil, nil, false, "",
 	)
 	return err
 }
@@ -479,6 +487,8 @@ func validateTriggerWithSkipWaves(
 	decisionUses map[decisionCause]bool,
 	skipWaves map[string][]string,
 	skipReached map[skipReach]bool,
+	terminalRun bool,
+	limitDecisionSourceID string,
 ) ([]string, error) {
 	if index < len(start) {
 		if visit.StepID != start[index] || visit.Trigger.Kind != TriggerStart || visit.Visit != 1 || visit.Iteration != 1 {
@@ -490,15 +500,13 @@ func validateTriggerWithSkipWaves(
 		if index >= len(start) || len(visit.Trigger.SourceVisitIDs) != 0 || visit.Trigger.DecisionKey != "" {
 			return nil, fmt.Errorf("start допустим только в начальном префиксе без источников")
 		}
-		if visit.State == scheduler.Skipped {
-			return nil, fmt.Errorf("start не может быть synthetic Skipped")
-		}
 	case TriggerAfter:
 		if len(step.After) == 0 || len(visit.Trigger.SourceVisitIDs) != len(step.After) || visit.Trigger.DecisionKey != "" {
 			return nil, fmt.Errorf("after должен содержать источник для каждого Step.After")
 		}
 		maxIteration := 0
 		allSkipped := true
+		causalSkip := false
 		var roots []string
 		for i, sourceID := range visit.Trigger.SourceVisitIDs {
 			source, exists := seen[sourceID]
@@ -507,40 +515,45 @@ func validateTriggerWithSkipWaves(
 			}
 			cause := afterCause{visit.StepID, step.After[i], sourceID}
 			expected := ""
+			foundSource := false
+			bypassRealSources := terminalRun && visit.State == scheduler.Skipped && source.State == scheduler.Skipped
 			for _, candidate := range history {
 				candidateCause := afterCause{visit.StepID, step.After[i], candidate.VisitID}
-				// FIFO учитывает и незавершённый instance. Иначе более поздний
-				// synthetic Skipped смог бы обойти ранний Running того же шага.
-				if candidate.StepID == step.After[i] && !afterUses[candidateCause] {
+				if candidate.StepID != step.After[i] || afterUses[candidateCause] {
+					continue
+				}
+				if expected == "" {
 					expected = candidate.VisitID
+				}
+				if candidate.VisitID == sourceID {
+					foundSource = true
 					break
 				}
+				if candidate.State == scheduler.Skipped {
+					bypassRealSources = false
+				}
 			}
-			if sourceID != expected || afterUses[cause] {
+			if !foundSource || sourceID != expected && !bypassRealSources || afterUses[cause] {
 				return nil, fmt.Errorf("after должен потреблять самый ранний неиспользованный источник")
 			}
 			afterUses[cause] = true
 			maxIteration = max(maxIteration, source.Iteration)
 			allSkipped = allSkipped && source.State == scheduler.Skipped
-			roots = append(roots, skipWaves[sourceID]...)
+			if sourceRoots, causal := skipWaves[sourceID]; causal {
+				causalSkip = true
+				roots = append(roots, sourceRoots...)
+			}
 		}
 		if visit.Iteration != maxIteration {
 			return nil, fmt.Errorf("after должен наследовать максимальную iteration источников")
 		}
-		if (visit.State == scheduler.Skipped) != allSkipped {
-			return nil, fmt.Errorf("Skipped after должен иметь только Skipped-источники")
+		if visit.State != scheduler.Skipped && allSkipped {
+			return nil, fmt.Errorf("after с полностью Skipped-источниками сам должен быть Skipped")
 		}
-		if allSkipped {
-			roots = canonicalSkipRoots(roots)
-			if len(roots) == 0 {
-				return nil, fmt.Errorf("Skipped after потерял причинную волну")
-			}
-			return roots, nil
+		if visit.State == scheduler.Skipped && allSkipped && causalSkip {
+			return canonicalSkipRoots(roots), nil
 		}
 	case TriggerDecision:
-		if visit.State == scheduler.Skipped {
-			return nil, fmt.Errorf("выбранный decision-target не может быть Skipped")
-		}
 		if len(visit.Trigger.SourceVisitIDs) != 1 || visit.Trigger.DecisionKey == "" {
 			return nil, fmt.Errorf("decision требует один источник и ключ")
 		}
@@ -569,7 +582,8 @@ func validateTriggerWithSkipWaves(
 		var roots []string
 		switch source.State {
 		case scheduler.Succeeded:
-			if source.Decision == nil || !source.Decision.Applied || source.Decision.Error != "" {
+			if source.Decision == nil || source.Decision.Error != "" ||
+				!source.Decision.Applied && source.VisitID != limitDecisionSourceID {
 				return nil, fmt.Errorf("decision_skipped ссылается не на применённое решение")
 			}
 			selectedKey = source.Decision.Key
@@ -651,6 +665,29 @@ func skipWaveKey(roots []string) string {
 		result.WriteString(root)
 	}
 	return result.String()
+}
+
+// validateSkippedVisit отличает synthetic skip работающего графа от Pending,
+// который terminal-переход всего run закрыл без запуска Codex.
+func validateSkippedVisit(runState RunState, visit Visit, seen map[string]Visit) error {
+	if runState != RunRunning || visit.Trigger.Kind == TriggerDecisionSkipped {
+		return nil
+	}
+	if visit.Trigger.Kind != TriggerAfter {
+		if visit.State == scheduler.Skipped {
+			return fmt.Errorf("работающий run допускает Skipped только из невыбранного route или полностью пропущенного after")
+		}
+		return nil
+	}
+	allSkipped := len(visit.Trigger.SourceVisitIDs) != 0
+	for _, sourceID := range visit.Trigger.SourceVisitIDs {
+		source, exists := seen[sourceID]
+		allSkipped = allSkipped && exists && source.State == scheduler.Skipped
+	}
+	if (visit.State == scheduler.Skipped) != allSkipped {
+		return fmt.Errorf("Skipped after должен иметь только Skipped-источники")
+	}
+	return nil
 }
 
 func validateDecision(visit Visit, step workflow.Step) error {

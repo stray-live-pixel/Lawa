@@ -567,7 +567,7 @@ func TestAfterTriggerFIFO(t *testing.T) {
 		StepID: "check", Iteration: 2, State: scheduler.Skipped,
 		Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{skipped.VisitID}},
 	}, workflow.Step{ID: "check", After: []string{"work"}}, nil, history, seen, nil,
-		map[afterCause]bool{}, map[decisionCause]bool{}, map[string][]string{skipped.VisitID: {newID()}}, map[skipReach]bool{})
+		map[afterCause]bool{}, map[decisionCause]bool{}, map[string][]string{skipped.VisitID: {newID()}}, map[skipReach]bool{}, false, "")
 	if err == nil {
 		t.Fatal("after обошёл ранний Running через более поздний Skipped")
 	}

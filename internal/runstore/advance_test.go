@@ -38,6 +38,20 @@ func advanceInput(t *testing.T) Input {
 }`), Task: "Продвинуть граф", Comment: "Тест persistence bridge", CWD: t.TempDir()}
 }
 
+// skippedJoinInput воспроизводит if/else с общим after-join.
+func skippedJoinInput(t *testing.T) Input {
+	t.Helper()
+	return Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"skipped-join","start":["choice"],"steps":[
+    {"id":"choice","type":"agent","prompt":"Выбери","after":[],"decisions":{
+      "left":{"to":["left"]},"right":{"to":["right"]}}},
+    {"id":"left","type":"agent","prompt":"Левая ветка","after":[]},
+    {"id":"right","type":"agent","prompt":"Правая ветка","after":[]},
+    {"id":"join","type":"agent","prompt":"Объедини","after":["left","right"]}
+  ]
+}`), Task: "Проверить пропущенную ветку", CWD: t.TempDir()}
+}
+
 // boundedLoopInput оставляет параллельный Pending visit, чтобы остановка по
 // квоте доказывала семантику всего run, а не только естественную quiescence.
 func boundedLoopInput(t *testing.T, successfulLimit bool) Input {
@@ -266,6 +280,51 @@ func TestAdvanceAgentGraphRouteAndAfter(t *testing.T) {
 	}
 }
 
+// TestAdvanceAgentGraphPersistsSkippedBranchAndUnblocksJoin проверяет всю
+// persistence-цепочку if/else: невыбранная ветка не запускается, но остаётся
+// terminal-причиной для общего join.
+func TestAdvanceAgentGraphPersistsSkippedBranchAndUnblocksJoin(t *testing.T) {
+	root := t.TempDir()
+	initial, err := Create(root, skippedJoinInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := OpenLocked(root, initial.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+
+	choiceID := initial.Meta.Visits[0].VisitID
+	finishDecisionVisit(t, run, choiceID, "left")
+	advanced, err := run.AdvanceAgentGraph()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !advanced.Changed || len(advanced.CreatedVisits) != 2 || !advanced.Snapshot.Meta.Visits[0].Decision.Applied {
+		t.Fatalf("выбор и branch-записи не опубликованы одним переходом: %+v", advanced)
+	}
+	left, right := advanced.CreatedVisits[0], advanced.CreatedVisits[1]
+	if left.StepID != "left" || left.State != scheduler.Pending ||
+		right.StepID != "right" || right.State != scheduler.Skipped || right.Trigger.Kind != TriggerDecisionSkipped {
+		t.Fatalf("ветки получили неверные состояния: left=%+v right=%+v", left, right)
+	}
+	if info, statErr := os.Stat(filepath.Join(root, initial.Meta.RunID, "memory", right.VisitID+".md")); statErr != nil || info.Size() != 0 {
+		t.Fatalf("Skipped visit не получил пустую durable-память: info=%v err=%v", info, statErr)
+	}
+
+	finishPlainVisit(t, run, left.VisitID)
+	joined, err := run.AdvanceAgentGraph()
+	if err != nil || len(joined.CreatedVisits) != 1 {
+		t.Fatalf("смешанный barrier не создал join: %+v, %v", joined, err)
+	}
+	join := joined.CreatedVisits[0]
+	if join.StepID != "join" || join.State != scheduler.Pending ||
+		!slices.Equal(join.Trigger.SourceVisitIDs, []string{left.VisitID, right.VisitID}) {
+		t.Fatalf("join потерял выполненную или пропущенную причину: %+v", join)
+	}
+}
+
 // TestAdvanceAgentGraphFinishWithActiveVisit фиксирует приоритет explicit finish:
 // он атомарно связывается с Applied decision и останавливает планирование, не
 // переписывая состояние уже работающего параллельного visit.
@@ -294,8 +353,13 @@ func TestAdvanceAgentGraphFinishWithActiveVisit(t *testing.T) {
 	}
 	if !result.Changed || result.Plan.Terminal == nil || result.Snapshot.Meta.RunState != RunSucceeded ||
 		result.Snapshot.Meta.StopReason == "" || result.Snapshot.Meta.StopVisitID != decisionID ||
-		!result.Snapshot.Meta.Visits[0].Decision.Applied || result.Snapshot.Meta.Visits[1].State != scheduler.Running || len(result.CreatedVisits) != 0 {
+		!result.Snapshot.Meta.Visits[0].Decision.Applied || result.Snapshot.Meta.Visits[1].State != scheduler.Running || len(result.CreatedVisits) != 3 {
 		t.Fatalf("finish опубликован неатомарно: %+v", result)
+	}
+	for _, visit := range result.CreatedVisits {
+		if visit.State != scheduler.Skipped {
+			t.Fatalf("finish не сохранил пропущенную ветку: %+v", visit)
+		}
 	}
 	if _, err := run.AdvanceAgentGraph(); err == nil {
 		t.Fatal("terminal run принят для повторного планирования")
@@ -467,6 +531,8 @@ func TestAdvanceAgentGraphBoundedLoop(t *testing.T) {
 				s.Workflow.Steps = slices.Clone(s.Workflow.Steps)
 				outcome := workflow.OutcomeSucceeded
 				s.Workflow.Steps[1].Decisions = map[string]workflow.Route{"done": {Finish: &outcome}}
+				s.Meta.Visits[1].State, s.Meta.Visits[1].CodexThreadID = scheduler.Running, "chat-open-wave"
+				s.Meta.Visits[1].TurnID, s.Meta.Visits[1].Attempt = "turn-open-wave", 1
 			},
 			"no pending activation": func(s *Snapshot) {
 				s.Meta.Visits[2].State, s.Meta.Visits[2].Decision = scheduler.Failed, nil
@@ -495,7 +561,7 @@ func TestAdvanceAgentGraphBoundedLoop(t *testing.T) {
 		if err != nil || result.Snapshot.Meta.RunState != RunSucceeded || result.Snapshot.Meta.StopVisitID != second.VisitID ||
 			result.Snapshot.Meta.StopLimitStepID != "loop" || result.Snapshot.Meta.StopLimitTrigger == nil ||
 			result.Snapshot.Meta.StopLimitIteration != 3 || result.Plan.Terminal == nil ||
-			result.Plan.Terminal.Outcome != workflow.OutcomeSucceeded || result.Snapshot.Meta.Visits[1].State != scheduler.Pending {
+			result.Plan.Terminal.Outcome != workflow.OutcomeSucceeded || result.Snapshot.Meta.Visits[1].State != scheduler.Skipped {
 			t.Fatalf("onLimit не завершил run при активной параллельной ветке: %+v, %v", result, err)
 		}
 	})

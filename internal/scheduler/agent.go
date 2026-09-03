@@ -85,7 +85,10 @@ type AgentPlan struct {
 	ApplyDecisionVisitIDs []string
 	DecisionActivations   []AgentActivation
 	AfterActivations      []AgentActivation
-	Terminal              *AgentTerminal
+	// MarkSkippedVisitIDs закрывает ещё не запущенные Pending-visits вместе с
+	// terminal outcome. Выполняющиеся visits сюда не попадают.
+	MarkSkippedVisitIDs []string
+	Terminal            *AgentTerminal
 }
 
 // PlanAgentGraph вычисляет следующий переход version=2 без I/O и не изменяет
@@ -108,17 +111,17 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 	if w.EffectiveVersion() != workflow.VersionAgentGraph {
 		return AgentPlan{}, fmt.Errorf("visit-aware планировщик требует workflow version=2")
 	}
-	context, err := validateAgentVisitViews(w, visits)
+	context, err := validateAgentSkippedViews(w, visits, false, "")
 	if err != nil {
 		return AgentPlan{}, fmt.Errorf("visit-aware планировщик: %w", err)
 	}
 	if terminal, exists := firstDecisionFatal(context.steps, visits); exists {
-		return terminal, nil
+		return markPendingVisitsSkipped(terminal, visits), nil
 	}
 	decisionWaveComplete := agentDecisionWaveComplete(context.steps, visits)
 	if decisionWaveComplete {
-		if terminal, exists := firstDecisionTerminal(context.steps, visits); exists {
-			return terminal, nil
+		if terminal, exists := firstDecisionTerminal(context, visits); exists {
+			return markPendingVisitsSkipped(terminal, visits), nil
 		}
 	}
 
@@ -127,6 +130,7 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 	for stepID := range context.active {
 		projectedActive[stepID] = true
 	}
+	projectedSkipped := cloneAgentSkipReached(context.skipReached)
 
 	// Один decision fanout является неделимой операцией. Если хотя бы одна цель
 	// занята, нельзя применить только свободную часть: повтор после crash иначе не
@@ -137,7 +141,7 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 		}
 		step := context.steps[visit.StepID]
 		decision := visit.Decision
-		if len(step.Decisions) == 0 || visit.State != Succeeded || decision == nil || decision.Applied || decision.Error != "" {
+		if len(step.Decisions) == 0 || visit.State != Succeeded || decision == nil || decision.Error != "" {
 			continue
 		}
 		route, exists := step.Decisions[decision.Key]
@@ -145,6 +149,15 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 			// Unknown и finish уже обработаны firstDecisionTerminal. Условие
 			// оставлено защитным, чтобы дальнейшее расширение функции не могло
 			// превратить terminal route в обычную активацию.
+			continue
+		}
+		skipped := missingDecisionSkippedActivations(
+			step, visit, decision.Key, []string{visit.VisitID}, projectedSkipped,
+		)
+		if decision.Applied {
+			// Старые running snapshots могли применить выбранный route до появления
+			// durable skipped-записей. Дополняем только отсутствующие альтернативы.
+			plan.DecisionActivations = append(plan.DecisionActivations, skipped...)
 			continue
 		}
 		blocked := false
@@ -163,7 +176,11 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 		for _, target := range route.To {
 			trigger := AgentTriggerView{Kind: AgentTriggerDecision, SourceVisitIDs: []string{visit.VisitID}, DecisionKey: decision.Key}
 			if terminal, reached := agentVisitLimitTerminal(context.steps[target], visit.Iteration+1, trigger, context); reached {
-				return AgentPlan{Terminal: terminal}, nil
+				limitPlan := AgentPlan{Terminal: terminal}
+				if len(skipped) != 0 {
+					limitPlan.DecisionActivations = skipped
+				}
+				return markPendingVisitsSkipped(limitPlan, visits), nil
 			}
 		}
 		plan.ApplyDecisionVisitIDs = append(plan.ApplyDecisionVisitIDs, visit.VisitID)
@@ -174,6 +191,7 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 			})
 			projectedActive[target] = true
 		}
+		plan.DecisionActivations = append(plan.DecisionActivations, skipped...)
 	}
 	// After также ждёт decision-wave. Иначе параллельный Running decision мог бы
 	// завершиться между сохранением limit-terminal и drain: повторная проверка
@@ -186,24 +204,32 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 	// один step в одном снимке, явный route получает его первым, а FIFO-источники
 	// after остаются непотреблёнными до следующего вызова.
 	for _, step := range w.Steps {
-		if len(step.After) == 0 || projectedActive[step.ID] {
+		if len(step.After) == 0 {
 			continue
 		}
-		sources, iteration, ready := nextAfterSources(step, context)
+		sources, iteration, allSkipped, ready := nextSkippedAfterSources(step, context)
 		if !ready {
 			continue
 		}
+		if projectedActive[step.ID] && !allSkipped {
+			continue
+		}
 		trigger := AgentTriggerView{Kind: AgentTriggerAfter, SourceVisitIDs: sources}
-		if terminal, reached := agentVisitLimitTerminal(step, iteration, trigger, context); reached {
+		if terminal, reached := agentVisitLimitTerminal(step, iteration, trigger, context); !allSkipped && reached {
 			// Terminal нельзя смешивать с routes/after, уже накопленными выше:
 			// runstore публикует либо весь обычный переход, либо один итог.
-			return AgentPlan{Terminal: terminal}, nil
+			return markPendingVisitsSkipped(AgentPlan{Terminal: terminal}, visits), nil
 		}
-		plan.AfterActivations = append(plan.AfterActivations, AgentActivation{
+		activation := AgentActivation{
 			StepID: step.ID, Iteration: iteration,
 			Trigger: AgentTriggerView{Kind: AgentTriggerAfter, SourceVisitIDs: sources},
-		})
-		projectedActive[step.ID] = true
+		}
+		if allSkipped {
+			activation.InitialState = Skipped
+		} else {
+			projectedActive[step.ID] = true
+		}
+		plan.AfterActivations = append(plan.AfterActivations, activation)
 	}
 
 	if len(plan.ApplyDecisionVisitIDs) != 0 || len(plan.DecisionActivations) != 0 || len(plan.AfterActivations) != 0 {
@@ -215,17 +241,17 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 
 	for _, visit := range visits {
 		if visit.State == Failed && !context.advanced[visit.VisitID] {
-			return AgentPlan{Terminal: &AgentTerminal{
+			return markPendingVisitsSkipped(AgentPlan{Terminal: &AgentTerminal{
 				Outcome:      workflow.OutcomeFailed,
 				Reason:       fmt.Sprintf("terminal-посещение %q шага %q завершилось с ошибкой", visit.VisitID, visit.StepID),
 				CauseVisitID: visit.VisitID,
-			}}, nil
+			}}, visits), nil
 		}
 	}
-	return AgentPlan{Terminal: &AgentTerminal{
+	return markPendingVisitsSkipped(AgentPlan{Terminal: &AgentTerminal{
 		Outcome: workflow.OutcomeSucceeded,
 		Reason:  "workflow достиг естественного завершения",
-	}}, nil
+	}}, visits), nil
 }
 
 // agentPlanningContext — проверенные индексы одного снимка. terminalByStep
@@ -456,9 +482,10 @@ func agentDecisionWaveComplete(steps map[string]workflow.Step, visits []AgentVis
 // возвращает её первый terminal-переход в порядке Visits. Обычные routes здесь
 // не материализуются: если visit требует завершения, накопление активаций даже
 // более раннего route безопасно не начинается.
-func firstDecisionTerminal(steps map[string]workflow.Step, visits []AgentVisitView) (AgentPlan, bool) {
+func firstDecisionTerminal(context agentSkippedContext, visits []AgentVisitView) (AgentPlan, bool) {
+	projectedSkipped := cloneAgentSkipReached(context.skipReached)
 	for _, visit := range visits {
-		step := steps[visit.StepID]
+		step := context.steps[visit.StepID]
 		if len(step.Decisions) == 0 {
 			continue
 		}
@@ -471,6 +498,9 @@ func firstDecisionTerminal(steps map[string]workflow.Step, visits []AgentVisitVi
 			outcome := *route.Finish
 			return AgentPlan{
 				ApplyDecisionVisitIDs: []string{visit.VisitID},
+				DecisionActivations: missingDecisionSkippedActivations(
+					step, visit, decision.Key, []string{visit.VisitID}, projectedSkipped,
+				),
 				Terminal: &AgentTerminal{
 					Outcome:      outcome,
 					Reason:       fmt.Sprintf("решение %q шага %q выбрало finish %q", decision.Key, visit.StepID, outcome),
@@ -480,6 +510,18 @@ func firstDecisionTerminal(steps map[string]workflow.Step, visits []AgentVisitVi
 		}
 	}
 	return AgentPlan{}, false
+}
+
+// markPendingVisitsSkipped убирает обещание будущего запуска после глобального
+// terminal outcome. Уже начатые visits завершает coordinator, а Pending можно
+// безопасно закрыть тем же атомарным commit.
+func markPendingVisitsSkipped(plan AgentPlan, visits []AgentVisitView) AgentPlan {
+	for _, visit := range visits {
+		if visit.State == Pending {
+			plan.MarkSkippedVisitIDs = append(plan.MarkSkippedVisitIDs, visit.VisitID)
+		}
+	}
+	return plan
 }
 
 func fatalDecisionPlan(visit AgentVisitView, detail string) AgentPlan {
@@ -519,17 +561,17 @@ func nextAfterSources(step workflow.Step, context agentPlanningContext) ([]strin
 // очередного посещения step и после проверки no-overlap. Поэтому count==limit
 // означает отказ именно от N+1, а CauseVisitID всегда указывает на последний
 // разрешённый visit N. Положительность лимита уже доказана Workflow.Validate.
-func agentVisitLimitTerminal(step workflow.Step, nextIteration int, trigger AgentTriggerView, context agentPlanningContext) (*AgentTerminal, bool) {
+func agentVisitLimitTerminal(step workflow.Step, nextIteration int, trigger AgentTriggerView, context agentSkippedContext) (*AgentTerminal, bool) {
 	if step.MaxVisits == nil || context.visitCount[step.ID] < *step.MaxVisits {
 		return nil, false
 	}
 	last := context.lastVisit[step.ID]
 	outcome := workflow.OutcomeFailed
-	reason := fmt.Sprintf("шаг %q достиг maxVisits=%d; посещение %d с iteration=%d не создано; onLimit не задан, workflow завершён как %q",
+	reason := fmt.Sprintf("шаг %q достиг maxVisits=%d; исполнение №%d с iteration=%d не создано; onLimit не задан, workflow завершён как %q",
 		step.ID, *step.MaxVisits, context.visitCount[step.ID]+1, nextIteration, outcome)
 	if step.OnLimit != nil {
 		outcome = *step.OnLimit
-		reason = fmt.Sprintf("шаг %q достиг maxVisits=%d; посещение %d с iteration=%d не создано; применён onLimit %q",
+		reason = fmt.Sprintf("шаг %q достиг maxVisits=%d; исполнение №%d с iteration=%d не создано; применён onLimit %q",
 			step.ID, *step.MaxVisits, context.visitCount[step.ID]+1, nextIteration, outcome)
 	}
 	trigger.SourceVisitIDs = slices.Clone(trigger.SourceVisitIDs)
@@ -541,7 +583,7 @@ func agentVisitLimitTerminal(step workflow.Step, nextIteration int, trigger Agen
 
 func knownAgentState(state State) bool {
 	switch state {
-	case Pending, Starting, Unknown, Running, WaitingForApproval, Failed, Cancelled, Succeeded:
+	case Pending, Starting, Unknown, Running, WaitingForApproval, Failed, Cancelled, Skipped, Succeeded:
 		return true
 	default:
 		return false
@@ -549,5 +591,5 @@ func knownAgentState(state State) bool {
 }
 
 func agentVisitTerminal(state State) bool {
-	return state == Failed || state == Succeeded
+	return state == Failed || state == Skipped || state == Succeeded
 }
