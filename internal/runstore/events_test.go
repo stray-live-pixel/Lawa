@@ -68,6 +68,250 @@ func TestRuntimeEventsAndSummary(t *testing.T) {
 	}
 }
 
+// TestAgentGraphRuntimeEventReferences проверяет durable-адрес события v4.
+// Ранний process_started появляется до ID чата, а последующие события
+// могут указать только thread/turn, уже атомарно связанные с этим visit.
+func TestAgentGraphRuntimeEventReferences(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := CreateAgentGraph(root, agentGraphInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	visit := snapshot.Meta.Visits[0]
+	run, err := OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if closeErr := run.Close(); closeErr != nil {
+			t.Error(closeErr)
+		}
+	}()
+
+	started := time.Date(2026, 9, 2, 12, 0, 0, 0, time.UTC)
+	if err = run.ReserveVisits([]string{visit.VisitID}); err == nil {
+		err = run.AppendEvent(RuntimeEvent{
+			Time: started, VisitID: visit.VisitID, StepID: visit.StepID,
+			Kind: "process_started", PID: 4242,
+		})
+	}
+	if err == nil {
+		err = run.UpdateVisit(visit.VisitID, scheduler.Unknown, "chat-v4", "")
+	}
+	if err == nil {
+		err = run.AppendEvent(RuntimeEvent{
+			Time: started.Add(time.Second), VisitID: visit.VisitID, StepID: visit.StepID,
+			ThreadID: "chat-v4", Kind: "thread_started",
+		})
+	}
+	if err == nil {
+		err = run.SetVisitTurn(visit.VisitID, "turn-v4")
+	}
+	if err == nil {
+		err = run.AppendEvent(RuntimeEvent{
+			Time: started.Add(2 * time.Second), VisitID: visit.VisitID, StepID: visit.StepID,
+			ThreadID: "chat-v4", TurnID: "turn-v4", Kind: "turn_bound",
+		})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	invalid := map[string]RuntimeEvent{
+		"без visit": {
+			StepID: visit.StepID, Kind: "error",
+		},
+		"неизвестный visit": {
+			VisitID: newID(), StepID: visit.StepID, Kind: "error",
+		},
+		"без step": {
+			VisitID: visit.VisitID, Kind: "error",
+		},
+		"чужой step": {
+			VisitID: visit.VisitID, StepID: snapshot.Meta.Visits[1].StepID, Kind: "error",
+		},
+		"чужой thread": {
+			VisitID: visit.VisitID, StepID: visit.StepID, ThreadID: "other-chat", Kind: "error",
+		},
+		"turn без thread": {
+			VisitID: visit.VisitID, StepID: visit.StepID, TurnID: "turn-v4", Kind: "error",
+		},
+		"чужой turn": {
+			VisitID: visit.VisitID, StepID: visit.StepID, ThreadID: "chat-v4", TurnID: "other-turn", Kind: "error",
+		},
+	}
+	for name, event := range invalid {
+		t.Run(name, func(t *testing.T) {
+			if appendErr := run.AppendEvent(event); appendErr == nil {
+				t.Fatalf("несогласованное событие принято: %+v", event)
+			}
+		})
+	}
+	// Visit хранит только последний TurnID, но журнал обязан оставаться читаемым
+	// после продолжения того же чата. На append новый ID сверяется с metadata;
+	// reader затем принимает и первый, и второй turn как историю одного visit.
+	if err = run.SetVisitTurn(visit.VisitID, "turn-v4-next"); err == nil {
+		err = run.AppendEvent(RuntimeEvent{
+			Time: started.Add(3 * time.Second), VisitID: visit.VisitID, StepID: visit.StepID,
+			ThreadID: "chat-v4", TurnID: "turn-v4-next", Kind: "turn_bound",
+		})
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, err := ReadEvents(root, snapshot.Meta.RunID)
+	if err != nil || len(events) != 4 || events[2].TurnID != "turn-v4" || events[3].TurnID != "turn-v4-next" {
+		t.Fatalf("валидные v4 события не прочитаны: %+v, %v", events, err)
+	}
+	for _, event := range events {
+		if event.VisitID != visit.VisitID || event.StepID != visit.StepID {
+			t.Fatalf("visit/step не прошли JSONL roundtrip: %+v", event)
+		}
+	}
+	formatted := FormatEvent(events[3])
+	if !strings.Contains(formatted, "visit="+visit.VisitID) {
+		t.Fatalf("FormatEvent не показал visit: %q", formatted)
+	}
+}
+
+// TestReadEventsRejectsForeignAgentGraphScope проверяет read-only границу:
+// ручная порча JSONL не должна подменить visit в status или dashboard.
+func TestReadEventsRejectsForeignAgentGraphScope(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := CreateAgentGraph(root, agentGraphInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	event := RuntimeEvent{
+		Time: time.Now().UTC(), RunID: snapshot.Meta.RunID, VisitID: newID(),
+		StepID: snapshot.Meta.Visits[0].StepID, Kind: "error",
+	}
+	data, err := json.Marshal(event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	if err = os.WriteFile(filepath.Join(root, snapshot.Meta.RunID, eventsFilename), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if events, readErr := ReadEvents(root, snapshot.Meta.RunID); readErr == nil || events != nil {
+		t.Fatalf("читатель принял чужой visit: %+v, %v", events, readErr)
+	}
+	if events, cursor, readErr := ReadEventsAfter(root, snapshot.Meta.RunID, 0); readErr == nil || events != nil || cursor != 0 {
+		t.Fatalf("incremental reader принял чужой visit: %+v, cursor=%d, %v", events, cursor, readErr)
+	}
+}
+
+// TestEventReadersReloadVisitsAfterBatch фиксирует гонку между двумя отдельными
+// файлами append-only run. Writer сначала атомарно публикует новый visit в meta,
+// затем его первое событие; reader, взявший прежний snapshot до этого окна,
+// обязан перечитать metadata после batch и не объявлять честное событие чужим.
+func TestEventReadersReloadVisitsAfterBatch(t *testing.T) {
+	tests := []struct {
+		name string
+		read func(string, string, func() error) ([]RuntimeEvent, error)
+	}{
+		{
+			name: "full",
+			read: func(root, runID string, hook func() error) ([]RuntimeEvent, error) {
+				return readEvents(root, runID, hook)
+			},
+		},
+		{
+			name: "after offset",
+			read: func(root, runID string, hook func() error) ([]RuntimeEvent, error) {
+				events, _, err := readEventsAfter(root, runID, 0, hook)
+				return events, err
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root, initial, run := testAdvanceRun(t)
+			finishDecisionVisit(t, run, initial.Meta.Visits[0].VisitID, "branch")
+			var created Visit
+			events, err := tc.read(root, initial.Meta.RunID, func() error {
+				advanced, advanceErr := run.AdvanceAgentGraph()
+				if advanceErr != nil {
+					return advanceErr
+				}
+				created = advanced.CreatedVisits[0]
+				return run.AppendEvent(RuntimeEvent{VisitID: created.VisitID, StepID: created.StepID, Kind: "process_started", PID: 42})
+			})
+			if err != nil || len(events) != 1 || events[0].VisitID != created.VisitID {
+				t.Fatalf("reader не увидел visit из более свежей metadata: %+v, %v", events, err)
+			}
+		})
+	}
+}
+
+// TestAgentGraphSummariesSeparateVisits защищает dashboard цикла: два прохода
+// одного StepID хранят свои PID и item lifecycle в разных сводках.
+func TestAgentGraphSummariesSeparateVisits(t *testing.T) {
+	first, second := newID(), newID()
+	events := []RuntimeEvent{
+		{StepID: "loop", VisitID: first, Kind: "process_started", PID: 101},
+		{StepID: "loop", VisitID: first, Kind: "item_started", ItemID: "shared-item", ItemType: "commandExecution"},
+		{StepID: "loop", VisitID: second, Kind: "process_started", PID: 202},
+		{StepID: "loop", VisitID: second, Kind: "item_started", ItemID: "shared-item", ItemType: "mcpToolCall"},
+		{StepID: "loop", VisitID: second, Kind: "item_completed", ItemID: "shared-item", ItemType: "mcpToolCall"},
+	}
+	summaries := SummarizeEvents(events)
+	if len(summaries) != 2 {
+		t.Fatalf("посещения одного шага смешаны: %+v", summaries)
+	}
+	firstSummary, secondSummary := summaries[first], summaries[second]
+	if firstSummary.VisitID != first || firstSummary.StepID != "loop" || firstSummary.PID != 101 ||
+		strings.Join(firstSummary.ActiveItemTypes, ",") != "commandExecution" {
+		t.Fatalf("первое посещение потеряло своё состояние: %+v", firstSummary)
+	}
+	if secondSummary.VisitID != second || secondSummary.StepID != "loop" || secondSummary.PID != 202 ||
+		len(secondSummary.ActiveItemTypes) != 0 {
+		t.Fatalf("второе посещение потеряло своё состояние: %+v", secondSummary)
+	}
+}
+
+// TestLegacyRuntimeEventRejectsVisitID фиксирует границу форматов:
+// старые run по-прежнему принимают step и run-level события, но не смешивают
+// их с новой visit-семантикой. Старая JSONL-строка также остаётся читаемой.
+func TestLegacyRuntimeEventRejectsVisitID(t *testing.T) {
+	root := t.TempDir()
+	snapshot, err := Create(root, testInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := OpenLocked(root, snapshot.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stepID := snapshot.Meta.Steps[0].ID
+	if err = run.AppendEvent(RuntimeEvent{StepID: stepID, VisitID: newID(), Kind: "error"}); err == nil || !strings.Contains(err.Error(), "legacy") {
+		t.Fatalf("legacy-run принял visitId: %v", err)
+	}
+	if err = run.AppendEvent(RuntimeEvent{StepID: stepID, Kind: "step_state", State: "pending"}); err == nil {
+		err = run.AppendEvent(RuntimeEvent{Kind: "token_usage_updated", Usage: map[string]int64{"total": 1}})
+	}
+	if closeErr := run.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := ReadEvents(root, snapshot.Meta.RunID)
+	if err != nil || len(events) != 2 || events[0].VisitID != "" || events[1].StepID != "" {
+		t.Fatalf("legacy-контракт изменился: %+v, %v", events, err)
+	}
+	old, err := parseRuntimeEvent([]byte(`{"time":"2026-09-02T12:00:00Z","runId":"legacy-run","stepId":"step","kind":"step_state"}`), "legacy-run")
+	if err != nil || old.VisitID != "" || old.StepID != "step" {
+		t.Fatalf("старая JSONL-строка не читается: %+v, %v", old, err)
+	}
+	legacySummary := SummarizeEvents(events)
+	if len(legacySummary) != 1 || legacySummary[stepID].StepID != stepID {
+		t.Fatalf("legacy-сводка больше не ключевана по stepId: %+v", legacySummary)
+	}
+}
+
 // TestFormatEventEscapesTerminalControls защищает CLI от ANSI/OSC injection:
 // данные остаются различимыми, но ни один управляющий байт не достигает терминала.
 func TestFormatEventEscapesTerminalControls(t *testing.T) {
