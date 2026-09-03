@@ -59,7 +59,7 @@ func boundedLoopInput(t *testing.T, successfulLimit bool) Input {
 func testAdvanceRun(t *testing.T) (string, Snapshot, *LockedRun) {
 	t.Helper()
 	root := t.TempDir()
-	snapshot, err := CreateAgentGraph(root, advanceInput(t))
+	snapshot, err := Create(root, advanceInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -168,7 +168,7 @@ func runDecisionlessVisit(t *testing.T, run *LockedRun, visitID string) string {
 func testBoundedLoopAtLimit(t *testing.T, successfulLimit bool) (string, Snapshot, *LockedRun, Visit) {
 	t.Helper()
 	root := t.TempDir()
-	initial, err := CreateAgentGraph(root, boundedLoopInput(t, successfulLimit))
+	initial, err := Create(root, boundedLoopInput(t, successfulLimit))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,7 +343,7 @@ func TestAdvanceAgentGraphCompactsStopReason(t *testing.T) {
 	}
 	input.WorkflowJSON = bytes.Replace(input.WorkflowJSON, []byte(`"fail"`), encodedKey, 1)
 	root := t.TempDir()
-	initial, err := CreateAgentGraph(root, input)
+	initial, err := Create(root, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -516,7 +516,7 @@ func TestAdvanceAgentGraphLimitWaitsForDecisionWave(t *testing.T) {
     {"id":"choice","type":"agent","prompt":"Финальное решение","after":["source"],"decisions":{"done":{"finish":"succeeded"}}}
   ]
 }`), Task: "Проверить барьер решений перед лимитом", CWD: t.TempDir()}
-	initial, err := CreateAgentGraph(root, input)
+	initial, err := Create(root, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +586,7 @@ func TestAgentLimitProofSurvivesTerminalDrain(t *testing.T) {
     {"id":"limit-a","type":"agent","prompt":"Лимит A","after":["source-a"],"maxVisits":1}
   ]
 }`), Task: "Проверить стабильность причины лимита", CWD: t.TempDir()}
-	initial, err := CreateAgentGraph(root, input)
+	initial, err := Create(root, input)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -21,7 +21,7 @@ import (
 func createAgentPreparationRun(t *testing.T, definition string) (string, runstore.Snapshot, *runstore.LockedRun) {
 	t.Helper()
 	root := t.TempDir()
-	snapshot, err := runstore.CreateAgentGraph(root, runstore.Input{
+	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(definition), Task: "Сделать MVP\n\nКомментарий: проверить границы", CWD: t.TempDir(),
 	})
 	if err != nil {

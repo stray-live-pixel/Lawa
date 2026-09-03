@@ -113,7 +113,11 @@ type Snapshot struct {
 }
 
 // Create проверяет входы до записи и создаёт новый run под root (обычно
-// ~/.light-ai-workflows). Root выбирает вызывающий код; пакет не меняет cwd.
+// ~/.light-ai-workflows). Workflow v1 и без явной версии получают legacy-
+// metadata v3, а workflow v2 — visit-aware metadata v4. Выбор определяется
+// самим сохранённым workflow, поэтому CLI, series и дочерние запуски используют
+// один production-путь и не могут случайно записать новый граф в старый формат.
+// Root выбирает вызывающий код; пакет не меняет cwd.
 // Каталоги создаются с 0700, файлы с 0600; права существующего root не меняются.
 // Root должен быть доверенным хранилищем: chmod не изолирует агентов того же UID.
 // Вызывающий код не должен параллельно изменять Input.WorkflowJSON.
@@ -131,36 +135,14 @@ func Create(root string, in Input) (Snapshot, error) {
 	return create(root, in, syncDir)
 }
 
-// CreateAgentGraph создаёт формат v4 только для workflow version=2. Это узкий
-// внутренний API пакета: production-команды продолжают вызывать Create, который
-// намеренно получает отказ legacy-планировщика до появления visit-aware
-// координатора. Разделение не позволяет частично включить новый runtime.
-func CreateAgentGraph(root string, in Input) (Snapshot, error) {
-	return createAgentGraph(root, in, syncDir)
-}
-
 // create принимает синхронизацию каталогов явно, чтобы тесты могли воспроизвести
 // отказ диска без глобальных подмен, влияющих на параллельные вызовы Create.
 func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot, err error) {
-	return createMode(root, in, syncDirectory, false)
-}
-
-// createAgentGraph оставляет Sync инъекцией только для проверок границ записи.
-func createAgentGraph(root string, in Input, syncDirectory func(string) error) (_ Snapshot, err error) {
-	return createMode(root, in, syncDirectory, true)
-}
-
-// createMode сохраняет общий crash-safe протокол обоих форматов. Выбор режима
-// влияет только на представление metadata и набор файлов памяти; legacy Create
-// по-прежнему проходит через scheduler.Evaluate внутри Snapshot.validate.
-func createMode(root string, in Input, syncDirectory func(string) error, agentGraph bool) (_ Snapshot, err error) {
 	w, err := workflow.Decode(bytes.NewReader(in.WorkflowJSON))
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if agentGraph && w.EffectiveVersion() != workflow.VersionAgentGraph {
-		return Snapshot{}, fmt.Errorf("CreateAgentGraph требует workflow version=2")
-	}
+	agentGraph := w.EffectiveVersion() == workflow.VersionAgentGraph
 	if !validText(in.Task) || !utf8.ValidString(in.Comment) || !validText(in.CWD) {
 		return Snapshot{}, fmt.Errorf("нужны постановка и cwd; текст должен быть UTF-8")
 	}

@@ -24,7 +24,7 @@ func TestEvaluateRejectsAgentGraphV2(t *testing.T) {
 		t.Fatalf("валидатор v2: %v", err)
 	}
 	got, err := Evaluate(w, map[string]State{"checker": Pending})
-	if err == nil || !strings.Contains(err.Error(), "runtime workflow version=2 пока не поддерживается") || !reflect.DeepEqual(got, Plan{}) {
+	if err == nil || !strings.Contains(err.Error(), "legacy-планировщик не принимает workflow version=2") || !reflect.DeepEqual(got, Plan{}) {
 		t.Fatalf("старый runtime принял v2: %+v, %v", got, err)
 	}
 }

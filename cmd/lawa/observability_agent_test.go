@@ -21,7 +21,7 @@ import (
 func agentObservabilityRun(t *testing.T) (string, runstore.Snapshot, runstore.Visit, runstore.Visit) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "runs")
-	snapshot, err := runstore.CreateAgentGraph(root, runstore.Input{
+	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(`{
   "version": 2,
   "id": "observe-agent-graph",
@@ -197,7 +197,7 @@ func TestAgentLogsRejectInvalidVisitFilters(t *testing.T) {
 // зарезервированный Starting без thread/turn не требуют несуществующих событий.
 func TestAgentLogsFollowDrainsVisitEventAndIgnoresUnstarted(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "runs")
-	snapshot, err := runstore.CreateAgentGraph(root, runstore.Input{
+	snapshot, err := runstore.Create(root, runstore.Input{
 		WorkflowJSON: []byte(`{
   "version":2,"id":"follow-v2","start":["finish","pending","ambiguous"],"steps":[
     {"id":"finish","type":"agent","prompt":"Заверши","after":[],"decisions":{"done":{"finish":"succeeded"}}},

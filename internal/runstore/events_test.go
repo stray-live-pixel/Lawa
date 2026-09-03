@@ -73,7 +73,7 @@ func TestRuntimeEventsAndSummary(t *testing.T) {
 // могут указать только thread/turn, уже атомарно связанные с этим visit.
 func TestAgentGraphRuntimeEventReferences(t *testing.T) {
 	root := t.TempDir()
-	snapshot, err := CreateAgentGraph(root, agentGraphInput(t))
+	snapshot, err := Create(root, agentGraphInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestAgentGraphRuntimeEventReferences(t *testing.T) {
 // ручная порча JSONL не должна подменить visit в status или dashboard.
 func TestReadEventsRejectsForeignAgentGraphScope(t *testing.T) {
 	root := t.TempDir()
-	snapshot, err := CreateAgentGraph(root, agentGraphInput(t))
+	snapshot, err := Create(root, agentGraphInput(t))
 	if err != nil {
 		t.Fatal(err)
 	}
