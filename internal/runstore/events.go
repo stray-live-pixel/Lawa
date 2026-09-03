@@ -35,6 +35,7 @@ type RuntimeEvent struct {
 	Time     time.Time        `json:"time"`
 	RunID    string           `json:"runId"`
 	StepID   string           `json:"stepId,omitempty"`
+	VisitID  string           `json:"visitId,omitempty"`
 	ThreadID string           `json:"threadId,omitempty"`
 	TurnID   string           `json:"turnId,omitempty"`
 	Kind     string           `json:"kind"`
@@ -53,12 +54,12 @@ type RuntimeEvent struct {
 // Это производное read-only представление; meta.json остаётся источником истины
 // для планировщика, а events.jsonl — источником диагностики оператора.
 type EventSummary struct {
-	StepID, ThreadID, TurnID, Kind, State, Message string
-	LastActivity                                   time.Time
-	PID                                            int
-	ExitCode                                       *int
-	Signal                                         string
-	ActiveItemTypes                                []string
+	StepID, VisitID, ThreadID, TurnID, Kind, State, Message string
+	LastActivity                                            time.Time
+	PID                                                     int
+	ExitCode                                                *int
+	Signal                                                  string
+	ActiveItemTypes                                         []string
 }
 
 // AppendEvent дописывает одну строку под той же блокировкой, что и meta.json.
@@ -75,14 +76,8 @@ func (r *LockedRun) AppendEvent(event RuntimeEvent) error {
 	if err != nil {
 		return err
 	}
-	if event.StepID != "" {
-		known := false
-		for _, step := range snapshot.Meta.Steps {
-			known = known || step.ID == event.StepID
-		}
-		if !known {
-			return fmt.Errorf("событие ссылается на неизвестный шаг %q", event.StepID)
-		}
+	if err = validateRuntimeEventReference(snapshot, event, true); err != nil {
+		return err
 	}
 	event.RunID = r.runID
 	if event.Time.IsZero() {
@@ -134,6 +129,13 @@ func (r *LockedRun) AppendEvent(event RuntimeEvent) error {
 // ReadEvents читает только нормализованный журнал выбранного валидного run.
 // Отсутствие файла допустимо для запусков старых версий и означает пустую историю.
 func ReadEvents(root, runID string) ([]RuntimeEvent, error) {
+	return readEvents(root, runID, nil)
+}
+
+// readEvents принимает hook между первым подтверждением run и чтением журнала.
+// Production его не задаёт; тест воспроизводит публикацию нового visit именно в
+// этом окне, не полагаясь на scheduler или задержки файловой системы.
+func readEvents(root, runID string, afterInitialLoad func() error) ([]RuntimeEvent, error) {
 	dir, err := openRun(root, runID)
 	if err != nil {
 		return nil, err
@@ -141,6 +143,11 @@ func ReadEvents(root, runID string) ([]RuntimeEvent, error) {
 	defer dir.Close()
 	if _, err = loadForDashboard(dir, runID); err != nil {
 		return nil, err
+	}
+	if afterInitialLoad != nil {
+		if err = afterInitialLoad(); err != nil {
+			return nil, err
+		}
 	}
 	info, err := dir.Lstat(eventsFilename)
 	if errors.Is(err, os.ErrNotExist) {
@@ -173,6 +180,19 @@ func ReadEvents(root, runID string) ([]RuntimeEvent, error) {
 	if err = scanner.Err(); err != nil {
 		return nil, err
 	}
+	// Visits только добавляются, а их step/thread не меняются. Снимок после
+	// прочитанного batch поэтому знает не меньше его событий; снимок до чтения
+	// мог ещё не содержать visit, который writer успел опубликовать вместе с
+	// первой строкой JSONL между двумя файловыми операциями reader.
+	snapshot, err := loadForDashboard(dir, runID)
+	if err != nil {
+		return nil, err
+	}
+	for index, event := range events {
+		if err = validateRuntimeEventReference(snapshot, event, false); err != nil {
+			return nil, fmt.Errorf("%s, строка %d: %w", eventsFilename, index+1, err)
+		}
+	}
 	return events, nil
 }
 
@@ -181,6 +201,12 @@ func ReadEvents(root, runID string) ([]RuntimeEvent, error) {
 // повреждением: writer мог находиться внутри единственного append, поэтому
 // следующий polling повторит чтение с прежней границы строки.
 func ReadEventsAfter(root, runID string, offset int64) ([]RuntimeEvent, int64, error) {
+	return readEventsAfter(root, runID, offset, nil)
+}
+
+// readEventsAfter использует тот же управляемый race-hook, что полное чтение.
+// Валидация ссылок выполняется по metadata, перечитанной после готового batch.
+func readEventsAfter(root, runID string, offset int64, afterInitialLoad func() error) ([]RuntimeEvent, int64, error) {
 	if offset < 0 {
 		return nil, offset, errors.New("позиция журнала не может быть отрицательной")
 	}
@@ -191,6 +217,11 @@ func ReadEventsAfter(root, runID string, offset int64) ([]RuntimeEvent, int64, e
 	defer dir.Close()
 	if _, err = loadForDashboard(dir, runID); err != nil {
 		return nil, offset, err
+	}
+	if afterInitialLoad != nil {
+		if err = afterInitialLoad(); err != nil {
+			return nil, offset, err
+		}
 	}
 	info, err := dir.Lstat(eventsFilename)
 	if errors.Is(err, os.ErrNotExist) && offset == 0 {
@@ -230,6 +261,15 @@ func ReadEventsAfter(root, runID string, offset int64) ([]RuntimeEvent, int64, e
 		}
 		events = append(events, event)
 	}
+	snapshot, err := loadForDashboard(dir, runID)
+	if err != nil {
+		return nil, offset, err
+	}
+	for _, event := range events {
+		if err = validateRuntimeEventReference(snapshot, event, false); err != nil {
+			return nil, offset, fmt.Errorf("%s после байта %d: %w", eventsFilename, offset, err)
+		}
+	}
 	return events, offset + int64(lastNewline+1), nil
 }
 
@@ -247,7 +287,60 @@ func parseRuntimeEvent(data []byte, runID string) (RuntimeEvent, error) {
 	return event, nil
 }
 
-// SummarizeEvents возвращает по одному последнему снимку на кубик. PID остаётся
+// validateRuntimeEventReference связывает новый журнал v4 с одним
+// неизменяемым посещением. StepID недостаточно: в цикле один шаг
+// имеет несколько thread и turn, которые нельзя смешивать в одну историю.
+//
+// Пустые thread/turn допустимы: process_started и ранняя ошибка могут
+// попасть в журнал до ответа thread/start или turn/start. Если ID уже
+// известен событию, он обязан совпасть с durable-связью. Привязка
+// к конкретному kind намеренно не нужна: протокол событий расширяется.
+//
+// appendCurrentTurn включает сверку с последним TurnID metadata только на записи.
+// При чтении старые turn того же visit остаются валидной историей,
+// потому читатель проверяет их scope, но не сравнивает с последним TurnID.
+func validateRuntimeEventReference(snapshot Snapshot, event RuntimeEvent, appendCurrentTurn bool) error {
+	if snapshot.Meta.Version != 4 {
+		if event.VisitID != "" {
+			return fmt.Errorf("событие legacy-run не может содержать visitId")
+		}
+		if event.StepID == "" {
+			return nil
+		}
+		for _, step := range snapshot.Meta.Steps {
+			if step.ID == event.StepID {
+				return nil
+			}
+		}
+		return fmt.Errorf("событие ссылается на неизвестный шаг %q", event.StepID)
+	}
+
+	if event.VisitID == "" || event.StepID == "" {
+		return errors.New("событие v4 требует visitId и stepId")
+	}
+	index, err := findVisit(snapshot.Meta.Visits, event.VisitID)
+	if err != nil {
+		return fmt.Errorf("событие ссылается на неизвестное посещение %q", event.VisitID)
+	}
+	visit := snapshot.Meta.Visits[index]
+	if event.StepID != visit.StepID {
+		return fmt.Errorf("событие visit %q ссылается на шаг %q вместо %q", event.VisitID, event.StepID, visit.StepID)
+	}
+	if event.ThreadID != "" && event.ThreadID != visit.CodexThreadID {
+		return fmt.Errorf("событие visit %q не принадлежит thread %q", event.VisitID, event.ThreadID)
+	}
+	if event.TurnID != "" && event.ThreadID == "" {
+		return fmt.Errorf("событие visit %q не может указывать turn без thread", event.VisitID)
+	}
+	if appendCurrentTurn && event.TurnID != "" && event.TurnID != visit.TurnID {
+		return fmt.Errorf("событие visit %q не принадлежит turn %q", event.VisitID, event.TurnID)
+	}
+	return nil
+}
+
+// SummarizeEvents возвращает по одному последнему снимку на кубик. Legacy
+// журнал ключеван по StepID, а v4 — по VisitID: повторные проходы цикла
+// отображаются как разные запуски, даже когда StepID совпадает. PID остаётся
 // активным только между process_started и process_exited этого же процесса.
 // Текущие действия сопоставляются по непрозрачному itemId, но наружу сводка
 // отдаёт только уникальные типы: команда, аргументы и результат не нужны для
@@ -256,11 +349,20 @@ func SummarizeEvents(events []RuntimeEvent) map[string]EventSummary {
 	summaries := make(map[string]EventSummary)
 	activeItems := make(map[string]map[string]string)
 	for _, event := range events {
-		if event.StepID == "" {
+		key := event.StepID
+		if event.VisitID != "" {
+			key = event.VisitID
+		}
+		if key == "" {
 			continue
 		}
-		summary := summaries[event.StepID]
-		summary.StepID = event.StepID
+		summary := summaries[key]
+		if event.StepID != "" {
+			summary.StepID = event.StepID
+		}
+		if event.VisitID != "" {
+			summary.VisitID = event.VisitID
+		}
 		if event.ThreadID != "" {
 			summary.ThreadID = event.ThreadID
 		}
@@ -280,36 +382,36 @@ func SummarizeEvents(events []RuntimeEvent) map[string]EventSummary {
 			// Новый дочерний процесс не может продолжать незавершённые item
 			// предыдущего процесса. Очистка защищает UI от вечного действия,
 			// если прежний App Server завершился без process_exited в журнале.
-			delete(activeItems, event.StepID)
+			delete(activeItems, key)
 		case "process_exited":
 			summary.PID, summary.ExitCode, summary.Signal = 0, event.ExitCode, event.Signal
-			delete(activeItems, event.StepID)
+			delete(activeItems, key)
 		case "turn_started":
 			// Item принадлежит одному turn. На границе turn старые элементы
 			// больше не считаются активными даже после неполного журнала.
-			delete(activeItems, event.StepID)
+			delete(activeItems, key)
 		case "turn_completed":
-			delete(activeItems, event.StepID)
+			delete(activeItems, key)
 		case "item_started":
 			if event.ItemID != "" && event.ItemType != "" {
-				items := activeItems[event.StepID]
+				items := activeItems[key]
 				if items == nil {
 					items = make(map[string]string)
-					activeItems[event.StepID] = items
+					activeItems[key] = items
 				}
 				items[event.ItemID] = event.ItemType
 			}
 		case "item_completed":
-			if items := activeItems[event.StepID]; items != nil && event.ItemID != "" {
+			if items := activeItems[key]; items != nil && event.ItemID != "" {
 				delete(items, event.ItemID)
 				if len(items) == 0 {
-					delete(activeItems, event.StepID)
+					delete(activeItems, key)
 				}
 			}
 		}
-		summaries[event.StepID] = summary
+		summaries[key] = summary
 	}
-	for stepID, items := range activeItems {
+	for key, items := range activeItems {
 		// Несколько параллельных item одного типа должны выглядеть как одно
 		// понятное действие. При этом map по ID выше не снимает тип, пока не
 		// завершится последний item этого типа.
@@ -322,9 +424,9 @@ func SummarizeEvents(events []RuntimeEvent) map[string]EventSummary {
 			types = append(types, itemType)
 		}
 		sort.Strings(types)
-		summary := summaries[stepID]
+		summary := summaries[key]
 		summary.ActiveItemTypes = types
-		summaries[stepID] = summary
+		summaries[key] = summary
 	}
 	return summaries
 }
@@ -335,6 +437,9 @@ func FormatEvent(event RuntimeEvent) string {
 	parts := []string{event.Time.Local().Format(time.RFC3339), event.Kind}
 	if event.StepID != "" {
 		parts = append(parts, "step="+event.StepID)
+	}
+	if event.VisitID != "" {
+		parts = append(parts, "visit="+event.VisitID)
 	}
 	if event.State != "" {
 		parts = append(parts, "state="+event.State)
@@ -396,7 +501,7 @@ func normalizeRuntimeEvent(event *RuntimeEvent) error {
 	if event.Time.IsZero() || !validText(event.RunID) || !validText(event.Kind) {
 		return errors.New("событие требует time, runId и kind")
 	}
-	for _, value := range []string{event.StepID, event.ThreadID, event.TurnID, event.State, event.ItemID, event.ItemType, event.Message, event.Content, event.Signal} {
+	for _, value := range []string{event.StepID, event.VisitID, event.ThreadID, event.TurnID, event.State, event.ItemID, event.ItemType, event.Message, event.Content, event.Signal} {
 		if !utf8.ValidString(value) {
 			return errors.New("поля события должны быть UTF-8")
 		}
