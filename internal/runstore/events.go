@@ -479,16 +479,16 @@ func FormatEvent(event RuntimeEvent) string {
 	return SafeTerminalText(line)
 }
 
-// SafeTerminalText сохраняет читаемые Unicode-символы, а управляющие C0/C1
-// показывает как обычный текст. В частности, ESC больше не может начать ANSI
-// или OSC-команду, которая очистит экран, изменит заголовок либо подменит
-// видимую диагностику. Экранирование выполняется только при выводе: точные ID и
-// сообщения остаются в хранилище пригодными для протокола и расследования.
+// SafeTerminalText сохраняет читаемые Unicode-символы, а управляющие C0/C1 и
+// разделители строк/абзацев Zl/Zp показывает как обычный текст. В частности,
+// ESC больше не может начать ANSI/OSC-команду, а U+2028/U+2029 — визуально
+// разорвать одну запись на несколько. Экранирование выполняется только при
+// выводе: точные ID и сообщения остаются в хранилище для расследования.
 func SafeTerminalText(value string) string {
 	var result strings.Builder
 	result.Grow(len(value))
 	for _, character := range value {
-		if unicode.IsControl(character) {
+		if unicode.IsControl(character) || unicode.Is(unicode.Zl, character) || unicode.Is(unicode.Zp, character) {
 			fmt.Fprintf(&result, `\u%04X`, character)
 			continue
 		}
