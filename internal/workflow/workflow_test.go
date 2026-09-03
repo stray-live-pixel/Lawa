@@ -14,6 +14,13 @@ import (
 
 const valid = `{"id":"flow","steps":[{"id":"a","type":"agent","prompt":"  задача\n","dependsOn":[]}]}`
 
+const validV2 = `{"version":2,"id":"risk","model":"gpt-5.6-luna","start":["checker"],"steps":[` +
+	`{"id":"checker","type":"agent","prompt":"Оцени риск.","after":[],"decisions":{` +
+	`"risk":{"to":["audit","notify"]},"safe":{"finish":"succeeded"},"fail":{"finish":"failed"}},` +
+	`"maxVisits":3,"onLimit":"failed","effort":"high","speed":"fast"},` +
+	`{"id":"audit","type":"agent","prompt":"Проведи аудит.","after":[]},` +
+	`{"id":"notify","type":"agent","prompt":"Подготовь уведомление.","after":[]}]} `
+
 // TestDecode защищает точное сохранение входа: пробелы промпта и порядок шагов
 // не исправляются валидатором, а пример содержит обратный порядок зависимостей.
 func TestDecode(t *testing.T) {
@@ -29,6 +36,233 @@ func TestDecode(t *testing.T) {
 	w, err = Decode(f)
 	if err != nil || len(w.Steps) != 4 || w.Steps[0].ID != "summary" {
 		t.Fatalf("пример с параллельными ветками отклонён: %+v, %v", w, err)
+	}
+}
+
+// TestLegacyVersionCompatibility фиксирует обе записи прежнего контракта:
+// исторический JSON без version не получает новое поле при кодировании, а явная
+// version=1 сохраняется. Срез dependsOn=[] также нельзя потерять через omitzero,
+// иначе повторное чтение ошибочно решит, что обязательного поля не было.
+func TestLegacyVersionCompatibility(t *testing.T) {
+	inputs := []string{
+		valid,
+		strings.Replace(valid, `{"id":"flow"`, `{"version":1,"id":"flow"`, 1),
+	}
+	for _, input := range inputs {
+		w, err := Decode(strings.NewReader(input))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w.EffectiveVersion() != VersionLegacy || (w.Version == nil) != !strings.Contains(input, `"version"`) {
+			t.Fatalf("потеряно различие отсутствующей и явной legacy-версии: %+v", w.Version)
+		}
+		encoded, err := json.Marshal(w)
+		if err != nil || string(encoded) != input {
+			t.Fatalf("legacy JSON изменился: %s, %v; ожидался %s", encoded, err, input)
+		}
+	}
+}
+
+// TestDecodeAgentGraph проверяет основной if/else-контракт и fan-out одного
+// решения. Порядок to сохраняется, потому что будущий runtime обязан планировать
+// параллельную волну воспроизводимо, не обходя map решений.
+func TestDecodeAgentGraph(t *testing.T) {
+	w, err := Decode(strings.NewReader(strings.TrimSpace(validV2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w.EffectiveVersion() != VersionAgentGraph || !reflect.DeepEqual(w.Start, []string{"checker"}) || len(w.Steps) != 3 {
+		t.Fatalf("искажён корень v2: %+v", w)
+	}
+	checker := w.Steps[0]
+	if !reflect.DeepEqual(checker.Decisions["risk"].To, []string{"audit", "notify"}) ||
+		checker.MaxVisits == nil || *checker.MaxVisits != 3 || checker.OnLimit == nil || *checker.OnLimit != OutcomeFailed ||
+		checker.Effort == nil || *checker.Effort != "high" || checker.Speed == nil || *checker.Speed != SpeedFast {
+		t.Fatalf("решения, лимит или runtime-настройки потеряны: %+v", checker)
+	}
+	encoded, err := json.Marshal(w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Decode(bytes.NewReader(encoded))
+	if err != nil || !reflect.DeepEqual(w, again) {
+		t.Fatalf("v2 не пережил повторное кодирование: %+v, %v", again, err)
+	}
+}
+
+// TestAgentGraphAllowsBoundedDecisionCycle воспроизводит цикл из issue: start
+// даёт первое посещение test, terminal fix удовлетворяет его after при повторах,
+// а checker выбирает возврат либо явное успешное завершение.
+func TestAgentGraphAllowsBoundedDecisionCycle(t *testing.T) {
+	input := `{"version":2,"id":"repair","start":["test"],"steps":[` +
+		`{"id":"test","type":"agent","prompt":"Тестируй.","after":["fix"]},` +
+		`{"id":"checker","type":"agent","prompt":"Проверь.","after":["test"],"maxVisits":4,"decisions":{` +
+		`"repeat":{"to":["fix"]},"done":{"finish":"succeeded"},"fail":{"finish":"failed"}}},` +
+		`{"id":"fix","type":"agent","prompt":"Исправь.","after":[]}]}`
+	if _, err := Decode(strings.NewReader(input)); err != nil {
+		t.Fatalf("ограниченный decision-цикл отклонён: %v", err)
+	}
+}
+
+// TestAgentGraphRejectsStaticAfterCycle подтверждает важную границу контракта:
+// start не превращает обычный after-цикл в допустимый; замыкать его может только
+// route агентного решения с отдельным maxVisits.
+func TestAgentGraphRejectsStaticAfterCycle(t *testing.T) {
+	input := `{"version":2,"id":"bad","start":["a"],"steps":[` +
+		`{"id":"a","type":"agent","prompt":"A","after":["b"]},` +
+		`{"id":"b","type":"agent","prompt":"B","after":["a"]}]}`
+	if _, err := Decode(strings.NewReader(input)); err == nil || !strings.Contains(err.Error(), "цикл after") {
+		t.Fatalf("обычный after-цикл принят или плохо объяснён: %v", err)
+	}
+}
+
+// TestWorkflowVersionsCannotBeMixed проверяет запрет неоднозначных полей в обе
+// стороны. Даже пустой массив явно принадлежит своему контракту и не игнорируется.
+func TestWorkflowVersionsCannotBeMixed(t *testing.T) {
+	cases := map[string]string{
+		"неизвестная версия": `{"version":3,"id":"bad","steps":[{"id":"a","type":"agent","prompt":"A","dependsOn":[]}]}`,
+		"dependsOn в v2":     `{"version":2,"id":"bad","start":["a"],"steps":[{"id":"a","type":"agent","prompt":"A","after":[],"dependsOn":[]}]}`,
+		"after без version":  `{"id":"bad","steps":[{"id":"a","type":"agent","prompt":"A","dependsOn":[],"after":[]}]}`,
+		"start в v1":         `{"version":1,"id":"bad","start":[],"steps":[{"id":"a","type":"agent","prompt":"A","dependsOn":[]}]}`,
+		"decisions в v1":     `{"version":1,"id":"bad","steps":[{"id":"a","type":"agent","prompt":"A","dependsOn":[],"decisions":{}}]}`,
+	}
+	for name, input := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(input)); err == nil {
+				t.Fatal("смешанный контракт принят")
+			}
+		})
+	}
+}
+
+// TestAgentGraphReferences проверяет каждый вид ссылки и повторов. Ошибка должна
+// возникнуть до анализа достижимости, чтобы автор видел локальную опечатку.
+func TestAgentGraphReferences(t *testing.T) {
+	base := `{"version":2,"id":"refs","start":["a"],"steps":[` +
+		`{"id":"a","type":"agent","prompt":"A","after":[],"decisions":{"go":{"to":["b"]}}},` +
+		`{"id":"b","type":"agent","prompt":"B","after":[]}]}`
+	cases := map[string]string{
+		"неизвестный start": strings.Replace(base, `"start":["a"]`, `"start":["missing"]`, 1),
+		"повторный start":   strings.Replace(base, `"start":["a"]`, `"start":["a","a"]`, 1),
+		"неизвестный after": strings.Replace(base, `"after":[]}]}`, `"after":["missing"]}]}`, 1),
+		"повторный after":   strings.Replace(base, `"after":[]}]}`, `"after":["a","a"]}]}`, 1),
+		"неизвестный to":    strings.Replace(base, `"to":["b"]`, `"to":["missing"]`, 1),
+		"повторный to":      strings.Replace(base, `"to":["b"]`, `"to":["b","b"]`, 1),
+	}
+	for name, input := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(input)); err == nil {
+				t.Fatal("некорректная ссылка принята")
+			}
+		})
+	}
+}
+
+// TestAgentGraphReachabilityAndExit не разрешает молча хранить никогда не
+// активируемый кубик и цикл, у которого нет ни естественного листа, ни явного
+// finish/onLimit. maxVisits остаётся предохранителем, а не маршрутом завершения.
+func TestAgentGraphReachabilityAndExit(t *testing.T) {
+	unreachable := `{"version":2,"id":"unreachable","start":["a"],"steps":[` +
+		`{"id":"a","type":"agent","prompt":"A","after":[]},` +
+		`{"id":"orphan","type":"agent","prompt":"X","after":[]}]}`
+	if _, err := Decode(strings.NewReader(unreachable)); err == nil || !strings.Contains(err.Error(), "недостижим") {
+		t.Fatalf("недостижимый шаг принят или плохо объяснён: %v", err)
+	}
+	unsafe := `{"version":2,"id":"unsafe","start":["loop"],"steps":[` +
+		`{"id":"loop","type":"agent","prompt":"Повтори.","after":[],"maxVisits":2,"decisions":{"again":{"to":["loop"]}}}]}`
+	if _, err := Decode(strings.NewReader(unsafe)); err == nil || !strings.Contains(err.Error(), "не имеет пути") {
+		t.Fatalf("граф без безопасного выхода принят или плохо объяснён: %v", err)
+	}
+	withLimitOutcome := strings.Replace(unsafe, `"maxVisits":2`, `"maxVisits":2,"onLimit":"failed"`, 1)
+	if _, err := Decode(strings.NewReader(withLimitOutcome)); err != nil {
+		t.Fatalf("явный terminal onLimit не признан безопасным выходом: %v", err)
+	}
+}
+
+// TestAgentGraphRejectsInvalidRoutesAndLimits покрывает семантику, которую нельзя
+// выразить одними Go-типами: пустые формы, два исхода сразу и несвязанный onLimit.
+func TestAgentGraphRejectsInvalidRoutesAndLimits(t *testing.T) {
+	step := func(extra string) string {
+		return `{"version":2,"id":"invalid","start":["a"],"steps":[{"id":"a","type":"agent","prompt":"A","after":[]` + extra + `}]}`
+	}
+	cases := map[string]string{
+		"нет start":               `{"version":2,"id":"invalid","steps":[{"id":"a","type":"agent","prompt":"A","after":[]}]}`,
+		"пустой start":            `{"version":2,"id":"invalid","start":[],"steps":[{"id":"a","type":"agent","prompt":"A","after":[]}]}`,
+		"нет after":               `{"version":2,"id":"invalid","start":["a"],"steps":[{"id":"a","type":"agent","prompt":"A"}]}`,
+		"пустые decisions":        step(`,"decisions":{}`),
+		"пустой ключ":             step(`,"decisions":{" ":{"finish":"failed"}}`),
+		"нет формы route":         step(`,"decisions":{"bad":{}}`),
+		"пустой to":               step(`,"decisions":{"bad":{"to":[]}}`),
+		"две формы route":         step(`,"decisions":{"bad":{"to":["a"],"finish":"failed"}},"maxVisits":1,"onLimit":"failed"`),
+		"неверный finish":         step(`,"decisions":{"bad":{"finish":"cancelled"}}`),
+		"нулевой maxVisits":       step(`,"maxVisits":0`),
+		"отрицательный maxVisits": step(`,"maxVisits":-1`),
+		"onLimit без лимита":      step(`,"onLimit":"failed"`),
+		"неверный onLimit":        step(`,"maxVisits":1,"onLimit":"cancelled"`),
+		"цикл без лимита":         step(`,"decisions":{"repeat":{"to":["a"]},"stop":{"finish":"failed"}}`),
+	}
+	for name, input := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Decode(strings.NewReader(input)); err == nil {
+				t.Fatal("некорректный route или лимит принят")
+			}
+		})
+	}
+}
+
+// TestEveryCyclicDecisionRequiresLimit строит одну SCC с двумя агентными
+// решениями. Лимит только на одном из них недостаточен: другой decision обязан
+// иметь собственный статический предохранитель независимо от выбранного route.
+func TestEveryCyclicDecisionRequiresLimit(t *testing.T) {
+	input := `{"version":2,"id":"limits","start":["first"],"steps":[` +
+		`{"id":"first","type":"agent","prompt":"Первый.","after":[],"maxVisits":2,"decisions":{` +
+		`"next":{"to":["second"]},"stop":{"finish":"failed"}}},` +
+		`{"id":"second","type":"agent","prompt":"Второй.","after":[],"decisions":{` +
+		`"back":{"to":["first"]},"stop":{"finish":"succeeded"}}}]}`
+	if _, err := Decode(strings.NewReader(input)); err == nil || !strings.Contains(err.Error(), `"second"`) || !strings.Contains(err.Error(), "maxVisits") {
+		t.Fatalf("decision без собственного лимита принят или плохо объяснён: %v", err)
+	}
+}
+
+// TestAgentGraphStrictJSON распространяет прежний строгий JSON-контракт на все
+// новые уровни. null не равен отсутствию, а повторный ключ решения не выбирается
+// библиотекой произвольно.
+func TestAgentGraphStrictJSON(t *testing.T) {
+	base := `{"version":2,"id":"strict","start":["a"],"steps":[{"id":"a","type":"agent","prompt":"A","after":[]}]}`
+	cases := map[string]string{
+		"null version":        strings.Replace(base, `"version":2`, `"version":null`, 1),
+		"null start":          strings.Replace(base, `"start":["a"]`, `"start":null`, 1),
+		"null after":          strings.Replace(base, `"after":[]`, `"after":null`, 1),
+		"null decisions":      strings.Replace(base, `"after":[]`, `"after":[],"decisions":null`, 1),
+		"null maxVisits":      strings.Replace(base, `"after":[]`, `"after":[],"maxVisits":null`, 1),
+		"null onLimit":        strings.Replace(base, `"after":[]`, `"after":[],"onLimit":null`, 1),
+		"null route":          strings.Replace(base, `"after":[]`, `"after":[],"decisions":{"x":null}`, 1),
+		"null route to":       strings.Replace(base, `"after":[]`, `"after":[],"decisions":{"x":{"to":null}}`, 1),
+		"null route finish":   strings.Replace(base, `"after":[]`, `"after":[],"decisions":{"x":{"finish":null}}`, 1),
+		"unknown route field": strings.Replace(base, `"after":[]`, `"after":[],"decisions":{"x":{"other":true}}`, 1),
+		"duplicate decision":  strings.Replace(base, `"after":[]`, `"after":[],"decisions":{"x":{"finish":"failed"},"x":{"finish":"succeeded"}}`, 1),
+	}
+	for name, input := range cases {
+		t.Run(name, func(t *testing.T) {
+			w, err := Decode(strings.NewReader(input))
+			if err == nil || !reflect.DeepEqual(w, Workflow{}) {
+				t.Fatalf("нестрогий JSON принят: %+v, %v", w, err)
+			}
+		})
+	}
+}
+
+// TestDecisionDiagnosticsAreDeterministic доказывает, что случайный порядок map
+// не меняет первую ошибку: ключи решений проверяются лексикографически.
+func TestDecisionDiagnosticsAreDeterministic(t *testing.T) {
+	prefix := `{"version":2,"id":"order","start":["a"],"steps":[{"id":"a","type":"agent","prompt":"A","after":[],"decisions":`
+	suffix := `}]}`
+	first := prefix + `{"z":{"to":["missing-z"]},"a":{"to":["missing-a"]}}` + suffix
+	second := prefix + `{"a":{"to":["missing-a"]},"z":{"to":["missing-z"]}}` + suffix
+	_, firstErr := Decode(strings.NewReader(first))
+	_, secondErr := Decode(strings.NewReader(second))
+	if firstErr == nil || secondErr == nil || firstErr.Error() != secondErr.Error() || !strings.Contains(firstErr.Error(), "missing-a") {
+		t.Fatalf("диагностика зависит от порядка map: %v / %v", firstErr, secondErr)
 	}
 }
 
