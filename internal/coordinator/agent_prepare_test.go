@@ -3,6 +3,7 @@ package coordinator
 import (
 	"context"
 	"encoding/json/v2"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -100,6 +101,47 @@ func TestPrepareAgentVisitsFIFOAndCapacity(t *testing.T) {
 	if err != nil || saved.Meta.Visits[1].State != scheduler.Starting || saved.Meta.Visits[1].CodexThreadID != "" {
 		t.Fatalf("launch не зарезервирован до сети: %+v, %v", saved.Meta.Visits, err)
 	}
+}
+
+// TestPrepareAgentVisitsFencesPoisonedContinuation воспроизводит конфликт,
+// появившийся после чтения Cancelled-кандидата, но до пустого ReserveVisits.
+// Даже волна без Pending обязана сначала сохранить failed и вернуть lease.
+func TestPrepareAgentVisitsFencesPoisonedContinuation(t *testing.T) {
+	root, initial, run := createAgentPreparationRun(t, `{
+  "version":2,"id":"continuation-fence","start":["choice"],"steps":[
+    {"id":"choice","type":"agent","prompt":"Выбери","after":[],"decisions":{
+      "go":{"to":["target"]},"stop":{"finish":"failed"}}},
+    {"id":"target","type":"agent","prompt":"Цель","after":[]}
+  ]}`)
+	visitID := initial.Meta.Visits[0].VisitID
+	if err := run.ReserveVisits([]string{visitID}); err == nil {
+		completeAgentVisit(t, run, visitID, "chat-choice", scheduler.Cancelled, "остановлено")
+	} else {
+		t.Fatal(err)
+	}
+	if _, err := run.CommitDecision(visitID, "chat-choice", "turn-"+visitID, "go", "первый выбор", "call-first"); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := capacity.Configure(root, "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	configure := func(_ runstore.Snapshot, _ *codex.Command) {
+		_, _ = run.CommitDecision(visitID, "chat-choice", "turn-"+visitID, "stop", "конфликт", "call-second")
+	}
+	prepared, err := prepareAgentVisits(run, root, pool, true, map[string]bool{}, configure)
+	if !errors.Is(err, errAgentRunBecameTerminal) || len(prepared.Work) != 0 {
+		t.Fatalf("poisoned continuation прошёл admission fence: %+v, %v", prepared, err)
+	}
+	saved, loadErr := run.Load()
+	if loadErr != nil || saved.Meta.RunState != runstore.RunFailed || saved.Meta.StopVisitID != visitID {
+		t.Fatalf("poison не завершён durable planner: %+v, %v", saved.Meta, loadErr)
+	}
+	lease, available, acquireErr := pool.TryAcquire()
+	if acquireErr != nil || !available {
+		t.Fatalf("terminal preparation удерживает capacity: available=%v, %v", available, acquireErr)
+	}
+	t.Cleanup(func() { _ = lease.Release() })
 }
 
 // TestAgentPromptContainsDurableVisitContext фиксирует полезный агенту контекст:
