@@ -137,9 +137,12 @@ func TestLegacyMetadataRejectsV4Fields(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, mutate := range map[string]func(*Metadata){
-		"runState":    func(meta *Metadata) { meta.RunState = RunRunning },
-		"stopReason":  func(meta *Metadata) { meta.StopReason = "неожиданное поле" },
-		"stopVisitId": func(meta *Metadata) { meta.StopVisitID = newID() },
+		"runState":           func(meta *Metadata) { meta.RunState = RunRunning },
+		"stopReason":         func(meta *Metadata) { meta.StopReason = "неожиданное поле" },
+		"stopVisitId":        func(meta *Metadata) { meta.StopVisitID = newID() },
+		"stopLimitStepId":    func(meta *Metadata) { meta.StopLimitStepID = "work" },
+		"stopLimitTrigger":   func(meta *Metadata) { meta.StopLimitTrigger = &VisitTrigger{Kind: TriggerAfter} },
+		"stopLimitIteration": func(meta *Metadata) { meta.StopLimitIteration = 1 },
 		"visits": func(meta *Metadata) {
 			meta.Visits = []Visit{{VisitID: newID(), StepID: "чужой"}}
 		},

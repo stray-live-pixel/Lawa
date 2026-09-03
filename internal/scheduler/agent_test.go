@@ -1,8 +1,8 @@
 package scheduler
 
 import (
-	"errors"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -184,6 +184,80 @@ func TestPlanAgentGraphDecisionFailures(t *testing.T) {
 	}
 }
 
+// TestPlanAgentGraphDecisionWaveBarrier фиксирует детерминизм параллельной
+// волны. Ни ранний, ни поздний finish не применяется, пока второй decision visit
+// ещё можно продолжить. После завершения обоих всегда побеждает порядок Visits;
+// только durable конфликт обходит барьер как уже доказанная fatal-ошибка.
+func TestPlanAgentGraphDecisionWaveBarrier(t *testing.T) {
+	w := agentWorkflow([]string{"first", "second"},
+		agentStep("first", nil, map[string]workflow.Route{"done": {Finish: agentOutcome(workflow.OutcomeSucceeded)}}),
+		agentStep("second", nil, map[string]workflow.Route{"stop": {Finish: agentOutcome(workflow.OutcomeFailed)}}),
+	)
+	firstDone := agentStartVisit("first-1", "first", Succeeded, 1, &AgentDecisionView{Key: "done"})
+	secondDone := agentStartVisit("second-1", "second", Succeeded, 1, &AgentDecisionView{Key: "stop"})
+	partials := [][]AgentVisitView{
+		{agentStartVisit("first-1", "first", Running, 1, nil), secondDone},
+		{firstDone, agentStartVisit("second-1", "second", Running, 1, nil)},
+	}
+	for _, visits := range partials {
+		if got, err := PlanAgentGraph(w, visits); err != nil || !reflect.DeepEqual(got, AgentPlan{}) {
+			t.Fatalf("частично завершённая decision-wave изменила run: %#v, %v", got, err)
+		}
+	}
+	got, err := PlanAgentGraph(w, []AgentVisitView{firstDone, secondDone})
+	if err != nil || got.Terminal == nil || got.Terminal.Outcome != workflow.OutcomeSucceeded || got.Terminal.CauseVisitID != "first-1" {
+		t.Fatalf("полная волна выбрала finish не по Visits: %#v, %v", got, err)
+	}
+	for _, fatal := range []struct {
+		name     string
+		state    State
+		decision *AgentDecisionView
+	}{
+		{name: "poison", state: Running, decision: &AgentDecisionView{Key: "stop", Error: "конфликт"}},
+		{name: "missing", state: Succeeded},
+		{name: "unknown", state: Succeeded, decision: &AgentDecisionView{Key: "other"}},
+	} {
+		t.Run(fatal.name, func(t *testing.T) {
+			visits := []AgentVisitView{
+				agentStartVisit("first-1", "first", Running, 1, nil),
+				agentStartVisit("second-1", "second", fatal.state, 1, fatal.decision),
+			}
+			fatalPlan, fatalErr := PlanAgentGraph(w, visits)
+			if fatalErr != nil || fatalPlan.Terminal == nil || fatalPlan.Terminal.Outcome != workflow.OutcomeFailed || fatalPlan.Terminal.CauseVisitID != "second-1" {
+				t.Fatalf("доказанная fatal-ошибка стала ждать барьер: %#v, %v", fatalPlan, fatalErr)
+			}
+		})
+	}
+}
+
+// TestPlanAgentGraphRouteWaitsForDecisionWave не даёт готовому route создать
+// target, пока параллельный decision visit Running. После его Failed барьер
+// закрыт, и маршрут материализуется обычным атомарным переходом.
+func TestPlanAgentGraphRouteWaitsForDecisionWave(t *testing.T) {
+	w := agentWorkflow([]string{"route", "gate", "source"},
+		agentStep("route", nil, map[string]workflow.Route{"go": {To: []string{"work"}}}),
+		agentStep("gate", nil, map[string]workflow.Route{"done": {Finish: agentOutcome(workflow.OutcomeSucceeded)}}),
+		agentStep("work", nil, nil),
+		agentStep("source", nil, nil),
+		agentStep("after", []string{"source"}, nil),
+	)
+	visits := []AgentVisitView{
+		agentStartVisit("route-1", "route", Succeeded, 1, &AgentDecisionView{Key: "go"}),
+		agentStartVisit("gate-1", "gate", Running, 1, nil),
+		agentStartVisit("source-1", "source", Succeeded, 1, nil),
+	}
+	if got, err := PlanAgentGraph(w, visits); err != nil || !reflect.DeepEqual(got, AgentPlan{}) {
+		t.Fatalf("route или after материализован до полного decision-wave: %#v, %v", got, err)
+	}
+	visits[1].State = Failed
+	got, err := PlanAgentGraph(w, visits)
+	if err != nil || !reflect.DeepEqual(got.ApplyDecisionVisitIDs, []string{"route-1"}) ||
+		len(got.DecisionActivations) != 1 || got.DecisionActivations[0].StepID != "work" ||
+		len(got.AfterActivations) != 1 || got.AfterActivations[0].StepID != "after" {
+		t.Fatalf("route и after не применены после закрытия барьера: %#v, %v", got, err)
+	}
+}
+
 // TestPlanAgentGraphFinishIsImmediate не позволяет параллельному Running visit
 // задержать явный finish или добавить в тот же атомарный commit обычные routes.
 func TestPlanAgentGraphFinishIsImmediate(t *testing.T) {
@@ -315,46 +389,107 @@ func TestPlanAgentGraphNaturalQuiescence(t *testing.T) {
 	})
 }
 
-// TestPlanAgentGraphRejectsCycles проверяет временную production-границу PR3a.
-// Оба workflow валидны по публичному v2-контракту благодаря maxVisits/onLimit,
-// однако pure planner возвращает узнаваемый sentinel до проверки visits.
-func TestPlanAgentGraphRejectsCycles(t *testing.T) {
+// TestPlanAgentGraphBoundedSelfLoop проверяет точную границу maxVisits. Второе
+// посещение ещё создаётся, но попытка третьего не применяет source decision и
+// сохраняет последний разрешённый visit как структурированную причину. Отдельно
+// проверяем безопасный failed по умолчанию, явный onLimit и повреждённый N+1.
+func TestPlanAgentGraphBoundedSelfLoop(t *testing.T) {
 	limit := 2
-	onLimit := workflow.OutcomeFailed
-	tests := []struct {
-		name  string
-		start []string
-		steps []workflow.Step
-	}{
-		{
-			name: "self loop", start: []string{"loop"},
-			steps: []workflow.Step{{
-				ID: "loop", Type: "agent", Prompt: "Повтори", After: []string{}, MaxVisits: &limit, OnLimit: &onLimit,
-				Decisions: map[string]workflow.Route{"again": {To: []string{"loop"}}},
-			}},
-		},
-		{
-			name: "two nodes", start: []string{"first"},
-			steps: []workflow.Step{
-				{ID: "first", Type: "agent", Prompt: "Первый", After: []string{}, MaxVisits: &limit, OnLimit: &onLimit,
-					Decisions: map[string]workflow.Route{"next": {To: []string{"second"}}}},
-				{ID: "second", Type: "agent", Prompt: "Второй", After: []string{}, MaxVisits: &limit, OnLimit: &onLimit,
-					Decisions: map[string]workflow.Route{"again": {To: []string{"first"}}}},
-			},
-		},
+	step := agentStep("loop", nil, map[string]workflow.Route{
+		"again": {To: []string{"loop"}}, "done": {Finish: agentOutcome(workflow.OutcomeSucceeded)},
+	})
+	step.MaxVisits = &limit
+	w := agentWorkflow([]string{"loop"}, step)
+	visits := []AgentVisitView{agentStartVisit("loop-1", "loop", Succeeded, 1, &AgentDecisionView{Key: "again"})}
+
+	got, err := PlanAgentGraph(w, visits)
+	if err != nil || !reflect.DeepEqual(got.ApplyDecisionVisitIDs, []string{"loop-1"}) || len(got.DecisionActivations) != 1 ||
+		got.DecisionActivations[0].StepID != "loop" || got.DecisionActivations[0].Iteration != 2 {
+		t.Fatalf("разрешённое второе посещение не создано: %#v, %v", got, err)
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			version := workflow.VersionAgentGraph
-			w := workflow.Workflow{Version: &version, ID: "cycle", Start: tc.start, Steps: tc.steps}
-			if err := w.Validate(); err != nil {
-				t.Fatalf("fixture обязан быть допустимым будущим v2-графом: %v", err)
-			}
-			got, err := PlanAgentGraph(w, nil)
-			if !errors.Is(err, ErrAgentGraphCycle) || !reflect.DeepEqual(got, AgentPlan{}) {
-				t.Fatalf("цикл не остановлен sentinel-ошибкой: %#v, %v", got, err)
-			}
-		})
+	visits[0].Decision.Applied = true
+	visits = append(visits, agentDecisionVisit("loop-2", "loop", Succeeded, 2, "loop-1", "again", &AgentDecisionView{Key: "again"}))
+	got, err = PlanAgentGraph(w, visits)
+	if err != nil || got.Terminal == nil || got.Terminal.Outcome != workflow.OutcomeFailed ||
+		got.Terminal.CauseVisitID != "loop-2" || got.Terminal.LimitStepID != "loop" ||
+		got.Terminal.LimitTrigger.Kind != AgentTriggerDecision ||
+		!slices.Equal(got.Terminal.LimitTrigger.SourceVisitIDs, []string{"loop-2"}) ||
+		got.Terminal.LimitTrigger.DecisionKey != "again" || got.Terminal.LimitIteration != 3 ||
+		len(got.ApplyDecisionVisitIDs) != 0 || len(got.DecisionActivations) != 0 || !strings.Contains(got.Terminal.Reason, "посещение 3") {
+		t.Fatalf("граница self-loop не дала атомарный failed: %#v, %v", got, err)
+	}
+
+	onLimit := workflow.OutcomeSucceeded
+	w.Steps[0].OnLimit = &onLimit
+	got, err = PlanAgentGraph(w, visits)
+	if err != nil || got.Terminal == nil || got.Terminal.Outcome != workflow.OutcomeSucceeded || !strings.Contains(got.Terminal.Reason, "onLimit") {
+		t.Fatalf("явный onLimit не определил исход: %#v, %v", got, err)
+	}
+
+	visits[1].Decision.Applied = true
+	visits = append(visits, agentDecisionVisit("loop-3", "loop", Pending, 3, "loop-2", "again", nil))
+	if got, err = PlanAgentGraph(w, visits); err == nil || !strings.Contains(err.Error(), "превышает maxVisits=2") || !reflect.DeepEqual(got, AgentPlan{}) {
+		t.Fatalf("сохранённое N+1 посещение прошло проверку: %#v, %v", got, err)
+	}
+}
+
+// TestPlanAgentGraphLimitKeepsFanoutAtomic фиксирует порядок route.to и
+// no-overlap. Пока beta активна, весь fanout ждёт. После её завершения первая
+// исчерпанная цель выбирает outcome, а source остаётся unapplied и ни alpha, ни
+// свободный target не материализуются частично.
+func TestPlanAgentGraphLimitKeepsFanoutAtomic(t *testing.T) {
+	limit := 1
+	succeeded := workflow.OutcomeSucceeded
+	choice := agentStep("choice", nil, map[string]workflow.Route{"go": {To: []string{"beta", "alpha", "free"}}})
+	beta, alpha := agentStep("beta", nil, nil), agentStep("alpha", nil, nil)
+	beta.MaxVisits, beta.OnLimit, alpha.MaxVisits = &limit, &succeeded, &limit
+	w := agentWorkflow([]string{"choice", "beta", "alpha"}, choice, beta, alpha, agentStep("free", nil, nil))
+	visits := []AgentVisitView{
+		agentStartVisit("choice-1", "choice", Succeeded, 1, &AgentDecisionView{Key: "go"}),
+		agentStartVisit("beta-1", "beta", Running, 1, nil),
+		agentStartVisit("alpha-1", "alpha", Succeeded, 1, nil),
+	}
+	if got, err := PlanAgentGraph(w, visits); err != nil || !reflect.DeepEqual(got, AgentPlan{}) {
+		t.Fatalf("занятый fanout не был отложен целиком: %#v, %v", got, err)
+	}
+	visits[1].State = Succeeded
+	got, err := PlanAgentGraph(w, visits)
+	if err != nil || got.Terminal == nil || got.Terminal.Outcome != workflow.OutcomeSucceeded ||
+		got.Terminal.LimitStepID != "beta" || got.Terminal.CauseVisitID != "beta-1" ||
+		got.Terminal.LimitTrigger.Kind != AgentTriggerDecision ||
+		!slices.Equal(got.Terminal.LimitTrigger.SourceVisitIDs, []string{"choice-1"}) ||
+		got.Terminal.LimitTrigger.DecisionKey != "go" || got.Terminal.LimitIteration != 2 ||
+		len(got.ApplyDecisionVisitIDs) != 0 || len(got.DecisionActivations) != 0 {
+		t.Fatalf("limit fanout нарушил порядок или атомарность: %#v, %v", got, err)
+	}
+}
+
+// TestPlanAgentGraphMultiStepCycleIterations воспроизводит цикл
+// test -> checker -> fix -> test. FIFO after сохраняет номер волны, decision
+// увеличивает его, а третья готовая проверка останавливается на квоте checker=2.
+func TestPlanAgentGraphMultiStepCycleIterations(t *testing.T) {
+	limit := 2
+	testStep := agentStep("test", []string{"fix"}, nil)
+	checker := agentStep("checker", []string{"test"}, map[string]workflow.Route{
+		"repeat": {To: []string{"fix"}}, "done": {Finish: agentOutcome(workflow.OutcomeSucceeded)},
+	})
+	checker.MaxVisits = &limit
+	w := agentWorkflow([]string{"test"}, testStep, checker, agentStep("fix", nil, nil))
+	visits := []AgentVisitView{
+		agentStartVisit("test-1", "test", Succeeded, 1, nil),
+		agentAfterVisit("checker-1", "checker", Succeeded, 1, []string{"test-1"}, &AgentDecisionView{Key: "repeat", Applied: true}),
+		agentDecisionVisit("fix-1", "fix", Succeeded, 2, "checker-1", "repeat", nil),
+		agentAfterVisit("test-2", "test", Succeeded, 2, []string{"fix-1"}, nil),
+		agentAfterVisit("checker-2", "checker", Succeeded, 2, []string{"test-2"}, &AgentDecisionView{Key: "repeat", Applied: true}),
+		agentDecisionVisit("fix-2", "fix", Succeeded, 3, "checker-2", "repeat", nil),
+		agentAfterVisit("test-3", "test", Succeeded, 3, []string{"fix-2"}, nil),
+	}
+	got, err := PlanAgentGraph(w, visits)
+	if err != nil || got.Terminal == nil || got.Terminal.LimitStepID != "checker" || got.Terminal.CauseVisitID != "checker-2" ||
+		got.Terminal.LimitTrigger.Kind != AgentTriggerAfter ||
+		!slices.Equal(got.Terminal.LimitTrigger.SourceVisitIDs, []string{"test-3"}) || got.Terminal.LimitIteration != 3 ||
+		!strings.Contains(got.Terminal.Reason, "iteration=3") || len(got.AfterActivations) != 0 {
+		t.Fatalf("многошаговый цикл потерял квоту или iteration: %#v, %v", got, err)
 	}
 }
 
@@ -382,6 +517,13 @@ func agentDecisionVisit(visitID, stepID string, state State, iteration int, sour
 		VisitID: visitID, StepID: stepID, Iteration: iteration, State: state,
 		Trigger:  AgentTriggerView{Kind: AgentTriggerDecision, SourceVisitIDs: []string{sourceID}, DecisionKey: key},
 		Decision: decision,
+	}
+}
+
+func agentAfterVisit(visitID, stepID string, state State, iteration int, sourceIDs []string, decision *AgentDecisionView) AgentVisitView {
+	return AgentVisitView{
+		VisitID: visitID, StepID: stepID, Iteration: iteration, State: state,
+		Trigger: AgentTriggerView{Kind: AgentTriggerAfter, SourceVisitIDs: sourceIDs}, Decision: decision,
 	}
 }
 

@@ -1,20 +1,11 @@
 package scheduler
 
 import (
-	"errors"
 	"fmt"
 	"slices"
-	"sort"
 
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
-
-// ErrAgentGraphCycle отмечает намеренное ограничение первого visit-aware runtime:
-// схема version=2 уже умеет описывать ограниченные циклы, но до появления учёта
-// maxVisits планировщик не должен запускать из такой схемы ни одного агента.
-// Вызывающий код проверяет ошибку через errors.Is; следующий срез runtime сможет
-// снять ограничение, не меняя остальные ошибки входного контракта.
-var ErrAgentGraphCycle = errors.New("visit-aware планировщик пока не поддерживает циклы")
 
 // AgentTriggerKind описывает сохранённую причину появления посещения. Тип живёт в
 // scheduler, а не в runstore, чтобы чистое ядро не зависело от файлового формата.
@@ -67,14 +58,21 @@ type AgentActivation struct {
 }
 
 // AgentTerminal — итог всего run. CauseVisitID связывает failed frontier, fatal
-// decision либо explicit finish с конкретным durable visit. Это структурированное
-// доказательство позволяет runstore проверить причину остановки, не разбирая
+// decision, explicit finish либо исчерпанный лимит с конкретным durable visit.
+// LimitStepID дополнительно отличает остановку maxVisits от естественного исхода:
+// runstore сможет проверить шаг, квоту и onLimit, не разбирая диагностический
 // Reason. Пустой CauseVisitID допустим только у естественного успешного исхода,
 // для которого единственного причинного посещения может не существовать.
 type AgentTerminal struct {
 	Outcome      workflow.TerminalOutcome
 	Reason       string
 	CauseVisitID string
+	LimitStepID  string
+	// LimitTrigger и LimitIteration фиксируют не созданную N+1 активацию. Они
+	// позволяют persistence проверять причину после drain соседних active visits,
+	// не переигрывая изменившийся глобальный frontier.
+	LimitTrigger   AgentTriggerView
+	LimitIteration int
 }
 
 // AgentPlan — детерминированный следующий атомарный переход. Decision-активации
@@ -88,16 +86,18 @@ type AgentPlan struct {
 }
 
 // PlanAgentGraph вычисляет следующий переход version=2 без I/O и не изменяет
-// workflow либо visits. Первый срез runtime исполняет только полный DAG: наличие
-// любого цикла, включая decision-route, возвращает ErrAgentGraphCycle до анализа
-// состояний, то есть до возможного запуска Codex.
+// workflow либо visits. Циклы допустимы только через decision-route и ограничены
+// MaxVisits на каждом входящем в цикл шаге решения — это заранее проверяет
+// Workflow.Validate. Планировщик считает все созданные visits целевого шага и
+// перед созданием N+1 атомарно завершает весь run с OnLimit (по умолчанию failed).
 //
-// Приоритеты намеренны. Сначала в порядке Visits выбирается terminal decision:
-// missing/poison завершает run ошибкой, finish — указанным исходом. Такой переход
-// не смешивается с новыми visits. Затем независимые route fanout применяются
-// атомарно, после них строятся FIFO after-barriers. Если действий и active visits
-// нет, исход определяет фактический terminal frontier: Failed на его границе даёт
-// failed, иначе граф естественно завершился успешно.
+// Приоритеты намеренны. Durable Decision.Error, отсутствующий выбор и неизвестный
+// ключ немедленно завершают run. Валидные решения ждут, пока все уже существующие
+// non-applied decision-visits достигнут Failed/Succeeded: итог параллельной волны
+// тогда зависит от порядка Visits, а не скорости ответов. После барьера terminal
+// decision не смешивается с новыми visits; обычные route fanout применяются
+// атомарно, затем строятся FIFO after. Без действий и active visits исход
+// определяет фактический terminal frontier.
 func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, error) {
 	if err := w.Validate(); err != nil {
 		return AgentPlan{}, fmt.Errorf("visit-aware планировщик: %w", err)
@@ -105,16 +105,18 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 	if w.EffectiveVersion() != workflow.VersionAgentGraph {
 		return AgentPlan{}, fmt.Errorf("visit-aware планировщик требует workflow version=2")
 	}
-	if agentGraphHasCycle(w) {
-		return AgentPlan{}, fmt.Errorf("%w: workflow %q", ErrAgentGraphCycle, w.ID)
-	}
-
 	context, err := validateAgentVisitViews(w, visits)
 	if err != nil {
 		return AgentPlan{}, fmt.Errorf("visit-aware планировщик: %w", err)
 	}
-	if terminal, exists := firstDecisionTerminal(context.steps, visits); exists {
+	if terminal, exists := firstDecisionFatal(context.steps, visits); exists {
 		return terminal, nil
+	}
+	decisionWaveComplete := agentDecisionWaveComplete(context.steps, visits)
+	if decisionWaveComplete {
+		if terminal, exists := firstDecisionTerminal(context.steps, visits); exists {
+			return terminal, nil
+		}
 	}
 
 	plan := AgentPlan{}
@@ -127,6 +129,9 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 	// занята, нельзя применить только свободную часть: повтор после crash иначе не
 	// сможет отличить полный маршрут от частично материализованного.
 	for _, visit := range visits {
+		if !decisionWaveComplete {
+			break
+		}
 		step := context.steps[visit.StepID]
 		decision := visit.Decision
 		if len(step.Decisions) == 0 || visit.State != Succeeded || decision == nil || decision.Applied || decision.Error != "" {
@@ -149,6 +154,15 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 		if blocked {
 			continue
 		}
+		// Проверяем квоты всего fanout до Applied и первой активации. Если хотя
+		// бы одна цель исчерпана, маршрут целиком остаётся unapplied, а terminal
+		// commit не может оставить частично созданные соседние targets.
+		for _, target := range route.To {
+			trigger := AgentTriggerView{Kind: AgentTriggerDecision, SourceVisitIDs: []string{visit.VisitID}, DecisionKey: decision.Key}
+			if terminal, reached := agentVisitLimitTerminal(context.steps[target], visit.Iteration+1, trigger, context); reached {
+				return AgentPlan{Terminal: terminal}, nil
+			}
+		}
 		plan.ApplyDecisionVisitIDs = append(plan.ApplyDecisionVisitIDs, visit.VisitID)
 		for _, target := range route.To {
 			plan.DecisionActivations = append(plan.DecisionActivations, AgentActivation{
@@ -157,6 +171,12 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 			})
 			projectedActive[target] = true
 		}
+	}
+	// After также ждёт decision-wave. Иначе параллельный Running decision мог бы
+	// завершиться между сохранением limit-terminal и drain: повторная проверка
+	// того же журнала выбрала бы его finish и сделала итог зависимым от timing.
+	if !decisionWaveComplete {
+		return AgentPlan{}, nil
 	}
 
 	// After рассматривается только после direct routes: если оба механизма хотят
@@ -169,6 +189,12 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 		sources, iteration, ready := nextAfterSources(step, context)
 		if !ready {
 			continue
+		}
+		trigger := AgentTriggerView{Kind: AgentTriggerAfter, SourceVisitIDs: sources}
+		if terminal, reached := agentVisitLimitTerminal(step, iteration, trigger, context); reached {
+			// Terminal нельзя смешивать с routes/after, уже накопленными выше:
+			// runstore публикует либо весь обычный переход, либо один итог.
+			return AgentPlan{Terminal: terminal}, nil
 		}
 		plan.AfterActivations = append(plan.AfterActivations, AgentActivation{
 			StepID: step.ID, Iteration: iteration,
@@ -206,6 +232,8 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 type agentPlanningContext struct {
 	steps          map[string]workflow.Step
 	active         map[string]bool
+	visitCount     map[string]int
+	lastVisit      map[string]AgentVisitView
 	terminalByStep map[string][]AgentVisitView
 	usedAfter      map[agentAfterCause]bool
 	advanced       map[string]bool
@@ -228,6 +256,7 @@ type agentDecisionCause struct {
 func validateAgentVisitViews(w workflow.Workflow, visits []AgentVisitView) (agentPlanningContext, error) {
 	context := agentPlanningContext{
 		steps: make(map[string]workflow.Step, len(w.Steps)), active: make(map[string]bool),
+		visitCount: make(map[string]int), lastVisit: make(map[string]AgentVisitView),
 		terminalByStep: make(map[string][]AgentVisitView), usedAfter: make(map[agentAfterCause]bool),
 		advanced: make(map[string]bool),
 	}
@@ -251,6 +280,11 @@ func validateAgentVisitViews(w workflow.Workflow, visits []AgentVisitView) (agen
 		if !knownAgentState(visit.State) {
 			return agentPlanningContext{}, fmt.Errorf("посещение %q: неизвестное состояние %q", visit.VisitID, visit.State)
 		}
+		context.visitCount[visit.StepID]++
+		if step.MaxVisits != nil && context.visitCount[visit.StepID] > *step.MaxVisits {
+			return agentPlanningContext{}, fmt.Errorf("посещение %q превышает maxVisits=%d шага %q", visit.VisitID, *step.MaxVisits, visit.StepID)
+		}
+		context.lastVisit[visit.StepID] = visit
 		if context.active[visit.StepID] {
 			return agentPlanningContext{}, fmt.Errorf("посещение %q появилось до завершения предыдущего visit шага %q", visit.VisitID, visit.StepID)
 		}
@@ -373,10 +407,10 @@ func validateAgentDecisionTrigger(visit AgentVisitView, seen map[string]AgentVis
 	return nil
 }
 
-// firstDecisionTerminal возвращает только terminal-переход. Обычные routes здесь
-// не материализуются: если более поздний visit уже требует немедленного завершения,
-// незаписанные активации более раннего route безопасно отбрасываются.
-func firstDecisionTerminal(steps map[string]workflow.Step, visits []AgentVisitView) (AgentPlan, bool) {
+// firstDecisionFatal ищет доказанную ошибку до wave-barrier. Durable poison,
+// отсутствующий choose_decision и неизвестный ключ не являются конкурирующими
+// исходами волны, поэтому не должны ждать зависший параллельный агент.
+func firstDecisionFatal(steps map[string]workflow.Step, visits []AgentVisitView) (AgentPlan, bool) {
 	for _, visit := range visits {
 		step := steps[visit.StepID]
 		if len(step.Decisions) == 0 {
@@ -384,7 +418,7 @@ func firstDecisionTerminal(steps map[string]workflow.Step, visits []AgentVisitVi
 		}
 		decision := visit.Decision
 		if decision != nil && decision.Error != "" {
-			return fatalDecisionPlan(visit, "durable решение содержит конфликт: "+decision.Error), true
+			return fatalDecisionPlan(visit, "durable решение содержит конфликт: "+visit.Decision.Error), true
 		}
 		if visit.State != Succeeded {
 			continue
@@ -392,13 +426,44 @@ func firstDecisionTerminal(steps map[string]workflow.Step, visits []AgentVisitVi
 		if decision == nil {
 			return fatalDecisionPlan(visit, "успешный turn завершился без choose_decision"), true
 		}
-		if decision.Applied {
-			continue
-		}
-		route, exists := step.Decisions[decision.Key]
-		if !exists {
+		if _, exists := step.Decisions[decision.Key]; !exists {
 			return fatalDecisionPlan(visit, fmt.Sprintf("сохранён неизвестный ключ решения %q", decision.Key)), true
 		}
+	}
+	return AgentPlan{}, false
+}
+
+// agentDecisionWaveComplete отделяет порядок Visits от скорости внешних Result.
+// Applied visits принадлежат прошлым волнам; каждый текущий decision visit должен
+// дойти именно до Failed/Succeeded. Cancelled и промежуточные состояния ещё можно
+// продолжить новым turn, поэтому они сохраняют барьер закрытым.
+func agentDecisionWaveComplete(steps map[string]workflow.Step, visits []AgentVisitView) bool {
+	for _, visit := range visits {
+		if len(steps[visit.StepID].Decisions) == 0 || visit.Decision != nil && visit.Decision.Applied {
+			continue
+		}
+		if !agentVisitTerminal(visit.State) {
+			return false
+		}
+	}
+	return true
+}
+
+// firstDecisionTerminal вызывается только для завершённой decision-wave и
+// возвращает её первый terminal-переход в порядке Visits. Обычные routes здесь
+// не материализуются: если visit требует завершения, накопление активаций даже
+// более раннего route безопасно не начинается.
+func firstDecisionTerminal(steps map[string]workflow.Step, visits []AgentVisitView) (AgentPlan, bool) {
+	for _, visit := range visits {
+		step := steps[visit.StepID]
+		if len(step.Decisions) == 0 {
+			continue
+		}
+		decision := visit.Decision
+		if visit.State != Succeeded || decision == nil || decision.Applied {
+			continue
+		}
+		route := step.Decisions[decision.Key]
 		if route.Finish != nil {
 			outcome := *route.Finish
 			return AgentPlan{
@@ -447,6 +512,30 @@ func nextAfterSources(step workflow.Step, context agentPlanningContext) ([]strin
 	return sources, maxIteration, true
 }
 
+// agentVisitLimitTerminal вызывается только непосредственно перед созданием
+// очередного посещения step и после проверки no-overlap. Поэтому count==limit
+// означает отказ именно от N+1, а CauseVisitID всегда указывает на последний
+// разрешённый visit N. Положительность лимита уже доказана Workflow.Validate.
+func agentVisitLimitTerminal(step workflow.Step, nextIteration int, trigger AgentTriggerView, context agentPlanningContext) (*AgentTerminal, bool) {
+	if step.MaxVisits == nil || context.visitCount[step.ID] < *step.MaxVisits {
+		return nil, false
+	}
+	last := context.lastVisit[step.ID]
+	outcome := workflow.OutcomeFailed
+	reason := fmt.Sprintf("шаг %q достиг maxVisits=%d; посещение %d с iteration=%d не создано; onLimit не задан, workflow завершён как %q",
+		step.ID, *step.MaxVisits, context.visitCount[step.ID]+1, nextIteration, outcome)
+	if step.OnLimit != nil {
+		outcome = *step.OnLimit
+		reason = fmt.Sprintf("шаг %q достиг maxVisits=%d; посещение %d с iteration=%d не создано; применён onLimit %q",
+			step.ID, *step.MaxVisits, context.visitCount[step.ID]+1, nextIteration, outcome)
+	}
+	trigger.SourceVisitIDs = slices.Clone(trigger.SourceVisitIDs)
+	return &AgentTerminal{
+		Outcome: outcome, Reason: reason, CauseVisitID: last.VisitID, LimitStepID: step.ID,
+		LimitTrigger: trigger, LimitIteration: nextIteration,
+	}, true
+}
+
 func knownAgentState(state State) bool {
 	switch state {
 	case Pending, Starting, Unknown, Running, WaitingForApproval, Failed, Cancelled, Succeeded:
@@ -458,61 +547,4 @@ func knownAgentState(state State) bool {
 
 func agentVisitTerminal(state State) bool {
 	return state == Failed || state == Succeeded
-}
-
-// agentGraphHasCycle проверяет объединение after и всех возможных route.to.
-// Рёбра дедуплицируются, а очередь Кана строится в порядке Steps. Решения map
-// обходятся по отсортированным ключам, поэтому даже внутренний порядок проверки
-// воспроизводим и не зависит от рантайма Go.
-func agentGraphHasCycle(w workflow.Workflow) bool {
-	indices := make(map[string]int, len(w.Steps))
-	for index, step := range w.Steps {
-		indices[step.ID] = index
-	}
-	graph := make([][]int, len(w.Steps))
-	remaining := make([]int, len(w.Steps))
-	seen := make([]map[int]bool, len(w.Steps))
-	addEdge := func(source, target int) {
-		if seen[source] == nil {
-			seen[source] = make(map[int]bool)
-		}
-		if seen[source][target] {
-			return
-		}
-		seen[source][target] = true
-		graph[source] = append(graph[source], target)
-		remaining[target]++
-	}
-	for target, step := range w.Steps {
-		for _, dependency := range step.After {
-			addEdge(indices[dependency], target)
-		}
-	}
-	for source, step := range w.Steps {
-		keys := make([]string, 0, len(step.Decisions))
-		for key := range step.Decisions {
-			keys = append(keys, key)
-		}
-		sort.Strings(keys)
-		for _, key := range keys {
-			for _, target := range step.Decisions[key].To {
-				addEdge(source, indices[target])
-			}
-		}
-	}
-	queue := make([]int, 0, len(w.Steps))
-	for node, count := range remaining {
-		if count == 0 {
-			queue = append(queue, node)
-		}
-	}
-	for head := 0; head < len(queue); head++ {
-		for _, target := range graph[queue[head]] {
-			remaining[target]--
-			if remaining[target] == 0 {
-				queue = append(queue, target)
-			}
-		}
-	}
-	return len(queue) != len(w.Steps)
 }
