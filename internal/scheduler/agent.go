@@ -140,8 +140,18 @@ func PlanAgentGraph(w workflow.Workflow, visits []AgentVisitView) (AgentPlan, er
 			break
 		}
 		step := context.steps[visit.StepID]
+		if len(step.Decisions) == 0 {
+			continue
+		}
+		if visit.State == Skipped {
+			if roots, causal := context.skipRoots[visit.VisitID]; causal {
+				plan.DecisionActivations = append(plan.DecisionActivations,
+					missingDecisionSkippedActivations(step, visit, "", roots, projectedSkipped)...)
+			}
+			continue
+		}
 		decision := visit.Decision
-		if len(step.Decisions) == 0 || visit.State != Succeeded || decision == nil || decision.Error != "" {
+		if visit.State != Succeeded || decision == nil || decision.Error != "" {
 			continue
 		}
 		route, exists := step.Decisions[decision.Key]
