@@ -248,6 +248,49 @@ func TestExecuteAgentGraphRoutesFanoutAndAfter(t *testing.T) {
 	}
 }
 
+// TestExecuteAgentGraphIfElseSkipsBranchAndRunsJoin проходит пользовательский
+// сценарий целиком через coordinator. Невыбранная ветка получает настоящий
+// terminal Skipped без Codex-запуска, но остаётся причинным токеном для after;
+// поэтому join выполняется один раз и run достигает естественного успеха.
+func TestExecuteAgentGraphIfElseSkipsBranchAndRunsJoin(t *testing.T) {
+	root, _, run := createAgentPreparationRun(t, `{
+  "version":2,"id":"if-else","start":["choice"],"steps":[
+    {"id":"choice","type":"agent","prompt":"Выбери","after":[],"decisions":{
+      "left":{"to":["left"]},"right":{"to":["right"]}}},
+    {"id":"left","type":"agent","prompt":"Лево","after":[]},
+    {"id":"right","type":"agent","prompt":"Право","after":[]},
+    {"id":"join","type":"agent","prompt":"Собери","after":["left","right"]}
+  ]}`)
+	client := newAgentExecutionClient()
+	client.choices["choice"] = "left"
+	outcome, err := ExecuteWithOutcome(t.Context(), run, agentExecutionOptions(root, client))
+	if err != nil || !outcome.Terminal || !outcome.Successful {
+		t.Fatalf("if/else с общим join не завершился успешно: outcome=%+v err=%v", outcome, err)
+	}
+
+	snapshot, err := run.Load()
+	if err != nil || snapshot.Meta.RunState != runstore.RunSucceeded || len(snapshot.Meta.Visits) != 4 {
+		t.Fatalf("if/else сохранил неполную историю: %+v, %v", snapshot.Meta, err)
+	}
+	states := make(map[string]scheduler.State, len(snapshot.Meta.Visits))
+	for _, visit := range snapshot.Meta.Visits {
+		states[visit.StepID] = visit.State
+	}
+	if states["choice"] != scheduler.Succeeded || states["left"] != scheduler.Succeeded ||
+		states["right"] != scheduler.Skipped || states["join"] != scheduler.Succeeded {
+		t.Fatalf("ветки и join получили неверные состояния: %v", states)
+	}
+	client.mu.Lock()
+	runs := map[string]int{
+		"choice": client.runs["choice"], "left": client.runs["left"],
+		"right": client.runs["right"], "join": client.runs["join"],
+	}
+	client.mu.Unlock()
+	if runs["choice"] != 1 || runs["left"] != 1 || runs["right"] != 0 || runs["join"] != 1 {
+		t.Fatalf("coordinator запустил не тот набор агентов: %v", runs)
+	}
+}
+
 // TestExecuteAgentGraphFailedDecisionUsesAfter фиксирует различие технического
 // Failed и выбора route: target не запускается, но failed остаётся допустимым
 // terminal-токеном для after-проверяющего и весь граф может завершиться успешно.

@@ -196,6 +196,69 @@ func TestAgentPromptContainsDurableVisitContext(t *testing.T) {
 	}
 }
 
+// TestAgentPromptIncludesSkippedHistory фиксирует, что terminal Skipped — часть
+// доступной агенту истории, даже когда он не является непосредственным causal
+// source текущего visit. Пустая память такой ветки остаётся доступна по тому же
+// устойчивому пути, а статус явно сообщает, что Codex не запускался.
+func TestAgentPromptIncludesSkippedHistory(t *testing.T) {
+	root, initial, run := createAgentPreparationRun(t, `{
+  "version":2,"id":"skipped-context","start":["choice","target"],"steps":[
+    {"id":"choice","type":"agent","prompt":"Выбери","after":[],"decisions":{
+      "work":{"to":["worker"]},"skip":{"to":["unused"]}}},
+    {"id":"target","type":"agent","prompt":"Прочитай историю","after":[]},
+    {"id":"worker","type":"agent","prompt":"Работай","after":[]},
+    {"id":"unused","type":"agent","prompt":"Не запускать","after":[]}
+  ]}`)
+	choiceID := initial.Meta.Visits[0].VisitID
+	if err := run.ReserveVisits([]string{choiceID}); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.UpdateVisit(choiceID, scheduler.Unknown, "chat-choice", ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.SetVisitTurn(choiceID, "turn-choice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := run.CommitDecision(choiceID, "chat-choice", "turn-choice", "work", "выбран work", "call-choice"); err != nil {
+		t.Fatal(err)
+	}
+	if err := run.UpdateVisit(choiceID, scheduler.Succeeded, "chat-choice", ""); err != nil {
+		t.Fatal(err)
+	}
+	advanced, err := run.AdvanceAgentGraph()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var target, skipped runstore.Visit
+	for _, visit := range advanced.Snapshot.Meta.Visits {
+		switch visit.StepID {
+		case "target":
+			target = visit
+		case "unused":
+			skipped = visit
+		}
+	}
+	if target.VisitID == "" || skipped.VisitID == "" || skipped.State != scheduler.Skipped {
+		t.Fatalf("переход не создал target и skipped-историю: %+v", advanced.Snapshot.Meta.Visits)
+	}
+	runDir, err := filepath.EvalSymlinks(filepath.Join(root, initial.Meta.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt, err := buildAgentPrompt(advanced.Snapshot, advanced.Snapshot.Workflow.Steps[1], target, runDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, fragment := range []string{
+		"step=unused", "state=skipped", skipped.VisitID,
+		filepath.Join(runDir, "memory", skipped.VisitID+".md"),
+	} {
+		if !strings.Contains(prompt, fragment) {
+			t.Errorf("prompt не содержит skipped-историю %q\n%s", fragment, prompt)
+		}
+	}
+}
+
 // TestChooseDecisionComposesWithConfiguredTools проверяет машинную границу
 // решения целиком: child handler сохраняется, enum детерминирован, неверные JSON
 // не меняют meta, а повторная доставка одного callId возвращает тот же commit.
