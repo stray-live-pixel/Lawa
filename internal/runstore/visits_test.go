@@ -30,7 +30,7 @@ func agentGraphInput(t *testing.T) Input {
   "steps": [
     {"id":"choice","type":"agent","prompt":"Выбери маршрут","after":[],"decisions":{
       "go":{"to":["work"]},"done":{"finish":"succeeded"},"fail":{"finish":"failed"}}},
-    {"id":"audit","type":"agent","prompt":"Проверь вход","after":[],"decisions":{"done":{"finish":"succeeded"}}},
+    {"id":"audit","type":"agent","prompt":"Проверь вход","after":[]},
     {"id":"work","type":"agent","prompt":"Выполни работу","after":[]},
     {"id":"check","type":"agent","prompt":"Проверь результат","after":["work"]}
   ]
@@ -526,10 +526,14 @@ func TestCanonicalSkippedTargetKey(t *testing.T) {
 		"alpha": {To: []string{"shared", "only-skipped"}},
 		"zeta":  {To: []string{"only-skipped"}},
 	}}
-	if key, ok := canonicalSkippedTargetKey(step, "main", "shared"); ok || key != "" {
+	steps := map[string]workflow.Step{"choice": step}
+	source := Visit{StepID: "choice", Decision: &DecisionRecord{
+		Key: "main", To: []string{"shared"}, Skipped: []string{"alpha", "zeta"},
+	}}
+	if key, ok := canonicalSkippedTargetKey(source, "shared", steps); ok || key != "" {
 		t.Fatalf("выбранный общий target помечен как Skipped ключом %q", key)
 	}
-	if key, ok := canonicalSkippedTargetKey(step, "main", "only-skipped"); !ok || key != "alpha" {
+	if key, ok := canonicalSkippedTargetKey(source, "only-skipped", steps); !ok || key != "alpha" {
 		t.Fatalf("не выбран канонический ключ общей альтернативы: %q, %v", key, ok)
 	}
 }
