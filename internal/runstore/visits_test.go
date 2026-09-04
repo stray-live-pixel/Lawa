@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json/v2"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -536,6 +537,1043 @@ func TestCanonicalSkippedTargetKey(t *testing.T) {
 	if key, ok := canonicalSkippedTargetKey(source, "only-skipped", steps); !ok || key != "alpha" {
 		t.Fatalf("не выбран канонический ключ общей альтернативы: %q, %v", key, ok)
 	}
+}
+
+// TestAgentGraphSkippedValidation проверяет, что новый terminal state нельзя
+// подделать внешними ID или оторвать от невыбранного route. Отсутствующий
+// synthetic token старого v4 допустим для lazy backfill, но любая уже
+// присутствующая запись обязана иметь точную и единственную причину.
+func TestAgentGraphSkippedValidation(t *testing.T) {
+	root := t.TempDir()
+	initial, err := Create(root, skippedJoinInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := OpenLocked(root, initial.Meta.RunID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer run.Close()
+	finishDecisionVisit(t, run, initial.Meta.Visits[0].VisitID, "left")
+	advanced, err := run.AdvanceAgentGraph()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = advanced.Snapshot.validate(initial.Meta.RunID); err != nil {
+		t.Fatalf("допустимый Skipped snapshot отклонён: %v", err)
+	}
+	rightIndex := -1
+	for index, visit := range advanced.Snapshot.Meta.Visits {
+		if visit.StepID == "right" {
+			rightIndex = index
+			break
+		}
+	}
+	if rightIndex < 0 {
+		t.Fatal("planner не создал Skipped right")
+	}
+
+	for name, mutate := range map[string]func(*Snapshot){
+		"codex payload": func(snapshot *Snapshot) {
+			snapshot.Meta.Visits[rightIndex].CodexThreadID = "chat-skipped"
+		},
+		"selected key": func(snapshot *Snapshot) {
+			snapshot.Meta.Visits[rightIndex].Trigger.DecisionKey = "left"
+		},
+		"non-terminal state": func(snapshot *Snapshot) {
+			snapshot.Meta.Visits[rightIndex].State = scheduler.Pending
+		},
+		"duplicate cause": func(snapshot *Snapshot) {
+			duplicate := snapshot.Meta.Visits[rightIndex]
+			duplicate.VisitID, duplicate.Visit = newID(), duplicate.Visit+1
+			snapshot.Meta.Visits = append(snapshot.Meta.Visits, duplicate)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			damaged := cloneSnapshotMetadata(t, advanced.Snapshot)
+			mutate(&damaged)
+			if err := damaged.validate(damaged.Meta.RunID); err == nil {
+				t.Fatal("повреждённый Skipped snapshot принят")
+			}
+		})
+	}
+
+	left := advanced.CreatedVisits[0]
+	finishPlainVisit(t, run, left.VisitID)
+	joined, err := run.AdvanceAgentGraph()
+	if err != nil || len(joined.CreatedVisits) != 1 {
+		t.Fatalf("не создан mixed join: %+v, %v", joined, err)
+	}
+	mixed := cloneSnapshotMetadata(t, joined.Snapshot)
+	mixed.Meta.Visits[len(mixed.Meta.Visits)-1].State = scheduler.Skipped
+	if err := mixed.validate(mixed.Meta.RunID); err == nil {
+		t.Fatal("работающий graph принял Skipped after со смешанными источниками")
+	}
+
+	startSkipped := cloneSnapshotMetadata(t, initial)
+	startSkipped.Meta.Visits[0].State = scheduler.Skipped
+	if err := startSkipped.validate(startSkipped.Meta.RunID); err == nil {
+		t.Fatal("работающий graph принял произвольно пропущенный start")
+	}
+	forgedNatural := cloneSnapshotMetadata(t, startSkipped)
+	forgedNatural.Meta.RunState = RunSucceeded
+	forgedNatural.Meta.StopReason = "подделанный естественный успех"
+	if err := forgedNatural.validate(forgedNatural.Meta.RunID); err == nil || !strings.Contains(err.Error(), "необоснованный skipped") {
+		t.Fatalf("terminal snapshot скрыл невыполненный start под natural success: %v", err)
+	}
+}
+
+// TestAgentGraphNaturalTerminalRejectsUnappliedDecision не даёт ручной подмене
+// runState скрыть обязательный переход decision. Проверяются все три состояния
+// готового turn: нет choose_decision, выбран обычный route и выбран finish.
+func TestAgentGraphNaturalTerminalRejectsUnappliedDecision(t *testing.T) {
+	root := t.TempDir()
+	initial, err := Create(root, terminalNestedSkippedInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	successful := workflow.OutcomeSucceeded
+	for _, variant := range []struct {
+		name     string
+		decision *DecisionRecord
+	}{
+		{name: "missing choice"},
+		{name: "route", decision: &DecisionRecord{
+			Key: "investigate", TurnID: "turn-choice", CallID: "call-choice", To: []string{"inner"}, Skipped: []string{"safe"},
+		}},
+		{name: "finish", decision: &DecisionRecord{
+			Key: "safe", TurnID: "turn-choice", CallID: "call-choice", Finish: &successful, Skipped: []string{"investigate"},
+		}},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			damaged := cloneSnapshotMetadata(t, initial)
+			visit := &damaged.Meta.Visits[0]
+			visit.State, visit.CodexThreadID, visit.TurnID, visit.Attempt = scheduler.Succeeded, "chat-choice", "turn-choice", 1
+			visit.Decision = variant.decision
+			damaged.Meta.RunState = RunSucceeded
+			damaged.Meta.StopReason = "подделанный natural outcome"
+			if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "неприменённое решение") {
+				t.Fatalf("natural terminal скрыл обязательный decision-переход: %v", err)
+			}
+		})
+	}
+}
+
+// TestAgentGraphNaturalTerminalRequiresPlannerQuiescence защищает causal
+// frontier, который нельзя доказать одним поиском active visits. Завершённый
+// source уже делает recovery-after готовым: и при успехе, и при техническом
+// Failed planner обязан сначала создать downstream visit, а не публиковать
+// natural outcome ручной заменой runState.
+func TestAgentGraphNaturalTerminalRequiresPlannerQuiescence(t *testing.T) {
+	root := t.TempDir()
+	initial, err := Create(root, Input{WorkflowJSON: []byte(`{
+  "version":2,
+  "id":"natural-quiescence",
+  "start":["source"],
+  "steps":[
+    {"id":"source","type":"agent","prompt":"Источник","after":[]},
+    {"id":"recovery","type":"agent","prompt":"Продолжи","after":["source"]}
+  ]
+}`), Task: "Проверить natural quiescence", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, variant := range []struct {
+		name     string
+		state    scheduler.State
+		runState RunState
+	}{
+		{name: "ready after before success", state: scheduler.Succeeded, runState: RunSucceeded},
+		{name: "ready recovery before failure", state: scheduler.Failed, runState: RunFailed},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			damaged := cloneSnapshotMetadata(t, initial)
+			visit := &damaged.Meta.Visits[0]
+			visit.State, visit.CodexThreadID = variant.state, "chat-source"
+			if variant.state == scheduler.Succeeded {
+				visit.TurnID, visit.Attempt = "turn-source", 1
+			} else {
+				visit.TechnicalError = "источник завершился с ошибкой"
+				damaged.Meta.StopVisitID = visit.VisitID
+			}
+			damaged.Meta.RunState = variant.runState
+			damaged.Meta.StopReason = "подделанный natural outcome"
+			if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "готовую активацию") {
+				t.Fatalf("natural terminal скрыл готовый after: %v", err)
+			}
+		})
+	}
+}
+
+// TestAgentGraphNaturalTerminalDistinguishesLegacySkippedBackfill сохраняет
+// чтение старых v4 snapshots, созданных до synthetic Skipped. Если в истории
+// вообще нет Skipped, отсутствующая ветка может требовать только ленивый
+// backfill и не инвалидирует уже опубликованный natural outcome. Но первая же
+// сохранённая causal-запись включает новый контракт: её транзитивное замыкание
+// обязано быть полным, иначе Load принял бы оборванную ветку за завершённую.
+func TestAgentGraphNaturalTerminalDistinguishesLegacySkippedBackfill(t *testing.T) {
+	initial, err := Create(t.TempDir(), nestedSkippedInput(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := cloneSnapshotMetadata(t, initial)
+	outer := &legacy.Meta.Visits[0]
+	outer.State, outer.CodexThreadID, outer.TurnID, outer.Attempt = scheduler.Succeeded, "chat-outer", "turn-outer", 1
+	outer.Decision = &DecisionRecord{
+		Key: "right", TurnID: "turn-outer", CallID: "call-outer", To: []string{"right"},
+		Skipped: []string{"nested"}, Applied: true,
+	}
+	rightID := newID()
+	legacy.Meta.Visits = append(legacy.Meta.Visits, Visit{
+		VisitID: rightID, StepID: "right", Visit: 1, Iteration: 2,
+		Trigger: VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{outer.VisitID}, DecisionKey: "right"},
+		State:   scheduler.Succeeded, CodexThreadID: "chat-right", TurnID: "turn-right", Attempt: 1,
+	})
+	legacy.Meta.RunState, legacy.Meta.StopReason = RunSucceeded, "старый natural outcome без skipped-backfill"
+	if err := legacy.validate(legacy.Meta.RunID); err != nil {
+		t.Fatalf("legacy snapshot без Skipped ошибочно отклонён: %v", err)
+	}
+
+	partial := cloneSnapshotMetadata(t, legacy)
+	partial.Meta.Visits = append(partial.Meta.Visits, Visit{
+		VisitID: newID(), StepID: "inner", Visit: 1, Iteration: 2, State: scheduler.Skipped,
+		Trigger: VisitTrigger{Kind: TriggerDecisionSkipped, SourceVisitIDs: []string{outer.VisitID}, DecisionKey: "nested"},
+	})
+	if err := partial.validate(partial.Meta.RunID); err == nil || !strings.Contains(err.Error(), "неполное skipped-замыкание") {
+		t.Fatalf("новая история приняла только первый слой skipped-замыкания: %v", err)
+	}
+}
+
+// TestAgentGraphDecisionTerminalPriority не позволяет terminal metadata
+// переставить события внутри decision-wave. Finish ждёт закрытия всех decision
+// visits и выигрывает до обычных routes; fatal outcome, напротив, выбирается
+// немедленно и обязан ссылаться на самую раннюю durable ошибку.
+func TestAgentGraphDecisionTerminalPriority(t *testing.T) {
+	input := func(t *testing.T) Input {
+		t.Helper()
+		return Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"decision-terminal-priority","start":["first","second"],"steps":[
+    {"id":"first","type":"agent","prompt":"Первое решение","after":[],"decisions":{
+      "done":{"finish":"succeeded"},"go":{"to":["first-target"]}}},
+    {"id":"second","type":"agent","prompt":"Второе решение","after":[],"decisions":{
+      "done":{"finish":"succeeded"},"go":{"to":["second-target"]}}},
+    {"id":"first-target","type":"agent","prompt":"Первая цель","after":[]},
+    {"id":"second-target","type":"agent","prompt":"Вторая цель","after":[]}
+  ]
+}`), Task: "Проверить порядок terminal decision", CWD: t.TempDir()}
+	}
+	outcome := workflow.OutcomeSucceeded
+	for _, variant := range []struct {
+		name      string
+		configure func(*Snapshot)
+		want      string
+	}{
+		{name: "earlier running decision", want: "ещё не завершило", configure: func(snapshot *Snapshot) {
+			first := &snapshot.Meta.Visits[0]
+			first.State, first.CodexThreadID, first.TurnID, first.Attempt = scheduler.Running, "chat-first", "turn-first", 1
+		}},
+		{name: "earlier missing choice", want: "без обязательного решения", configure: func(snapshot *Snapshot) {
+			first := &snapshot.Meta.Visits[0]
+			first.State, first.CodexThreadID, first.TurnID, first.Attempt = scheduler.Succeeded, "chat-first", "turn-first", 1
+		}},
+		{name: "earlier finish", want: "planner первым выбрал бы", configure: func(snapshot *Snapshot) {
+			first := &snapshot.Meta.Visits[0]
+			first.State, first.CodexThreadID, first.TurnID, first.Attempt = scheduler.Succeeded, "chat-first", "turn-first", 1
+			first.Decision = &DecisionRecord{
+				Key: "done", TurnID: "turn-first", CallID: "call-first", Finish: &outcome, Skipped: []string{"go"},
+			}
+		}},
+		{name: "ordinary route applied after finisher existed", want: "материализовано после terminal source", configure: func(snapshot *Snapshot) {
+			first := &snapshot.Meta.Visits[0]
+			first.State, first.CodexThreadID, first.TurnID, first.Attempt = scheduler.Succeeded, "chat-first", "turn-first", 1
+			first.Decision = &DecisionRecord{
+				Key: "go", TurnID: "turn-first", CallID: "call-first", To: []string{"first-target"},
+				Skipped: []string{"done"}, Applied: true,
+			}
+			snapshot.Meta.Visits = append(snapshot.Meta.Visits, Visit{
+				VisitID: newID(), StepID: "first-target", Visit: 1, Iteration: 2, State: scheduler.Skipped,
+				Trigger: VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{first.VisitID}, DecisionKey: "go"},
+			})
+		}},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			initial, err := Create(t.TempDir(), input(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			damaged := cloneSnapshotMetadata(t, initial)
+			second := &damaged.Meta.Visits[1]
+			second.State, second.CodexThreadID, second.TurnID, second.Attempt = scheduler.Succeeded, "chat-second", "turn-second", 1
+			second.Decision = &DecisionRecord{
+				Key: "done", TurnID: "turn-second", CallID: "call-second", Finish: &outcome,
+				Skipped: []string{"go"}, Applied: true,
+			}
+			damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+				RunSucceeded, "подделанный поздний finish", second.VisitID
+			variant.configure(&damaged)
+			if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), variant.want) {
+				t.Fatalf("terminal snapshot нарушил decision priority (%s): %v", variant.want, err)
+			}
+		})
+	}
+
+	for _, variant := range []struct {
+		name   string
+		finish bool
+	}{
+		{name: "finish source already advanced", finish: true},
+		{name: "fatal source already advanced"},
+	} {
+		t.Run(variant.name, func(t *testing.T) {
+			initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"terminal-source-use","start":["decision"],"steps":[
+    {"id":"decision","type":"agent","prompt":"Решение","after":[],"decisions":{"done":{"finish":"succeeded"}}},
+    {"id":"downstream","type":"agent","prompt":"Не должен появиться","after":["decision"]}
+  ]
+}`), Task: "Проверить terminal source use", CWD: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			damaged := cloneSnapshotMetadata(t, initial)
+			decision := &damaged.Meta.Visits[0]
+			decision.State, decision.CodexThreadID, decision.TurnID, decision.Attempt =
+				scheduler.Succeeded, "chat-decision", "turn-decision", 1
+			if variant.finish {
+				decision.Decision = &DecisionRecord{
+					Key: "done", TurnID: "turn-decision", CallID: "call-decision", Finish: &outcome, Applied: true,
+				}
+				damaged.Meta.RunState = RunSucceeded
+			} else {
+				damaged.Meta.RunState = RunFailed
+			}
+			damaged.Meta.StopReason, damaged.Meta.StopVisitID = "подделанный terminal source use", decision.VisitID
+			damaged.Meta.Visits = append(damaged.Meta.Visits, Visit{
+				VisitID: newID(), StepID: "downstream", Visit: 1, Iteration: 1, State: scheduler.Succeeded,
+				Trigger:       VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{decision.VisitID}},
+				CodexThreadID: "chat-downstream", TurnID: "turn-downstream", Attempt: 1,
+			})
+			if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "terminal decision source") {
+				t.Fatalf("terminal decision успело создать downstream visit: %v", err)
+			}
+		})
+	}
+
+	t.Run("earlier durable conflict", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), input(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		first := &damaged.Meta.Visits[0]
+		first.State, first.CodexThreadID, first.TurnID, first.Attempt = scheduler.Running, "chat-first", "turn-first", 1
+		first.Decision = &DecisionRecord{
+			Key: "go", TurnID: "turn-first", CallID: "call-first", To: []string{"first-target"},
+			Skipped: []string{"done"}, Error: "два разных результата одного call",
+		}
+		second := &damaged.Meta.Visits[1]
+		second.State, second.CodexThreadID, second.TurnID, second.Attempt = scheduler.Succeeded, "chat-second", "turn-second", 1
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+			RunFailed, "подделана более поздняя ошибка решения", second.VisitID
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "planner первым выбрал бы") {
+			t.Fatalf("fatal outcome обошёл ранний durable conflict: %v", err)
+		}
+	})
+
+	t.Run("causal missing choice before fatal", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"causal-missing-before-fatal","start":["first"],"steps":[
+    {"id":"first","type":"agent","prompt":"Первое решение","after":[],"decisions":{"go":{"to":["target"]}}},
+    {"id":"second","type":"agent","prompt":"Причинно поздняя ошибка","after":["first"],"decisions":{"go":{"to":["target"]}}},
+    {"id":"target","type":"agent","prompt":"Цель","after":[]}
+  ]
+}`), Task: "Проверить causal missing choice", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		first := &damaged.Meta.Visits[0]
+		first.State, first.CodexThreadID, first.TurnID, first.Attempt =
+			scheduler.Succeeded, "chat-first", "turn-first", 1
+		secondID := newID()
+		damaged.Meta.Visits = append(damaged.Meta.Visits, Visit{
+			VisitID: secondID, StepID: "second", Visit: 1, Iteration: 1,
+			Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{first.VisitID}},
+			State:   scheduler.Succeeded, CodexThreadID: "chat-second", TurnID: "turn-second", Attempt: 1,
+			Decision: &DecisionRecord{
+				Key: "go", TurnID: "turn-second", CallID: "call-second", To: []string{"target"},
+				Error: "конфликт durable decision",
+			},
+		})
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+			RunFailed, "подделана причинно поздняя ошибка решения", secondID
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "породило downstream") {
+			t.Fatalf("fatal outcome обошёл причинно более ранний missing-choice: %v", err)
+		}
+	})
+
+	t.Run("causal missing choice after fatal source", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"late-causal-missing-before-fatal","start":["first","second"],"steps":[
+    {"id":"first","type":"agent","prompt":"Первая ошибка","after":[],"decisions":{"go":{"to":["target"]}}},
+    {"id":"second","type":"agent","prompt":"Второе решение","after":[],"decisions":{"go":{"to":["target"]}}},
+    {"id":"child","type":"agent","prompt":"Недопустимый потомок","after":["second"]},
+    {"id":"target","type":"agent","prompt":"Цель","after":[]}
+  ]
+}`), Task: "Проверить missing choice после stop visit", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		first := &damaged.Meta.Visits[0]
+		first.State, first.CodexThreadID, first.TurnID, first.Attempt =
+			scheduler.Running, "chat-first", "turn-first", 1
+		first.Decision = &DecisionRecord{
+			Key: "go", TurnID: "turn-first", CallID: "call-first", To: []string{"target"},
+			Error: "конфликт durable decision",
+		}
+		second := &damaged.Meta.Visits[1]
+		second.State, second.CodexThreadID, second.TurnID, second.Attempt =
+			scheduler.Succeeded, "chat-second", "turn-second", 1
+		damaged.Meta.Visits = append(damaged.Meta.Visits, Visit{
+			VisitID: newID(), StepID: "child", Visit: 1, Iteration: 1,
+			Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{second.VisitID}},
+			State:   scheduler.Succeeded, CodexThreadID: "chat-child", TurnID: "turn-child", Attempt: 1,
+		})
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+			RunFailed, "durable conflict первого решения", first.VisitID
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "породило downstream") {
+			t.Fatalf("fatal source скрыл поздний causal missing-choice: %v", err)
+		}
+	})
+
+	t.Run("late missing choice during drain", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), input(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		terminal := cloneSnapshotMetadata(t, initial)
+		first := &terminal.Meta.Visits[0]
+		first.State, first.CodexThreadID, first.TurnID, first.Attempt = scheduler.Running, "chat-first", "turn-first", 1
+		second := &terminal.Meta.Visits[1]
+		second.State, second.CodexThreadID, second.TurnID, second.Attempt = scheduler.Running, "chat-second", "turn-second", 1
+		second.Decision = &DecisionRecord{
+			Key: "go", TurnID: "turn-second", CallID: "call-second", To: []string{"second-target"},
+			Skipped: []string{"done"}, Error: "конфликт durable decision",
+		}
+		terminal.Meta.RunState, terminal.Meta.StopReason, terminal.Meta.StopVisitID =
+			RunFailed, "durable conflict второго решения", second.VisitID
+		if err := terminal.validate(terminal.Meta.RunID); err != nil {
+			t.Fatalf("исходный fatal snapshot отклонён: %v", err)
+		}
+		drained := cloneSnapshotMetadata(t, terminal)
+		drained.Meta.Visits[0].State = scheduler.Succeeded
+		if err := drained.validate(drained.Meta.RunID); err != nil {
+			t.Fatalf("поздний missing-choice инвалидировал уже опубликованный fatal outcome: %v", err)
+		}
+	})
+}
+
+// TestAgentGraphLimitPriorityValidation проверяет три независимых доказательства
+// maxVisits: reservations более ранних решений, порядок after по Workflow.Steps
+// и запрет причинной цепочки, которая возникла только из terminal cleanup.
+func TestAgentGraphLimitPriorityValidation(t *testing.T) {
+	t.Run("terminal cleanup obeys pre-terminal capacity", func(t *testing.T) {
+		build := func(t *testing.T, firstLimit int) Snapshot {
+			t.Helper()
+			initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(fmt.Sprintf(`{
+  "version":2,"id":"cleanup-capacity","start":["dep-a","dep-b","limit-a","limit-b"],"steps":[
+    {"id":"dep-a","type":"agent","prompt":"Источник A","after":[]},
+    {"id":"dep-b","type":"agent","prompt":"Источник B","after":[]},
+    {"id":"limit-a","type":"agent","prompt":"Первый лимит","after":["dep-a"],"maxVisits":%d,"onLimit":"succeeded"},
+    {"id":"limit-b","type":"agent","prompt":"Второй лимит","after":["dep-b"],"maxVisits":1}
+  ]
+}`, firstLimit)), Task: "Проверить capacity terminal cleanup", CWD: t.TempDir()})
+			if err != nil {
+				t.Fatal(err)
+			}
+			damaged := cloneSnapshotMetadata(t, initial)
+			for index := range damaged.Meta.Visits {
+				visit := &damaged.Meta.Visits[index]
+				visit.State, visit.CodexThreadID, visit.TurnID, visit.Attempt =
+					scheduler.Succeeded, fmt.Sprintf("chat-%d", index), fmt.Sprintf("turn-%d", index), 1
+			}
+			depA, depB := damaged.Meta.Visits[0], damaged.Meta.Visits[1]
+			damaged.Meta.Visits = append(damaged.Meta.Visits, Visit{
+				VisitID: newID(), StepID: "limit-a", Visit: 2, Iteration: 1, State: scheduler.Skipped,
+				Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{depA.VisitID}},
+			})
+			trigger := VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{depB.VisitID}}
+			damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+				RunFailed, "limit B после pre-terminal cleanup", damaged.Meta.Visits[3].VisitID
+			damaged.Meta.StopLimitStepID, damaged.Meta.StopLimitTrigger, damaged.Meta.StopLimitIteration =
+				"limit-b", &trigger, 1
+			return damaged
+		}
+
+		forged := build(t, 1)
+		if err := forged.validate(forged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "pre-terminal maxVisits=1") {
+			t.Fatalf("cleanup сверх квоты скрыл более ранний limit: %v", err)
+		}
+		valid := build(t, 2)
+		if err := valid.validate(valid.Meta.RunID); err != nil {
+			t.Fatalf("допустимый Pending cleanup ошибочно отклонён: %v", err)
+		}
+	})
+
+	t.Run("earlier decision reserves shared target", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"decision-limit-priority","start":["first","second","limited"],"steps":[
+    {"id":"first","type":"agent","prompt":"Первый","after":[],"decisions":{"go":{"to":["shared"]}}},
+    {"id":"second","type":"agent","prompt":"Второй","after":[],"decisions":{"go":{"to":["shared","limited"]}}},
+    {"id":"limited","type":"agent","prompt":"Лимит","after":[],"maxVisits":1},
+    {"id":"shared","type":"agent","prompt":"Общая цель","after":[]}
+  ]
+}`), Task: "Проверить decision-limit priority", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		for index, targets := range [][]string{{"shared"}, {"shared", "limited"}} {
+			visit := &damaged.Meta.Visits[index]
+			visit.State, visit.CodexThreadID, visit.TurnID, visit.Attempt =
+				scheduler.Succeeded, fmt.Sprintf("chat-%d", index), fmt.Sprintf("turn-%d", index), 1
+			visit.Decision = &DecisionRecord{
+				Key: "go", TurnID: visit.TurnID, CallID: fmt.Sprintf("call-%d", index), To: targets,
+			}
+		}
+		limited := &damaged.Meta.Visits[2]
+		limited.State, limited.CodexThreadID, limited.TurnID, limited.Attempt = scheduler.Succeeded, "chat-limited", "turn-limited", 1
+		trigger := VisitTrigger{
+			Kind: TriggerDecision, SourceVisitIDs: []string{damaged.Meta.Visits[1].VisitID}, DecisionKey: "go",
+		}
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID = RunFailed, "подделанный decision-limit", limited.VisitID
+		damaged.Meta.StopLimitStepID, damaged.Meta.StopLimitTrigger, damaged.Meta.StopLimitIteration = "limited", &trigger, 2
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "порядок planner") {
+			t.Fatalf("decision-limit обошёл reservation раннего route: %v", err)
+		}
+	})
+
+	t.Run("after descendant created after decision quota was free", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"decision-limit-causal-priority","start":["source","limited"],"steps":[
+    {"id":"source","type":"agent","prompt":"Источник решения","after":[],"decisions":{"go":{"to":["limited"]}}},
+    {"id":"limited","type":"agent","prompt":"Лимит","after":[],"maxVisits":1},
+    {"id":"later","type":"agent","prompt":"Позднее решение","after":["limited"],"decisions":{"go":{"to":["worker"]}}},
+    {"id":"worker","type":"agent","prompt":"Работа","after":[]}
+  ]
+}`), Task: "Проверить causal decision-limit", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		source := &damaged.Meta.Visits[0]
+		source.State, source.CodexThreadID, source.TurnID, source.Attempt = scheduler.Succeeded, "chat-source", "turn-source", 1
+		source.Decision = &DecisionRecord{Key: "go", TurnID: "turn-source", CallID: "call-source", To: []string{"limited"}}
+		limited := &damaged.Meta.Visits[1]
+		limited.State, limited.CodexThreadID, limited.TurnID, limited.Attempt = scheduler.Succeeded, "chat-limited", "turn-limited", 1
+		laterID, workerID := newID(), newID()
+		damaged.Meta.Visits = append(damaged.Meta.Visits,
+			Visit{VisitID: laterID, StepID: "later", Visit: 1, Iteration: 1, State: scheduler.Succeeded,
+				Trigger:       VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{limited.VisitID}},
+				CodexThreadID: "chat-later", TurnID: "turn-later", Attempt: 1,
+				Decision: &DecisionRecord{Key: "go", TurnID: "turn-later", CallID: "call-later", To: []string{"worker"}, Applied: true}},
+			Visit{VisitID: workerID, StepID: "worker", Visit: 1, Iteration: 2, State: scheduler.Succeeded,
+				Trigger:       VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{laterID}, DecisionKey: "go"},
+				CodexThreadID: "chat-worker", TurnID: "turn-worker", Attempt: 1},
+		)
+		trigger := VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{source.VisitID}, DecisionKey: "go"}
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID = RunFailed, "подделанный decision-limit", limited.VisitID
+		damaged.Meta.StopLimitStepID, damaged.Meta.StopLimitTrigger, damaged.Meta.StopLimitIteration = "limited", &trigger, 2
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "создано после доказанного decision-limit") {
+			t.Fatalf("decision-limit принял невозможного causal-потомка: %v", err)
+		}
+	})
+
+	t.Run("causal descendant proves earlier decision limit", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"earlier-causal-decision-limit","start":["decision","target","ready","limited"],"steps":[
+    {"id":"decision","type":"agent","prompt":"Раннее решение","after":[],"decisions":{"again":{"to":["target"]}}},
+    {"id":"target","type":"agent","prompt":"Ранняя квота","after":[],"maxVisits":1,"onLimit":"succeeded"},
+    {"id":"target-child","type":"agent","prompt":"Доказательство завершения target","after":["target"]},
+    {"id":"ready","type":"agent","prompt":"Источник позднего решения","after":[]},
+    {"id":"late-decision","type":"agent","prompt":"Позднее решение","after":["ready"],"decisions":{"stop":{"to":["limited"]}}},
+    {"id":"limited","type":"agent","prompt":"Поздняя квота","after":[],"maxVisits":1}
+  ]
+}`), Task: "Проверить causal proof раннего decision-limit", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		for index := range damaged.Meta.Visits {
+			visit := &damaged.Meta.Visits[index]
+			visit.State, visit.CodexThreadID, visit.TurnID, visit.Attempt =
+				scheduler.Succeeded, fmt.Sprintf("chat-%d", index), fmt.Sprintf("turn-%d", index), 1
+		}
+		decision := &damaged.Meta.Visits[0]
+		decision.Decision = &DecisionRecord{
+			Key: "again", TurnID: decision.TurnID, CallID: "call-decision", To: []string{"target"},
+		}
+		target, ready := damaged.Meta.Visits[1], damaged.Meta.Visits[2]
+		childID, lateDecisionID := newID(), newID()
+		damaged.Meta.Visits = append(damaged.Meta.Visits,
+			Visit{VisitID: childID, StepID: "target-child", Visit: 1, Iteration: 1,
+				Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{target.VisitID}},
+				State:   scheduler.Succeeded, CodexThreadID: "chat-child", TurnID: "turn-child", Attempt: 1},
+			Visit{VisitID: lateDecisionID, StepID: "late-decision", Visit: 1, Iteration: 1,
+				Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{ready.VisitID}},
+				State:   scheduler.Succeeded, CodexThreadID: "chat-late", TurnID: "turn-late", Attempt: 1,
+				Decision: &DecisionRecord{
+					Key: "stop", TurnID: "turn-late", CallID: "call-late", To: []string{"limited"},
+				}},
+		)
+		trigger := VisitTrigger{
+			Kind: TriggerDecision, SourceVisitIDs: []string{lateDecisionID}, DecisionKey: "stop",
+		}
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+			RunFailed, "подделан поздний decision-limit", damaged.Meta.Visits[3].VisitID
+		damaged.Meta.StopLimitStepID, damaged.Meta.StopLimitTrigger, damaged.Meta.StopLimitIteration =
+			"limited", &trigger, 2
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "раньше заявленной причины") {
+			t.Fatalf("поздний limit обошёл причинно доказанный ранний decision-limit: %v", err)
+		}
+	})
+
+	t.Run("causal descendant proves earlier after limit", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"earlier-causal-after-limit","start":["dep-a","limit-a","dep-b","limit-b"],"steps":[
+    {"id":"dep-a","type":"agent","prompt":"Источник A","after":[]},
+    {"id":"limit-a","type":"agent","prompt":"Ранний лимит","after":["dep-a"],"maxVisits":1,"onLimit":"succeeded"},
+    {"id":"proof","type":"agent","prompt":"Доказательство завершения A","after":["limit-a"]},
+    {"id":"dep-b","type":"agent","prompt":"Источник B","after":[]},
+    {"id":"limit-b","type":"agent","prompt":"Поздний лимит","after":["dep-a","dep-b"],"maxVisits":1}
+  ]
+}`), Task: "Проверить causal proof раннего after-limit", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		for index := range damaged.Meta.Visits {
+			visit := &damaged.Meta.Visits[index]
+			visit.State, visit.CodexThreadID, visit.TurnID, visit.Attempt =
+				scheduler.Succeeded, fmt.Sprintf("chat-%d", index), fmt.Sprintf("turn-%d", index), 1
+		}
+		depA, limitA, depB := damaged.Meta.Visits[0], damaged.Meta.Visits[1], damaged.Meta.Visits[2]
+		damaged.Meta.Visits = append(damaged.Meta.Visits, Visit{
+			VisitID: newID(), StepID: "proof", Visit: 1, Iteration: 1,
+			Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{limitA.VisitID}},
+			State:   scheduler.Succeeded, CodexThreadID: "chat-proof", TurnID: "turn-proof", Attempt: 1,
+		})
+		trigger := VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{depA.VisitID, depB.VisitID}}
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+			RunFailed, "подделан поздний after-limit", damaged.Meta.Visits[3].VisitID
+		damaged.Meta.StopLimitStepID, damaged.Meta.StopLimitTrigger, damaged.Meta.StopLimitIteration =
+			"limit-b", &trigger, 1
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "раньше заявленной причины") {
+			t.Fatalf("поздний limit обошёл причинно доказанный ранний after-limit: %v", err)
+		}
+	})
+
+	t.Run("earlier after limit", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"after-limit-priority","start":["dep","limit-a","limit-b"],"steps":[
+    {"id":"dep","type":"agent","prompt":"Источник","after":[]},
+    {"id":"limit-a","type":"agent","prompt":"Первый лимит","after":["dep"],"maxVisits":1,"onLimit":"succeeded"},
+    {"id":"limit-b","type":"agent","prompt":"Второй лимит","after":["limit-a","dep"],"maxVisits":1}
+  ]
+}`), Task: "Проверить after-limit priority", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		for index := range damaged.Meta.Visits {
+			visit := &damaged.Meta.Visits[index]
+			visit.State, visit.CodexThreadID, visit.TurnID, visit.Attempt =
+				scheduler.Succeeded, fmt.Sprintf("chat-%d", index), fmt.Sprintf("turn-%d", index), 1
+		}
+		trigger := VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{
+			damaged.Meta.Visits[1].VisitID, damaged.Meta.Visits[0].VisitID,
+		}}
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+			RunFailed, "подделанный поздний after-limit", damaged.Meta.Visits[2].VisitID
+		damaged.Meta.StopLimitStepID, damaged.Meta.StopLimitTrigger, damaged.Meta.StopLimitIteration = "limit-b", &trigger, 1
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "раньше заявленной причины") {
+			t.Fatalf("after-limit обошёл более ранний шаг workflow: %v", err)
+		}
+	})
+
+	t.Run("terminal cleanup in causal ancestry", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"after-limit-cleanup-ancestry","start":["driver","pending","real","join"],"steps":[
+    {"id":"driver","type":"agent","prompt":"Выбери","after":[],"decisions":{
+      "main":{"to":["selected"]},"other":{"to":["skipped"]}}},
+    {"id":"pending","type":"agent","prompt":"Ожидает","after":[]},
+    {"id":"real","type":"agent","prompt":"Реальный источник","after":[]},
+    {"id":"join","type":"agent","prompt":"Ограниченный join","after":["mixed","real"],"maxVisits":1},
+    {"id":"selected","type":"agent","prompt":"Выбран","after":[]},
+    {"id":"skipped","type":"agent","prompt":"Пропущен","after":[]},
+    {"id":"mixed","type":"agent","prompt":"Смешанный барьер","after":["pending","skipped"]}
+  ]
+}`), Task: "Проверить cleanup ancestry", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		driver := &damaged.Meta.Visits[0]
+		driver.State, driver.CodexThreadID, driver.TurnID, driver.Attempt = scheduler.Succeeded, "chat-driver", "turn-driver", 1
+		driver.Decision = &DecisionRecord{
+			Key: "main", TurnID: "turn-driver", CallID: "call-driver", To: []string{"selected"},
+			Skipped: []string{"other"}, Applied: true,
+		}
+		damaged.Meta.Visits[1].State = scheduler.Skipped
+		for index := 2; index <= 3; index++ {
+			visit := &damaged.Meta.Visits[index]
+			visit.State, visit.CodexThreadID, visit.TurnID, visit.Attempt =
+				scheduler.Succeeded, fmt.Sprintf("chat-%d", index), fmt.Sprintf("turn-%d", index), 1
+		}
+		selectedID, skippedID, mixedID := newID(), newID(), newID()
+		damaged.Meta.Visits = append(damaged.Meta.Visits,
+			Visit{VisitID: selectedID, StepID: "selected", Visit: 1, Iteration: 2, State: scheduler.Skipped,
+				Trigger: VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{driver.VisitID}, DecisionKey: "main"}},
+			Visit{VisitID: skippedID, StepID: "skipped", Visit: 1, Iteration: 2, State: scheduler.Skipped,
+				Trigger: VisitTrigger{Kind: TriggerDecisionSkipped, SourceVisitIDs: []string{driver.VisitID}, DecisionKey: "other"}},
+			Visit{VisitID: mixedID, StepID: "mixed", Visit: 1, Iteration: 2, State: scheduler.Skipped,
+				Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{damaged.Meta.Visits[1].VisitID, skippedID}}},
+		)
+		trigger := VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{mixedID, damaged.Meta.Visits[2].VisitID}}
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+			RunFailed, "подделанный after-limit из terminal closure", damaged.Meta.Visits[3].VisitID
+		damaged.Meta.StopLimitStepID, damaged.Meta.StopLimitTrigger, damaged.Meta.StopLimitIteration = "join", &trigger, 2
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "rootless terminal cleanup") {
+			t.Fatalf("after-limit использовал post-terminal causal chain: %v", err)
+		}
+	})
+
+	t.Run("causal FIFO receipt before proof boundary", func(t *testing.T) {
+		limitA, limitB := 1, 2
+		workflowSteps := []workflow.Step{
+			{ID: "dep"},
+			{ID: "z", After: []string{"limit-a"}},
+			{ID: "limit-a", After: []string{"dep"}, MaxVisits: &limitA},
+			{ID: "limit-b", After: []string{"dep", "z"}, MaxVisits: &limitB},
+		}
+		steps := make(map[string]workflow.Step, len(workflowSteps))
+		for _, step := range workflowSteps {
+			steps[step.ID] = step
+		}
+		history := []Visit{
+			{VisitID: "d1", StepID: "dep", Iteration: 1, State: scheduler.Succeeded},
+			{VisitID: "z1", StepID: "z", Iteration: 1, State: scheduler.Succeeded},
+			{VisitID: "a1", StepID: "limit-a", Iteration: 1, State: scheduler.Succeeded,
+				Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{"d1"}}},
+			{VisitID: "b1", StepID: "limit-b", Iteration: 1, State: scheduler.Succeeded,
+				Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{"d1", "z1"}}},
+			{VisitID: "d2", StepID: "dep", Iteration: 2, State: scheduler.Skipped},
+			{VisitID: "z2", StepID: "z", Iteration: 2, State: scheduler.Succeeded},
+			{VisitID: "a2", StepID: "limit-a", Iteration: 2, State: scheduler.Skipped,
+				Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{"d2"}}},
+			{VisitID: "b2", StepID: "limit-b", Iteration: 2, State: scheduler.Succeeded,
+				Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{"d2", "z2"}}},
+			{VisitID: "d3", StepID: "dep", Iteration: 3, State: scheduler.Succeeded},
+			// z3 доказывает, что последнее runnable-посещение A уже было
+			// terminal до заявленного limit B, но не делает causal a2 своим
+			// предком. Его ранний append всё равно доказывает pre-terminal use.
+			{VisitID: "z3", StepID: "z", Iteration: 3, State: scheduler.Succeeded,
+				Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{"a1"}}},
+		}
+		seen := make(map[string]Visit, len(history))
+		for _, visit := range history {
+			seen[visit.VisitID] = visit
+		}
+		err := validateAfterLimitPriority(
+			workflowSteps, history, seen, steps, map[string][]string{"d2": {"root"}, "a2": {"root"}},
+			map[string]int{"limit-a": 1, "limit-b": 2},
+			map[string]Visit{"limit-a": history[2], "limit-b": history[7]}, map[string]bool{},
+			map[string]bool{"a1": true},
+			"limit-b", VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{"d3", "z3"}},
+		)
+		if err == nil || !strings.Contains(err.Error(), "раньше заявленной причины") {
+			t.Fatalf("ранняя causal-квитанция скрыла первый after-limit A: %v", err)
+		}
+	})
+}
+
+// TestAgentGraphTerminalRejectsForgedDecisionCleanup защищает decision-wave
+// barrier от подмены metadata. Finish и maxVisits не могли быть выбраны, пока
+// существовал Pending decision visit; простая замена его состояния на rootless
+// Skipped не должна задним числом делать terminal snapshot допустимым.
+func TestAgentGraphTerminalRejectsForgedDecisionCleanup(t *testing.T) {
+	t.Run("finish", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"forged-finish-cleanup","start":["blocked","finisher"],"steps":[
+    {"id":"blocked","type":"agent","prompt":"Жди","after":[],"decisions":{"go":{"to":["target"]}}},
+    {"id":"finisher","type":"agent","prompt":"Заверши","after":[],"decisions":{"done":{"finish":"succeeded"}}},
+    {"id":"target","type":"agent","prompt":"Цель","after":[]}
+  ]
+}`), Task: "Проверить barrier finish", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		damaged.Meta.Visits[0].State = scheduler.Skipped
+		finisher := &damaged.Meta.Visits[1]
+		finisher.State, finisher.CodexThreadID, finisher.TurnID, finisher.Attempt =
+			scheduler.Succeeded, "chat-finisher", "turn-finisher", 1
+		outcome := workflow.OutcomeSucceeded
+		finisher.Decision = &DecisionRecord{
+			Key: "done", TurnID: "turn-finisher", CallID: "call-finisher", Finish: &outcome, Applied: true,
+		}
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+			RunSucceeded, "подделанный finish", finisher.VisitID
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "Pending до terminal cleanup") {
+			t.Fatalf("finish скрыл открытую decision-wave: %v", err)
+		}
+	})
+
+	t.Run("maxVisits", func(t *testing.T) {
+		initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"forged-limit-cleanup","start":["blocked","source","limited"],"steps":[
+    {"id":"blocked","type":"agent","prompt":"Жди","after":[],"decisions":{"go":{"to":["target"]}}},
+    {"id":"source","type":"agent","prompt":"Повтори","after":[],"decisions":{"go":{"to":["limited"]}}},
+    {"id":"limited","type":"agent","prompt":"Лимит","after":[],"maxVisits":1},
+    {"id":"target","type":"agent","prompt":"Цель","after":[]}
+  ]
+}`), Task: "Проверить barrier maxVisits", CWD: t.TempDir()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, initial)
+		damaged.Meta.Visits[0].State = scheduler.Skipped
+		source := &damaged.Meta.Visits[1]
+		source.State, source.CodexThreadID, source.TurnID, source.Attempt =
+			scheduler.Succeeded, "chat-source", "turn-source", 1
+		source.Decision = &DecisionRecord{
+			Key: "go", TurnID: "turn-source", CallID: "call-source", To: []string{"limited"},
+		}
+		limited := &damaged.Meta.Visits[2]
+		limited.State, limited.CodexThreadID, limited.TurnID, limited.Attempt =
+			scheduler.Succeeded, "chat-limited", "turn-limited", 1
+		trigger := VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{source.VisitID}, DecisionKey: "go"}
+		damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+			RunFailed, "подделанный maxVisits", limited.VisitID
+		damaged.Meta.StopLimitStepID, damaged.Meta.StopLimitTrigger, damaged.Meta.StopLimitIteration = "limited", &trigger, 2
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "decision visit") {
+			t.Fatalf("maxVisits скрыл открытую decision-wave: %v", err)
+		}
+	})
+}
+
+// TestAgentGraphTerminalCleanupReplaysFIFO не позволяет более ранней
+// terminal-квитанции обойти real source, если поздняя запись утверждает, что
+// этот source уже породил Pending до outcome. Весь префикс до cleanup обязан
+// быть достижим по обычным running FIFO-правилам без terminal bypass.
+func TestAgentGraphTerminalCleanupReplaysFIFO(t *testing.T) {
+	initial, err := Create(t.TempDir(), Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"cleanup-fifo-prefix","start":["driver","source"],"steps":[
+    {"id":"driver","type":"agent","prompt":"Выбрать ветку","after":[],"decisions":{
+      "main":{"to":["selected"]},"other":{"to":["source"]}}},
+    {"id":"source","type":"agent","prompt":"FIFO источник","after":[]},
+    {"id":"selected","type":"agent","prompt":"Выбранная ветка","after":[]},
+    {"id":"receipt","type":"agent","prompt":"FIFO квитанция","after":["source"]},
+    {"id":"fatal","type":"agent","prompt":"Fatal решение","after":["selected"],"decisions":{"go":{"to":["sink"]}}},
+    {"id":"sink","type":"agent","prompt":"Не запускается","after":[]}
+  ]
+}`), Task: "Проверить pre-terminal FIFO cleanup", CWD: t.TempDir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	damaged := cloneSnapshotMetadata(t, initial)
+	driver := &damaged.Meta.Visits[0]
+	driver.State, driver.CodexThreadID, driver.TurnID, driver.Attempt =
+		scheduler.Succeeded, "chat-driver", "turn-driver", 1
+	driver.Decision = &DecisionRecord{
+		Key: "main", TurnID: "turn-driver", CallID: "call-driver", To: []string{"selected"},
+		Skipped: []string{"other"}, Applied: true,
+	}
+	source := &damaged.Meta.Visits[1]
+	source.State, source.CodexThreadID, source.TurnID, source.Attempt =
+		scheduler.Succeeded, "chat-source", "turn-source", 1
+	selectedID, skippedSourceID, fatalID := newID(), newID(), newID()
+	damaged.Meta.Visits = append(damaged.Meta.Visits,
+		Visit{VisitID: selectedID, StepID: "selected", Visit: 1, Iteration: 2,
+			Trigger: VisitTrigger{Kind: TriggerDecision, SourceVisitIDs: []string{driver.VisitID}, DecisionKey: "main"},
+			State:   scheduler.Succeeded, CodexThreadID: "chat-selected", TurnID: "turn-selected", Attempt: 1},
+		Visit{VisitID: skippedSourceID, StepID: "source", Visit: 2, Iteration: 2, State: scheduler.Skipped,
+			Trigger: VisitTrigger{Kind: TriggerDecisionSkipped, SourceVisitIDs: []string{driver.VisitID}, DecisionKey: "other"}},
+		Visit{VisitID: newID(), StepID: "receipt", Visit: 1, Iteration: 2, State: scheduler.Skipped,
+			Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{skippedSourceID}}},
+		Visit{VisitID: newID(), StepID: "receipt", Visit: 2, Iteration: 1, State: scheduler.Skipped,
+			Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{source.VisitID}}},
+		Visit{VisitID: fatalID, StepID: "fatal", Visit: 1, Iteration: 2,
+			Trigger: VisitTrigger{Kind: TriggerAfter, SourceVisitIDs: []string{selectedID}},
+			State:   scheduler.Succeeded, CodexThreadID: "chat-fatal", TurnID: "turn-fatal", Attempt: 1,
+			Decision: &DecisionRecord{
+				Key: "go", TurnID: "turn-fatal", CallID: "call-fatal", To: []string{"sink"},
+				Error: "конфликт durable decision",
+			}},
+	)
+	damaged.Meta.RunState, damaged.Meta.StopReason, damaged.Meta.StopVisitID =
+		RunFailed, "fatal после невозможного FIFO", fatalID
+	if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "pre-terminal history") {
+		t.Fatalf("terminal FIFO принял невозможный append-order вокруг cleanup: %v", err)
+	}
+}
+
+// TestAgentGraphTerminalRequiresCompleteSkippedClosure проверяет обратную
+// сторону terminal materialization. Присутствие Skipped означает новый формат
+// поведения: из него нельзя удалить последний причинный слой или вернуть один
+// cleanup visit в Pending, потому что после outcome обычный Advance запрещён и
+// такая ветка навсегда исчезла бы из статуса и dashboard.
+func TestAgentGraphTerminalRequiresCompleteSkippedClosure(t *testing.T) {
+	t.Run("missing final causal layer", func(t *testing.T) {
+		root := t.TempDir()
+		initial, err := Create(root, terminalNestedSkippedInput(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := OpenLocked(root, initial.Meta.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer run.Close()
+		finishDecisionVisit(t, run, initial.Meta.Visits[0].VisitID, "safe")
+		finished, err := run.AdvanceAgentGraph()
+		if err != nil {
+			t.Fatal(err)
+		}
+		last := finished.Snapshot.Meta.Visits[len(finished.Snapshot.Meta.Visits)-1]
+		if last.StepID != "summary" || last.State != scheduler.Skipped {
+			t.Fatalf("fixture не завершилась ожидаемым closure-слоем: %+v", last)
+		}
+		damaged := cloneSnapshotMetadata(t, finished.Snapshot)
+		damaged.Meta.Visits = damaged.Meta.Visits[:len(damaged.Meta.Visits)-1]
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "неполное skipped-замыкание") {
+			t.Fatalf("terminal snapshot принял удалённый causal layer: %v", err)
+		}
+	})
+
+	t.Run("pending left after terminal", func(t *testing.T) {
+		root := t.TempDir()
+		initial, err := Create(root, advanceInput(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := OpenLocked(root, initial.Meta.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer run.Close()
+		finishDecisionVisit(t, run, initial.Meta.Visits[0].VisitID, "done")
+		finished, err := run.AdvanceAgentGraph()
+		if err != nil {
+			t.Fatal(err)
+		}
+		damaged := cloneSnapshotMetadata(t, finished.Snapshot)
+		damaged.Meta.Visits[1].State = scheduler.Pending
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "оставил Pending") {
+			t.Fatalf("новый terminal snapshot принял незакрытый Pending: %v", err)
+		}
+	})
+}
+
+// TestAgentGraphNestedSkippedValidation защищает восстановимую causal wave.
+// Вложенный target обязан ссылаться на пропущенный decision, использовать его
+// канонический ключ и не посещать общий step второй раз в рамках тех же roots.
+// Эти проверки не доверяют planner: повреждённый meta.json отклоняется при Load.
+func TestAgentGraphNestedSkippedValidation(t *testing.T) {
+	t.Run("key and source", func(t *testing.T) {
+		root := t.TempDir()
+		initial, err := Create(root, terminalNestedSkippedInput(t))
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := OpenLocked(root, initial.Meta.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer run.Close()
+		finishDecisionVisit(t, run, initial.Meta.Visits[0].VisitID, "safe")
+		advanced, err := run.AdvanceAgentGraph()
+		if err != nil {
+			t.Fatal(err)
+		}
+		leafIndex, summaryIndex := -1, -1
+		for index, visit := range advanced.Snapshot.Meta.Visits {
+			if visit.StepID == "leaf-a" {
+				leafIndex = index
+			}
+			if visit.StepID == "summary" {
+				summaryIndex = index
+			}
+		}
+		if leafIndex < 0 || summaryIndex < 0 {
+			t.Fatalf("fixture не создала вложенную ветку: %+v", advanced.Snapshot.Meta.Visits)
+		}
+		for name, mutate := range map[string]func(*Snapshot){
+			"wrong nested key": func(snapshot *Snapshot) {
+				snapshot.Meta.Visits[leafIndex].Trigger.DecisionKey = "b"
+			},
+			"wrong source": func(snapshot *Snapshot) {
+				snapshot.Meta.Visits[leafIndex].Trigger.SourceVisitIDs = []string{snapshot.Meta.Visits[0].VisitID}
+			},
+			"completed all-skipped after": func(snapshot *Snapshot) {
+				visit := &snapshot.Meta.Visits[summaryIndex]
+				visit.State, visit.CodexThreadID, visit.TurnID, visit.Attempt =
+					scheduler.Succeeded, "chat-forged-summary", "turn-forged-summary", 1
+			},
+		} {
+			t.Run(name, func(t *testing.T) {
+				damaged := cloneSnapshotMetadata(t, advanced.Snapshot)
+				mutate(&damaged)
+				if err := damaged.validate(damaged.Meta.RunID); err == nil {
+					t.Fatal("повреждённая nested skipped-причина принята")
+				}
+			})
+		}
+	})
+
+	t.Run("same wave duplicate", func(t *testing.T) {
+		root := t.TempDir()
+		input := Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"shared-skip-wave","start":["choice"],"steps":[
+    {"id":"choice","type":"agent","prompt":"Выбери","after":[],"decisions":{
+      "nested":{"to":["left","right"]},"safe":{"finish":"succeeded"}}},
+    {"id":"left","type":"agent","prompt":"Левая","after":[],"decisions":{"go":{"to":["shared"]}}},
+    {"id":"right","type":"agent","prompt":"Правая","after":[],"decisions":{"go":{"to":["shared"]}}},
+    {"id":"shared","type":"agent","prompt":"Общая","after":[]}
+  ]
+}`), Task: "Проверить shared target одной волны", CWD: t.TempDir()}
+		initial, err := Create(root, input)
+		if err != nil {
+			t.Fatal(err)
+		}
+		run, err := OpenLocked(root, initial.Meta.RunID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer run.Close()
+		finishDecisionVisit(t, run, initial.Meta.Visits[0].VisitID, "safe")
+		advanced, err := run.AdvanceAgentGraph()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var right Visit
+		for _, visit := range advanced.Snapshot.Meta.Visits {
+			if visit.StepID == "right" {
+				right = visit
+			}
+		}
+		if right.VisitID == "" {
+			t.Fatalf("fixture не создала правый skipped decision: %+v", advanced.Snapshot.Meta.Visits)
+		}
+		damaged := cloneSnapshotMetadata(t, advanced.Snapshot)
+		damaged.Meta.Visits = append(damaged.Meta.Visits, Visit{
+			VisitID: newID(), StepID: "shared", Visit: 2, Iteration: right.Iteration + 1, State: scheduler.Skipped,
+			Trigger: VisitTrigger{Kind: TriggerDecisionSkipped, SourceVisitIDs: []string{right.VisitID}, DecisionKey: "go"},
+		})
+		if err := damaged.validate(damaged.Meta.RunID); err == nil || !strings.Contains(err.Error(), "волна пропуска") {
+			t.Fatalf("общий target той же skip-wave принят повторно: %v", err)
+		}
+	})
 }
 
 // TestAfterTriggerFIFO не позволяет переставить причинность уже завершённых

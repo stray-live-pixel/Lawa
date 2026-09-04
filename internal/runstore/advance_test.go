@@ -52,6 +52,37 @@ func skippedJoinInput(t *testing.T) Input {
 }`), Task: "Проверить пропущенную ветку", CWD: t.TempDir()}
 }
 
+func nestedSkippedInput(t *testing.T) Input {
+	t.Helper()
+	return Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"nested-skipped","start":["outer"],"steps":[
+    {"id":"outer","type":"agent","prompt":"Выбери","after":[],"decisions":{
+      "nested":{"to":["inner"]},"right":{"to":["right"]}}},
+    {"id":"inner","type":"agent","prompt":"Уточни","after":[],"decisions":{
+      "a":{"to":["leaf-a"]},"b":{"to":["leaf-b"]}}},
+    {"id":"right","type":"agent","prompt":"Правая ветка","after":[]},
+    {"id":"leaf-a","type":"agent","prompt":"Лист A","after":[]},
+    {"id":"leaf-b","type":"agent","prompt":"Лист B","after":[]},
+    {"id":"join","type":"agent","prompt":"Объедини","after":["right","leaf-a","leaf-b"]}
+  ]
+}`), Task: "Проверить вложенную ветку", CWD: t.TempDir()}
+}
+
+func terminalNestedSkippedInput(t *testing.T) Input {
+	t.Helper()
+	return Input{WorkflowJSON: []byte(`{
+  "version":2,"id":"terminal-nested-skipped","start":["choice"],"steps":[
+    {"id":"choice","type":"agent","prompt":"Выбери","after":[],"decisions":{
+      "investigate":{"to":["inner"]},"safe":{"finish":"succeeded"}}},
+    {"id":"inner","type":"agent","prompt":"Уточни","after":[],"decisions":{
+      "a":{"to":["leaf-a"]},"b":{"to":["leaf-b"]}}},
+    {"id":"leaf-a","type":"agent","prompt":"Лист A","after":[]},
+    {"id":"leaf-b","type":"agent","prompt":"Лист B","after":[]},
+    {"id":"summary","type":"agent","prompt":"Итог","after":["leaf-a","leaf-b"]}
+  ]
+}`), Task: "Проверить terminal skipped", CWD: t.TempDir()}
+}
+
 // boundedLoopInput оставляет параллельный Pending visit, чтобы остановка по
 // квоте доказывала семантику всего run, а не только естественную quiescence.
 func boundedLoopInput(t *testing.T, successfulLimit bool) Input {
