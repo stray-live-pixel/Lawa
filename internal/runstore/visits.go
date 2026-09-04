@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -29,9 +30,10 @@ const (
 type TriggerKind string
 
 const (
-	TriggerStart    TriggerKind = "start"
-	TriggerAfter    TriggerKind = "after"
-	TriggerDecision TriggerKind = "decision"
+	TriggerStart           TriggerKind = "start"
+	TriggerAfter           TriggerKind = "after"
+	TriggerDecision        TriggerKind = "decision"
+	TriggerDecisionSkipped TriggerKind = "decision_skipped"
 )
 
 // VisitTrigger хранит неизменяемую причину активации. SourceVisitIDs упорядочены:
@@ -106,8 +108,17 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		steps[step.ID] = step
 	}
 	seen, chats := make(map[string]Visit), make(map[string]bool)
-	numbers, active := make(map[string]int), make(map[string]bool)
+	// numbers нумерует все durable branch instances, включая Skipped. Квота же
+	// ограничивает только исполнения, способные создать Codex turn: причинная
+	// запись об отсутствии запуска не должна отнимать разрешённое посещение.
+	numbers, runnableNumbers := make(map[string]int), make(map[string]int)
+	lastRunnable, active := make(map[string]Visit), make(map[string]bool)
 	afterUses, decisionUses := make(map[afterCause]bool), make(map[decisionCause]bool)
+	// skipWaves выводится только из проверенных sourceVisitIds. Один и тот же
+	// набор корневых решений может пройти каждый decision-target лишь однажды:
+	// это делает synthetic-обход безопасным даже для разрешённых route-циклов.
+	skipWaves := make(map[string][]string)
+	skipReached := make(map[skipReach]bool)
 	advanced := make(map[string]bool)
 	for index, visit := range m.Visits {
 		step, exists := steps[visit.StepID]
@@ -121,20 +132,35 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		if visit.Visit != numbers[visit.StepID] || visit.Iteration < 1 || visit.Attempt < 0 {
 			return fmt.Errorf("посещение %q: нарушена нумерация visit/iteration/attempt", visit.VisitID)
 		}
-		if step.MaxVisits != nil && visit.Visit > *step.MaxVisits {
+		if visit.State != scheduler.Skipped {
+			runnableNumbers[visit.StepID]++
+			lastRunnable[visit.StepID] = visit
+		}
+		if step.MaxVisits != nil && runnableNumbers[visit.StepID] > *step.MaxVisits {
 			return fmt.Errorf("посещение %q превышает maxVisits=%d шага %q", visit.VisitID, *step.MaxVisits, visit.StepID)
 		}
 		if err := validateVisitState(visit, chats); err != nil {
 			return fmt.Errorf("посещение %q: %w", visit.VisitID, err)
 		}
-		if active[visit.StepID] {
+		// Skipped не занимает executor, поэтому отдельная причинная ветка может
+		// быть записана рядом с реальным активным visit общего target. No-overlap
+		// остаётся строгим для любых двух действительно запускаемых посещений.
+		if active[visit.StepID] && visit.State != scheduler.Skipped {
 			return fmt.Errorf("предыдущее посещение шага %q ещё не завершено", visit.StepID)
 		}
 		if !visitTerminal(visit.State) {
 			active[visit.StepID] = true
 		}
-		if err := validateTrigger(index, visit, step, s.Workflow.Start, m.Visits[:index], seen, afterUses, decisionUses); err != nil {
+		roots, err := validateTriggerWithSkipWaves(
+			index, visit, step, s.Workflow.Start, m.Visits[:index], seen, steps,
+			afterUses, decisionUses, skipWaves, skipReached,
+		)
+		if err != nil {
 			return fmt.Errorf("посещение %q: %w", visit.VisitID, err)
+		}
+		if len(roots) != 0 {
+			skipWaves[visit.VisitID] = roots
+			skipReached[skipReach{waveKey: skipWaveKey(roots), targetStepID: visit.StepID}] = true
 		}
 		if err := validateDecision(visit, step); err != nil {
 			return fmt.Errorf("посещение %q: %w", visit.VisitID, err)
@@ -184,7 +210,9 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		if !exists || limitedStep.MaxVisits == nil {
 			return fmt.Errorf("stopLimitStepId не ссылается на шаг с maxVisits")
 		}
-		if !hasStopVisit || stopVisit.StepID != limitedStep.ID || stopVisit.Visit != *limitedStep.MaxVisits || numbers[limitedStep.ID] != *limitedStep.MaxVisits {
+		lastAllowed, hasLastAllowed := lastRunnable[limitedStep.ID]
+		if !hasStopVisit || stopVisit.StepID != limitedStep.ID || !hasLastAllowed || lastAllowed.VisitID != stopVisit.VisitID ||
+			runnableNumbers[limitedStep.ID] != *limitedStep.MaxVisits {
 			return fmt.Errorf("остановка по maxVisits требует последний разрешённый visit ограниченного шага")
 		}
 		outcome, expected := workflow.OutcomeFailed, RunFailed
@@ -211,7 +239,7 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 		// открыть более ранний маршрут, не меняя уже опубликованный исход.
 		if err := validateLimitTrigger(
 			limitedStep, *m.StopLimitTrigger, m.StopLimitIteration, m.Visits,
-			seen, steps, numbers, active, afterUses, decisionUses,
+			seen, steps, runnableNumbers, active, afterUses, decisionUses,
 		); err != nil {
 			return fmt.Errorf("остановка по maxVisits не подтверждена trigger: %w", err)
 		}
@@ -307,7 +335,7 @@ func validateLimitTrigger(
 	switch trigger.Kind {
 	case TriggerAfter:
 		proof := Visit{VisitID: "limit-proof", StepID: step.ID, Iteration: iteration, Trigger: trigger}
-		return validateTrigger(len(history), proof, step, nil, history, seen, afterUses, decisionUses)
+		return validateTrigger(len(history), proof, step, nil, history, seen, steps, afterUses, decisionUses)
 	case TriggerDecision:
 		if len(trigger.SourceVisitIDs) != 1 || trigger.DecisionKey == "" {
 			return fmt.Errorf("decision-limit требует один источник и ключ")
@@ -368,6 +396,10 @@ func agentVisitViews(visits []Visit) []scheduler.AgentVisitView {
 type afterCause struct{ targetStepID, dependencyStepID, sourceVisitID string }
 type decisionCause struct{ targetStepID, sourceVisitID string }
 
+// skipReach адресует decision-target внутри одной причинной волны. After имеет
+// собственную FIFO-причину и потому не дедуплицируется этим ключом.
+type skipReach struct{ waveKey, targetStepID string }
+
 // filepathIsSafeAbsolute повторяет общую границу cwd без принятия NUL.
 func filepathIsSafeAbsolute(path string) bool {
 	return filepath.IsAbs(path) && validText(path) && !strings.ContainsRune(path, 0)
@@ -380,6 +412,10 @@ func validateVisitState(visit Visit, chats map[string]bool) error {
 	case scheduler.Pending:
 		if visit.CodexThreadID != "" || visit.TurnID != "" || visit.Attempt != 0 || visit.TechnicalError != "" || visit.Decision != nil {
 			return fmt.Errorf("Pending не может содержать результаты запуска")
+		}
+	case scheduler.Skipped:
+		if visit.CodexThreadID != "" || visit.TurnID != "" || visit.Attempt != 0 || visit.TechnicalError != "" || visit.Decision != nil {
+			return fmt.Errorf("Skipped не может содержать результаты запуска")
 		}
 	case scheduler.Starting:
 		if visit.TurnID != "" || visit.Attempt != 0 || visit.TechnicalError != "" || visit.Decision != nil {
@@ -410,66 +446,211 @@ func validateVisitState(visit Visit, chats map[string]bool) error {
 	return nil
 }
 
-func validateTrigger(index int, visit Visit, step workflow.Step, start []string, history []Visit, seen map[string]Visit, afterUses map[afterCause]bool, decisionUses map[decisionCause]bool) error {
+func validateTrigger(
+	index int,
+	visit Visit,
+	step workflow.Step,
+	start []string,
+	history []Visit,
+	seen map[string]Visit,
+	steps map[string]workflow.Step,
+	afterUses map[afterCause]bool,
+	decisionUses map[decisionCause]bool,
+) error {
+	_, err := validateTriggerWithSkipWaves(
+		index, visit, step, start, history, seen, steps,
+		afterUses, decisionUses, nil, nil,
+	)
+	return err
+}
+
+// validateTriggerWithSkipWaves проверяет durable trigger и одновременно выводит
+// корни causal skip-wave. Корень — реальный visit решения; вложенный пропущенный
+// decision и полностью пропущенный after наследуют тот же канонический набор.
+func validateTriggerWithSkipWaves(
+	index int,
+	visit Visit,
+	step workflow.Step,
+	start []string,
+	history []Visit,
+	seen map[string]Visit,
+	steps map[string]workflow.Step,
+	afterUses map[afterCause]bool,
+	decisionUses map[decisionCause]bool,
+	skipWaves map[string][]string,
+	skipReached map[skipReach]bool,
+) ([]string, error) {
 	if index < len(start) {
 		if visit.StepID != start[index] || visit.Trigger.Kind != TriggerStart || visit.Visit != 1 || visit.Iteration != 1 {
-			return fmt.Errorf("начальные посещения должны совпадать с порядком workflow.start")
+			return nil, fmt.Errorf("начальные посещения должны совпадать с порядком workflow.start")
 		}
 	}
 	switch visit.Trigger.Kind {
 	case TriggerStart:
 		if index >= len(start) || len(visit.Trigger.SourceVisitIDs) != 0 || visit.Trigger.DecisionKey != "" {
-			return fmt.Errorf("start допустим только в начальном префиксе без источников")
+			return nil, fmt.Errorf("start допустим только в начальном префиксе без источников")
+		}
+		if visit.State == scheduler.Skipped {
+			return nil, fmt.Errorf("start не может быть synthetic Skipped")
 		}
 	case TriggerAfter:
 		if len(step.After) == 0 || len(visit.Trigger.SourceVisitIDs) != len(step.After) || visit.Trigger.DecisionKey != "" {
-			return fmt.Errorf("after должен содержать источник для каждого Step.After")
+			return nil, fmt.Errorf("after должен содержать источник для каждого Step.After")
 		}
 		maxIteration := 0
+		allSkipped := true
+		var roots []string
 		for i, sourceID := range visit.Trigger.SourceVisitIDs {
 			source, exists := seen[sourceID]
 			if !exists || !visitTerminal(source.State) || source.StepID != step.After[i] {
-				return fmt.Errorf("after-источник %q не является нужным завершённым посещением", sourceID)
+				return nil, fmt.Errorf("after-источник %q не является нужным завершённым посещением", sourceID)
 			}
 			cause := afterCause{visit.StepID, step.After[i], sourceID}
 			expected := ""
 			for _, candidate := range history {
 				candidateCause := afterCause{visit.StepID, step.After[i], candidate.VisitID}
-				if candidate.StepID == step.After[i] && visitTerminal(candidate.State) && !afterUses[candidateCause] {
+				// FIFO учитывает и незавершённый instance. Иначе более поздний
+				// synthetic Skipped смог бы обойти ранний Running того же шага.
+				if candidate.StepID == step.After[i] && !afterUses[candidateCause] {
 					expected = candidate.VisitID
 					break
 				}
 			}
 			if sourceID != expected || afterUses[cause] {
-				return fmt.Errorf("after должен потреблять самый ранний неиспользованный источник")
+				return nil, fmt.Errorf("after должен потреблять самый ранний неиспользованный источник")
 			}
 			afterUses[cause] = true
 			maxIteration = max(maxIteration, source.Iteration)
+			allSkipped = allSkipped && source.State == scheduler.Skipped
+			roots = append(roots, skipWaves[sourceID]...)
 		}
 		if visit.Iteration != maxIteration {
-			return fmt.Errorf("after должен наследовать максимальную iteration источников")
+			return nil, fmt.Errorf("after должен наследовать максимальную iteration источников")
+		}
+		if (visit.State == scheduler.Skipped) != allSkipped {
+			return nil, fmt.Errorf("Skipped after должен иметь только Skipped-источники")
+		}
+		if allSkipped {
+			roots = canonicalSkipRoots(roots)
+			if len(roots) == 0 {
+				return nil, fmt.Errorf("Skipped after потерял причинную волну")
+			}
+			return roots, nil
 		}
 	case TriggerDecision:
+		if visit.State == scheduler.Skipped {
+			return nil, fmt.Errorf("выбранный decision-target не может быть Skipped")
+		}
 		if len(visit.Trigger.SourceVisitIDs) != 1 || visit.Trigger.DecisionKey == "" {
-			return fmt.Errorf("decision требует один источник и ключ")
+			return nil, fmt.Errorf("decision требует один источник и ключ")
 		}
 		source, exists := seen[visit.Trigger.SourceVisitIDs[0]]
 		if !exists || source.State != scheduler.Succeeded || source.Decision == nil || !source.Decision.Applied ||
 			source.Decision.Key != visit.Trigger.DecisionKey || !slices.Contains(source.Decision.To, visit.StepID) {
-			return fmt.Errorf("decision-источник не применял этот маршрут к шагу")
+			return nil, fmt.Errorf("decision-источник не применял этот маршрут к шагу")
 		}
 		cause := decisionCause{visit.StepID, source.VisitID}
 		if decisionUses[cause] {
-			return fmt.Errorf("decision-источник уже материализовал этот target")
+			return nil, fmt.Errorf("decision-источник уже материализовал этот target")
 		}
 		decisionUses[cause] = true
 		if visit.Iteration != source.Iteration+1 {
-			return fmt.Errorf("decision-target должен увеличить iteration источника")
+			return nil, fmt.Errorf("decision-target должен увеличить iteration источника")
 		}
+	case TriggerDecisionSkipped:
+		if visit.State != scheduler.Skipped || len(visit.Trigger.SourceVisitIDs) != 1 || visit.Trigger.DecisionKey == "" {
+			return nil, fmt.Errorf("decision_skipped требует Skipped-target, один источник и ключ")
+		}
+		source, exists := seen[visit.Trigger.SourceVisitIDs[0]]
+		if !exists {
+			return nil, fmt.Errorf("decision_skipped ссылается на неизвестный источник")
+		}
+		selectedKey, key := "", ""
+		var roots []string
+		switch source.State {
+		case scheduler.Succeeded:
+			if source.Decision == nil || !source.Decision.Applied || source.Decision.Error != "" {
+				return nil, fmt.Errorf("decision_skipped ссылается не на применённое решение")
+			}
+			selectedKey = source.Decision.Key
+			roots = []string{source.VisitID}
+		case scheduler.Skipped:
+			if len(steps[source.StepID].Decisions) == 0 || len(skipWaves[source.VisitID]) == 0 {
+				return nil, fmt.Errorf("decision_skipped ссылается не на causal decision-источник")
+			}
+			roots = slices.Clone(skipWaves[source.VisitID])
+		default:
+			return nil, fmt.Errorf("decision_skipped ссылается не на terminal decision-источник")
+		}
+		key, exists = canonicalSkippedTargetKey(steps[source.StepID], selectedKey, visit.StepID)
+		if !exists || visit.Trigger.DecisionKey != key {
+			return nil, fmt.Errorf("decision_skipped не совпадает с пропущенным target решения")
+		}
+		cause := decisionCause{visit.StepID, source.VisitID}
+		if decisionUses[cause] {
+			return nil, fmt.Errorf("decision-источник уже материализовал этот target")
+		}
+		if visit.Iteration != source.Iteration+1 {
+			return nil, fmt.Errorf("decision_skipped-target должен увеличить iteration источника")
+		}
+		waveReach := skipReach{waveKey: skipWaveKey(roots), targetStepID: visit.StepID}
+		if skipReached != nil && skipReached[waveReach] {
+			return nil, fmt.Errorf("волна пропуска уже достигла target %q", visit.StepID)
+		}
+		decisionUses[cause] = true
+		return roots, nil
 	default:
-		return fmt.Errorf("неизвестный trigger %q", visit.Trigger.Kind)
+		return nil, fmt.Errorf("неизвестный trigger %q", visit.Trigger.Kind)
 	}
-	return nil
+	return nil, nil
+}
+
+// canonicalSkippedTargetKey выбирает стабильную причину synthetic Skipped.
+// Для реального решения рассматриваются только невыбранные ключи; для уже
+// пропущенного decision — все routes. Общий target выбранного route не пропускается.
+func canonicalSkippedTargetKey(step workflow.Step, selectedKey, target string) (string, bool) {
+	if selectedKey != "" && slices.Contains(step.Decisions[selectedKey].To, target) {
+		return "", false
+	}
+	keys := make([]string, 0, len(step.Decisions))
+	for key := range step.Decisions {
+		if key != selectedKey {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if slices.Contains(step.Decisions[key].To, target) {
+			return key, true
+		}
+	}
+	return "", false
+}
+
+// canonicalSkipRoots превращает объединение корней join в детерминированное
+// множество. Одинаковая причинная волна не зависит от порядка Step.After.
+func canonicalSkipRoots(values []string) []string {
+	unique := make(map[string]bool, len(values))
+	for _, value := range values {
+		unique[value] = true
+	}
+	result := make([]string, 0, len(unique))
+	for value := range unique {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
+}
+
+// skipWaveKey кодирует множество visitId без неоднозначного разделителя.
+func skipWaveKey(roots []string) string {
+	var result strings.Builder
+	for _, root := range roots {
+		result.WriteString(strconv.Itoa(len(root)))
+		result.WriteByte(':')
+		result.WriteString(root)
+	}
+	return result.String()
 }
 
 func validateDecision(visit Visit, step workflow.Step) error {
@@ -500,7 +681,7 @@ func validateDecision(visit Visit, step workflow.Step) error {
 }
 
 func visitTerminal(state scheduler.State) bool {
-	return state == scheduler.Failed || state == scheduler.Succeeded
+	return state == scheduler.Failed || state == scheduler.Skipped || state == scheduler.Succeeded
 }
 
 func sameOutcome(left, right *workflow.TerminalOutcome) bool {
