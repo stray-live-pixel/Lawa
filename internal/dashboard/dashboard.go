@@ -721,7 +721,9 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 			definition := definitions[visit.StepID]
 			item := makeAgentStepNode(root, runID, visit, definition)
 			node.Steps = append(node.Steps, item)
-			if visit.State == scheduler.Succeeded || visit.State == scheduler.Failed {
+			// Skipped — такой же terminal visit для прогресса, но не ошибка и не
+			// активная работа: Codex для него намеренно не запускался.
+			if visit.State == scheduler.Succeeded || visit.State == scheduler.Failed || visit.State == scheduler.Skipped {
 				node.CompletedSteps++
 			}
 			search = append(search, item.Key, item.ID, item.StepID, item.VisitID, item.State,
@@ -981,6 +983,8 @@ func tone(state string) string {
 		return "failed"
 	case "succeeded":
 		return "succeeded"
+	case "skipped":
+		return "skipped"
 	default:
 		return "neutral"
 	}
@@ -1075,7 +1079,7 @@ func previewPage(params viewParams, now time.Time) page {
 			createdAt: now.Add(-age), updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
 		}
 		for _, item := range node.Steps {
-			if item.State == string(scheduler.Succeeded) {
+			if item.State == string(scheduler.Succeeded) || item.State == string(scheduler.Skipped) {
 				node.CompletedSteps++
 			}
 			if item.Active {

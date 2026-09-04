@@ -29,6 +29,19 @@ func TestEvaluateRejectsAgentGraphV2(t *testing.T) {
 	}
 }
 
+// TestEvaluateRejectsSkippedInLegacy сохраняет версионную границу нового
+// состояния. Legacy DAG никогда не создавал Skipped и не должен принять его ни
+// как успешную зависимость, ни как молчаливое ожидание.
+func TestEvaluateRejectsSkippedInLegacy(t *testing.T) {
+	w := workflow.Workflow{ID: "legacy", Steps: []workflow.Step{
+		{ID: "step", Type: "agent", Prompt: "Выполни", DependsOn: []string{}},
+	}}
+	got, err := Evaluate(w, map[string]State{"step": Skipped})
+	if err == nil || !strings.Contains(err.Error(), "неизвестное состояние \"skipped\"") || !reflect.DeepEqual(got, Plan{}) {
+		t.Fatalf("legacy-планировщик принял skipped: %+v, %v", got, err)
+	}
+}
+
 // reviewWorkflow берёт продуктовый пример: сборщик записан раньше родителей,
 // а два ревью должны выполняться независимо после общих метрик.
 func reviewWorkflow(t *testing.T) workflow.Workflow {

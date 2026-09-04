@@ -170,7 +170,13 @@ func DetailedReport(status coordinator.Status, runDir string, artifacts Artifact
 		}
 		fmt.Fprintf(&message, "- %s — %s", label, markdownText(string(step.State)))
 		if step.CodexThreadID == "" {
-			message.WriteString(" (чат ещё не создан)")
+			if isAgentStatus(status) && step.State == scheduler.Skipped {
+				// Skipped — законченная ветка без внешнего исполнения. Формулировка
+				// «ещё не создан» ошибочно обещала бы будущий запуск Codex.
+				message.WriteString(" (Codex не запускался: ветка пропущена)")
+			} else {
+				message.WriteString(" (чат ещё не создан)")
+			}
 		}
 		if waitingForCapacity[capacityKey] {
 			message.WriteString(" (ждёт свободный слот общего лимита)")
@@ -212,8 +218,8 @@ func DetailedReport(status coordinator.Status, runDir string, artifacts Artifact
 }
 
 // writeAgentVisitDetails раскрывает durable-поля одного посещения отдельными
-// строками. Пропущенные ключи остаются свойством решения: отчёт не создаёт для
-// них фиктивные посещения и не приписывает состояние целевым step.
+// строками. Decision.Skipped остаётся аудитом невыбранных ключей, а реальные
+// пропущенные ветки представлены самостоятельными visits со State=Skipped.
 func writeAgentVisitDetails(message *strings.Builder, step coordinator.StepStatus) {
 	fmt.Fprintf(message, "  - visitId: %s; итерация: %d; попытка: %d\n",
 		markdownText(step.VisitID), step.Iteration, step.Attempt)
@@ -257,6 +263,9 @@ func Summary(status coordinator.Status, runDir string, artifactErr error) string
 	var message strings.Builder
 	fmt.Fprintf(&message, "Всего: %d, готово: %d, работает: %d, ожидают: %d",
 		statistics.total, statistics.ready, statistics.running, statistics.waiting)
+	if statistics.skipped != 0 {
+		fmt.Fprintf(&message, ", пропущено: %d", statistics.skipped)
+	}
 	if statistics.attention != 0 {
 		fmt.Fprintf(&message, ", требуют внимания: %d", statistics.attention)
 	}
@@ -292,7 +301,7 @@ func stringSet(values []string) map[string]bool {
 }
 
 type stateStatistics struct {
-	total, ready, running, waiting, attention int
+	total, ready, running, waiting, skipped, attention int
 }
 
 // countStates распределяет каждый шаг ровно в одну пользовательскую категорию.
@@ -308,6 +317,8 @@ func countStates(status coordinator.Status) stateStatistics {
 			statistics.running++
 		case scheduler.Pending:
 			statistics.waiting++
+		case scheduler.Skipped:
+			statistics.skipped++
 		default:
 			statistics.attention++
 		}
@@ -352,14 +363,14 @@ func legacyPlantUML(status coordinator.Status) ([]byte, error) {
 			fmt.Fprintf(&source, "step_%d --> step_%d\n", parent, index)
 		}
 	}
-	writePlantLegend(&source)
+	writePlantLegend(&source, false)
 	source.WriteString("@enduml\n")
 	return []byte(source.String()), nil
 }
 
 // agentPlantUML строит историю v4 по VisitID. Причинные рёбра ссылаются только
-// на реально созданные посещения, поэтому невыбранные маршруты не выглядят как
-// запущенные или пропущенные узлы.
+// на реально материализованные посещения: выбранные ветки показывают исполнение,
+// а невыбранные и недостижимые — сохранённый terminal Skipped без чата Codex.
 func agentPlantUML(status coordinator.Status) ([]byte, error) {
 	indices := make(map[string]int, len(status.Steps))
 	for index, step := range status.Steps {
@@ -392,7 +403,7 @@ func agentPlantUML(status coordinator.Status) ([]byte, error) {
 			plantText(string(status.RunState)), plantText(status.StopVisitID), plantText(status.StopReason))
 		source.WriteString("end note\n")
 	}
-	writePlantLegend(&source)
+	writePlantLegend(&source, true)
 	source.WriteString("@enduml\n")
 	return []byte(source.String()), nil
 }
@@ -443,14 +454,22 @@ func writePlantHeader(source *strings.Builder, workflowID string) {
 	fmt.Fprintf(source, "title Workflow: %s\n", plantText(workflowID))
 }
 
-// writePlantLegend перечисляет стабильные цвета обоих форматов статуса.
-func writePlantLegend(source *strings.Builder) {
+// writePlantLegend перечисляет стабильные цвета формата статуса. Skipped
+// существует только у v4, поэтому legacy-диаграммы сохраняют прежнюю легенду.
+func writePlantLegend(source *strings.Builder, agentGraph bool) {
 	source.WriteString("legend left\n")
 	source.WriteString("|= Цвет |= Состояние |\n")
-	for _, state := range []scheduler.State{
+	states := []scheduler.State{
 		scheduler.Pending, scheduler.Starting, scheduler.Running,
 		scheduler.Succeeded, scheduler.Failed, scheduler.Unknown,
-	} {
+	}
+	if agentGraph {
+		states = []scheduler.State{
+			scheduler.Pending, scheduler.Starting, scheduler.Running,
+			scheduler.Succeeded, scheduler.Skipped, scheduler.Failed, scheduler.Unknown,
+		}
+	}
+	for _, state := range states {
 		fmt.Fprintf(source, "|<%s> | %s |\n", colorFor(state), state)
 	}
 	source.WriteString("endlegend\n")
@@ -506,6 +525,8 @@ func colorFor(state scheduler.State) string {
 		return "#93C5FD"
 	case scheduler.Succeeded:
 		return "#86EFAC"
+	case scheduler.Skipped:
+		return "#CBD5E1"
 	case scheduler.Failed:
 		return "#FCA5A5"
 	case scheduler.WaitingForApproval:

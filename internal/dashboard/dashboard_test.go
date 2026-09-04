@@ -505,7 +505,7 @@ func TestPreview(t *testing.T) {
 	for _, fragment := range []string{
 		"TEST DATA", "Consolas", "nightly-review", "35 мин", "Расписание запусков", "Запуск: ", "sync-project-status", "weekly-report",
 		"release-v0.3.0", "repair-failed-macos-build", "nightly-maintenance",
-		"prepare-release-notes-with-a-deliberately-long-name", "tone-running", "tone-failed", "tone-succeeded", "skipped", "#preview",
+		"prepare-release-notes-with-a-deliberately-long-name", "tone-running", "tone-failed", "tone-succeeded", "tone-skipped", "skipped", "#preview",
 		"Работа агента", "0 из 2 завершено", "1 из 2 завершено", "failed-nightly-cleanup", "previous-release", "За последние 24 часа", "За всё время",
 	} {
 		if !strings.Contains(body, fragment) {

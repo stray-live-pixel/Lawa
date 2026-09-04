@@ -107,6 +107,13 @@ func TestSummaryUsesCompactUserCategories(t *testing.T) {
 		}
 	}
 
+	status.RunState = runstore.RunRunning
+	status.Steps = append(status.Steps, coordinator.StepStatus{ID: "skipped", State: scheduler.Skipped})
+	if withSkipped := Summary(status, t.TempDir(), nil); !strings.Contains(withSkipped, "Всего: 16, готово: 5, работает: 6, ожидают: 4, пропущено: 1.") ||
+		strings.Contains(withSkipped, "требуют внимания") {
+		t.Fatalf("пропущенная ветка показана как проблема или потеряна: %q", withSkipped)
+	}
+
 	status.Steps = append(status.Steps, coordinator.StepStatus{ID: "failed", State: scheduler.Failed})
 	if warning := Summary(status, t.TempDir(), errors.New("renderer failed")); !strings.Contains(warning, "требуют внимания: 1") || !strings.Contains(warning, "renderer failed") {
 		t.Fatalf("проблемное состояние или диагностика скрыты: %q", warning)
@@ -193,7 +200,7 @@ func TestPlantTextDisablesPreprocessor(t *testing.T) {
 
 // TestAgentReportAndPlantUMLUseVisits фиксирует представление v4: два прохода
 // одного step остаются разными узлами, связи идут по sourceVisitIds, а
-// невыбранный ключ виден только в атрибутах durable-решения.
+// невыбранная ветка получает собственный terminal skipped-visit без чата Codex.
 func TestAgentReportAndPlantUMLUseVisits(t *testing.T) {
 	maxVisits := 3
 	failed := workflow.OutcomeFailed
@@ -212,13 +219,19 @@ func TestAgentReportAndPlantUMLUseVisits(t *testing.T) {
 					Skipped: []string{"stop"}, Applied: true,
 				},
 				DecisionRoutes: []coordinator.DecisionRouteStatus{
-					{Key: "retry", To: []string{"work"}}, {Key: "stop", Finish: &failed},
+					{Key: "retry", To: []string{"work"}}, {Key: "stop", To: []string{"unused"}},
 				},
 			},
 			{
 				ID: "work", VisitID: "work-visit-1", Visit: 1, Iteration: 2, Attempt: 1,
 				State: scheduler.Succeeded, Trigger: runstore.VisitTrigger{
 					Kind: runstore.TriggerDecision, SourceVisitIDs: []string{"check-visit-1"}, DecisionKey: "retry",
+				},
+			},
+			{
+				ID: "unused", VisitID: "unused-visit-1", Visit: 1, Iteration: 2,
+				State: scheduler.Skipped, Trigger: runstore.VisitTrigger{
+					Kind: runstore.TriggerKind("decision_skipped"), SourceVisitIDs: []string{"check-visit-1"}, DecisionKey: "stop",
 				},
 			},
 			{
@@ -234,7 +247,8 @@ func TestAgentReportAndPlantUMLUseVisits(t *testing.T) {
 		"check#1 — succeeded", "visitId: check-visit-1; итерация: 1; попытка: 2",
 		"предел: maxVisits=3; onLimit=failed", "решение: retry; применено: true",
 		"объяснение решения: нужна &lt;img:/private/secret.png&gt; %date()", "пропущенные ключи решений: stop",
-		"маршруты: retry → work; stop → finish:failed", "work#1 — succeeded (чат ещё не создан) (ждёт свободный слот общего лимита)",
+		"маршруты: retry → work; stop → unused", "work#1 — succeeded (чат ещё не создан) (ждёт свободный слот общего лимита)",
+		"unused#1 — skipped (Codex не запускался: ветка пропущена)",
 		"причина запуска: decision:retry от check-visit-1", "check#2 — failed",
 		"техническая ошибка: агент недоступен", "Run run-v4 завершён: failed.",
 		"Остановившее посещение: check-visit-2.", "Причина остановки: исчерпан предел проверок",
@@ -250,9 +264,11 @@ func TestAgentReportAndPlantUMLUseVisits(t *testing.T) {
 	}
 	text := string(source)
 	for _, fragment := range []string{
-		`rectangle "check&#35;1\nvisitId&#58; check&#45;visit&#45;1\niteration&#58; 1&#59; attempt&#58; 2\nsucceeded\nmaxVisits&#58; 3&#59; onLimit&#58; failed\ndecision&#58; retry&#59; applied&#58; true\ndecision explanation&#58; нужна &#60;img&#58;&#47;private&#47;secret&#46;png&#62; &#37;date&#40;&#41;\nskipped keys&#58; stop\nroutes&#58; retry → work&#59; stop → finish&#58;failed" as visit_0`,
-		`rectangle "check&#35;2\nvisitId&#58; check&#45;visit&#45;2\niteration&#58; 3&#59; attempt&#58; 1\nfailed\nmaxVisits&#58; 3&#59; onLimit&#58; failed\ntechnicalError&#58; агент недоступен" as visit_2`,
-		"visit_0 --> visit_1 : decision&#58;retry", "visit_1 --> visit_2 : after",
+		`rectangle "check&#35;1\nvisitId&#58; check&#45;visit&#45;1\niteration&#58; 1&#59; attempt&#58; 2\nsucceeded\nmaxVisits&#58; 3&#59; onLimit&#58; failed\ndecision&#58; retry&#59; applied&#58; true\ndecision explanation&#58; нужна &#60;img&#58;&#47;private&#47;secret&#46;png&#62; &#37;date&#40;&#41;\nskipped keys&#58; stop\nroutes&#58; retry → work&#59; stop → unused" as visit_0`,
+		`rectangle "unused&#35;1\nvisitId&#58; unused&#45;visit&#45;1\niteration&#58; 2&#59; attempt&#58; 0\nskipped" as visit_2 #CBD5E1`,
+		`rectangle "check&#35;2\nvisitId&#58; check&#45;visit&#45;2\niteration&#58; 3&#59; attempt&#58; 1\nfailed\nmaxVisits&#58; 3&#59; onLimit&#58; failed\ntechnicalError&#58; агент недоступен" as visit_3`,
+		"visit_0 --> visit_1 : decision&#58;retry", "visit_0 --> visit_2 : " + plantText("decision_skipped:stop"), "visit_1 --> visit_3 : after",
+		"|<#CBD5E1> | skipped |",
 		"Run: failed", "Stop visit: check&#45;visit&#45;2", "Reason: исчерпан предел проверок",
 	} {
 		if !strings.Contains(text, fragment) {
