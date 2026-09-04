@@ -358,8 +358,8 @@ func TestPlanAgentGraphCancelledWaits(t *testing.T) {
 }
 
 // TestPlanAgentGraphNaturalQuiescence проверяет фактический causal frontier, а не
-// все исторические ошибки. Не выбранная половина статического join не блокирует
-// естественный успех, но необработанный Failed-лист завершает run ошибкой.
+// все исторические ошибки. Невыбранная половина сначала получает durable Skipped;
+// необработанный Failed-лист завершает run ошибкой.
 func TestPlanAgentGraphNaturalQuiescence(t *testing.T) {
 	t.Run("stranded join succeeds", func(t *testing.T) {
 		w := agentWorkflow([]string{"choice"},
@@ -375,8 +375,9 @@ func TestPlanAgentGraphNaturalQuiescence(t *testing.T) {
 			agentDecisionVisit("left-1", "left", Succeeded, 2, "choice-1", "left", nil),
 		}
 		got, err := PlanAgentGraph(w, visits)
-		if err != nil || got.Terminal == nil || got.Terminal.Outcome != workflow.OutcomeSucceeded || got.Terminal.CauseVisitID != "" {
-			t.Fatalf("невыбранная ветка заблокировала natural completion: %#v, %v", got, err)
+		if err != nil || got.Terminal != nil || len(got.DecisionActivations) != 1 ||
+			got.DecisionActivations[0].StepID != "right" || got.DecisionActivations[0].InitialState != Skipped {
+			t.Fatalf("невыбранная ветка не получила durable Skipped: %#v, %v", got, err)
 		}
 	})
 
@@ -415,7 +416,7 @@ func TestPlanAgentGraphBoundedSelfLoop(t *testing.T) {
 		got.Terminal.LimitTrigger.Kind != AgentTriggerDecision ||
 		!slices.Equal(got.Terminal.LimitTrigger.SourceVisitIDs, []string{"loop-2"}) ||
 		got.Terminal.LimitTrigger.DecisionKey != "again" || got.Terminal.LimitIteration != 3 ||
-		len(got.ApplyDecisionVisitIDs) != 0 || len(got.DecisionActivations) != 0 || !strings.Contains(got.Terminal.Reason, "посещение 3") {
+		len(got.ApplyDecisionVisitIDs) != 0 || len(got.DecisionActivations) != 0 || !strings.Contains(got.Terminal.Reason, "исполнение №3") {
 		t.Fatalf("граница self-loop не дала атомарный failed: %#v, %v", got, err)
 	}
 

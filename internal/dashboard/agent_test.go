@@ -16,8 +16,8 @@ import (
 )
 
 // createAgentDashboardRun строит историю с двумя проходами self-loop и
-// terminal maxVisits. Независимый стартовый visit остаётся Pending, чтобы
-// dashboard показывал фактическую историю, а не выдумывал skipped-состояние.
+// terminal maxVisits. Независимый стартовый visit становится Skipped, чтобы
+// dashboard показывал terminal-ветку без ложного запуска Codex.
 func createAgentDashboardRun(t *testing.T) (string, runstore.Snapshot) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "runs")
@@ -100,10 +100,10 @@ func finishDashboardVisit(t *testing.T, run *runstore.LockedRun, visit runstore.
 
 // TestAgentDashboardShowsDurableVisitHistory проверяет карточки, уникальные
 // inspector-ключи и ссылки. Все объяснения берутся из metadata v4; dashboard не
-// создаёт ложных листов для невыбранных routes и не смешивает проходы цикла.
+// показывает durable skipped-лист для невыбранной ветки и не смешивает проходы цикла.
 func TestAgentDashboardShowsDurableVisitHistory(t *testing.T) {
 	root, snapshot := createAgentDashboardRun(t)
-	first, pending, second := snapshot.Meta.Visits[0], snapshot.Meta.Visits[1], snapshot.Meta.Visits[2]
+	first, skipped, second := snapshot.Meta.Visits[0], snapshot.Meta.Visits[1], snapshot.Meta.Visits[2]
 	recorder := httptest.NewRecorder()
 	Handler(root).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
 	if recorder.Code != http.StatusOK {
@@ -111,8 +111,9 @@ func TestAgentDashboardShowsDurableVisitHistory(t *testing.T) {
 	}
 	html := recorder.Body.String()
 	for _, fragment := range []string{
-		"dashboard-v2", "Workflow · failed", "Посещения", "2 из 3 завершено",
+		"dashboard-v2", "Workflow · failed", "Посещения", "3 из 3 завершено",
 		"loop#1", "loop#2", "unused#1", "Причина остановки", "Достигнут лимит",
+		"Посещение · skipped", "tone-skipped",
 		"loop · iteration=3 · decision:again ← " + second.VisitID,
 		"Причина запуска", "decision:again ← " + first.VisitID,
 		"Решение", "again · applied=true", "again · applied=false",
@@ -129,8 +130,8 @@ func TestAgentDashboardShowsDurableVisitHistory(t *testing.T) {
 		}
 	}
 	if strings.Contains(html, `step:`+snapshot.Meta.RunID+`:loop"`) ||
-		!strings.Contains(html, `data-inspector-select="step:`+snapshot.Meta.RunID+`:`+pending.VisitID+`"`) {
-		t.Fatal("повторы получили общий inspector key или фактический Pending visit потерян")
+		!strings.Contains(html, `data-inspector-select="step:`+snapshot.Meta.RunID+`:`+skipped.VisitID+`"`) {
+		t.Fatal("повторы получили общий inspector key или durable Skipped visit потерян")
 	}
 
 	node := makeRunNode(root, snapshot)
@@ -143,6 +144,9 @@ func TestAgentDashboardShowsDurableVisitHistory(t *testing.T) {
 	}
 	if byKey[first.VisitID].Message != "первый итог" || byKey[second.VisitID].Message != "второй итог" {
 		t.Fatalf("сводки visits смешаны: first=%+v second=%+v", byKey[first.VisitID], byKey[second.VisitID])
+	}
+	if item := byKey[skipped.VisitID]; item.State != string(scheduler.Skipped) || item.Tone != "skipped" || item.Active {
+		t.Fatalf("пропущенная ветка выглядит активной или аварийной: %+v", item)
 	}
 }
 
@@ -260,6 +264,7 @@ func TestFailedTreeKeepsAgentVisitsOnlyForOwnFailure(t *testing.T) {
 		ID: "parent", State: "running", AgentGraph: true,
 		Steps: []stepNode{
 			{Key: "visit-done", ID: "work#1", State: "succeeded"},
+			{Key: "visit-skipped", ID: "unused#1", State: "skipped"},
 			{Key: "visit-active", ID: "check#1", State: "running", Active: true},
 		},
 	}

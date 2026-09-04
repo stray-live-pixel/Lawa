@@ -16,10 +16,11 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
-// AgentAdvance — результат одной атомарной материализации pure-плана. Snapshot
-// уже содержит новые visits и Applied-флаги; CreatedVisits связывает ordered
-// activations планировщика с созданными visitId для следующего шага coordinator.
-// Changed=false означает, что durable snapshot уже полностью применён.
+// AgentAdvance — результат одной атомарной материализации pure-плана. Plan
+// хранит исходный business-переход scheduler, а Snapshot — его полный результат.
+// CreatedVisits перечисляет в durable-порядке и основные activations, и все
+// автоматически достроенные слои skipped-замыкания; их точные причины уже есть
+// в Trigger. Changed=false означает, что durable snapshot полностью применён.
 type AgentAdvance struct {
 	Snapshot      Snapshot
 	Plan          scheduler.AgentPlan
@@ -60,19 +61,67 @@ func (r *LockedRun) advanceAgentGraph(syncFile func(*os.File) error) (AgentAdvan
 	if err != nil {
 		return AgentAdvance{}, err
 	}
-	if plan.Terminal != nil && (len(plan.DecisionActivations) != 0 || len(plan.AfterActivations) != 0) {
-		return AgentAdvance{}, fmt.Errorf("планировщик смешал terminal outcome и новые activations")
+	if len(plan.MarkSkippedVisitIDs) != 0 && plan.Terminal == nil {
+		return AgentAdvance{}, fmt.Errorf("планировщик пометил существующие visits как skipped без terminal outcome")
 	}
-	changed := len(plan.ApplyDecisionVisitIDs) != 0 || len(plan.DecisionActivations) != 0 || len(plan.AfterActivations) != 0 || plan.Terminal != nil
-	if !changed {
-		return AgentAdvance{Snapshot: snapshot, Plan: plan}, nil
+	if plan.Terminal != nil && agentPlanHasRunnableActivations(plan) {
+		return AgentAdvance{}, fmt.Errorf("планировщик смешал terminal outcome и запускаемые activations")
 	}
+	changed := len(plan.ApplyDecisionVisitIDs) != 0 || len(plan.MarkSkippedVisitIDs) != 0 ||
+		len(plan.DecisionActivations) != 0 || len(plan.AfterActivations) != 0 || plan.Terminal != nil
 
 	if err = applyAgentDecisionFlags(&snapshot, plan.ApplyDecisionVisitIDs); err != nil {
 		return AgentAdvance{}, err
 	}
+	if err = applyAgentSkippedFlags(&snapshot, plan.MarkSkippedVisitIDs); err != nil {
+		return AgentAdvance{}, err
+	}
 	created := materializeAgentVisits(snapshot.Meta.Visits, plan.DecisionActivations, plan.AfterActivations)
 	snapshot.Meta.Visits = append(snapshot.Meta.Visits, created...)
+	limitStepID := ""
+	limitTrigger := scheduler.AgentTriggerView{}
+	if plan.Terminal != nil {
+		limitStepID = plan.Terminal.LimitStepID
+		limitTrigger = plan.Terminal.LimitTrigger
+	}
+
+	// Synthetic Skipped образуют причинное замыкание: пропущенный decision
+	// распространяет отсутствие по всем своим routes, а полностью пропущенный
+	// after — дальше по статическому DAG. Следующей волне нужны реальные visitId
+	// предыдущей, поэтому runstore присваивает ID в памяти и повторяет pure planner
+	// до неподвижной точки. Ни один промежуточный снимок не публикуется. Это особенно
+	// важно для finish: после terminal meta обычный Advance уже запрещён, поэтому
+	// вся недостижимая вложенная ветка обязана попасть в тот же атомарный commit.
+	for {
+		closure, closureErr := scheduler.PlanAgentSkippedClosure(
+			snapshot.Workflow, agentVisitViews(snapshot.Meta.Visits), plan.Terminal != nil, limitStepID, limitTrigger,
+		)
+		if closureErr != nil {
+			return AgentAdvance{}, fmt.Errorf("достроить skipped-ветки: %w", closureErr)
+		}
+		if len(closure.ApplyDecisionVisitIDs) != 0 || len(closure.MarkSkippedVisitIDs) != 0 || closure.Terminal != nil {
+			return AgentAdvance{}, fmt.Errorf("планировщик skipped-замыкания вернул недопустимый переход")
+		}
+		if agentPlanHasRunnableActivations(closure) {
+			return AgentAdvance{}, fmt.Errorf("планировщик skipped-замыкания попытался запустить agent visit")
+		}
+		if len(closure.DecisionActivations) == 0 && len(closure.AfterActivations) == 0 {
+			break
+		}
+		layer := materializeAgentVisits(snapshot.Meta.Visits, closure.DecisionActivations, closure.AfterActivations)
+		if len(layer) == 0 {
+			return AgentAdvance{}, fmt.Errorf("непустое skipped-замыкание не материализовало visits")
+		}
+		snapshot.Meta.Visits = append(snapshot.Meta.Visits, layer...)
+		created = append(created, layer...)
+	}
+	// Skip-only repair не обязан ждать чужую незавершённую decision-wave: он не
+	// запускает работу и не конкурирует с business terminal. Поэтому closure
+	// проверяется даже при пустом основном плане. Если и он пуст, durable-снимок
+	// действительно не изменился и лишний Rename не нужен.
+	if !changed && len(created) == 0 {
+		return AgentAdvance{Snapshot: snapshot, Plan: plan}, nil
+	}
 	if plan.Terminal != nil {
 		switch plan.Terminal.Outcome {
 		case workflow.OutcomeSucceeded:
@@ -113,6 +162,28 @@ func (r *LockedRun) advanceAgentGraph(syncFile func(*os.File) error) (AgentAdvan
 		return AgentAdvance{}, r.recordVisitSaveFailure(err)
 	}
 	return AgentAdvance{Snapshot: snapshot, Plan: plan, CreatedVisits: slices.Clone(created), Changed: true}, nil
+}
+
+// agentActivationState сохраняет обратную совместимость с планами, созданными
+// до появления InitialState: нулевое значение по-прежнему означает запускаемый
+// Pending visit. Явный Skipped создаёт только причинный terminal token без Codex.
+func agentActivationState(activation scheduler.AgentActivation) scheduler.State {
+	if activation.InitialState == "" {
+		return scheduler.Pending
+	}
+	return activation.InitialState
+}
+
+// agentPlanHasRunnableActivations разрешает terminal commit дополнять историю
+// только synthetic Skipped. Pending вместе с итогом был бы опубликован уже после
+// запрета новых turn и навсегда оставил бы ложную готовую работу.
+func agentPlanHasRunnableActivations(plan scheduler.AgentPlan) bool {
+	for _, activation := range append(slices.Clone(plan.DecisionActivations), plan.AfterActivations...) {
+		if agentActivationState(activation) != scheduler.Skipped {
+			return true
+		}
+	}
+	return false
 }
 
 // compactAgentStopReason превращает диагностический текст pure planner в
@@ -167,6 +238,29 @@ func applyAgentDecisionFlags(snapshot *Snapshot, visitIDs []string) error {
 	return nil
 }
 
+// applyAgentSkippedFlags переводит лишь ещё не запущенные durable visits. Их
+// исходный trigger сохраняется: по нему видно, какая выбранная либо стартовая
+// ветка была остановлена общим terminal outcome. Synthetic пропуски сразу
+// создаются как Skipped и поэтому сюда не передаются.
+func applyAgentSkippedFlags(snapshot *Snapshot, visitIDs []string) error {
+	indices := visitIndices(snapshot.Meta.Visits)
+	seen := make(map[string]bool, len(visitIDs))
+	for _, visitID := range visitIDs {
+		index, exists := indices[visitID]
+		if !exists || seen[visitID] {
+			return fmt.Errorf("планировщик указал неизвестное или повторное skipped-посещение %q", visitID)
+		}
+		seen[visitID] = true
+		visit := &snapshot.Meta.Visits[index]
+		if visit.State != scheduler.Pending || visit.CodexThreadID != "" || visit.TurnID != "" || visit.Attempt != 0 ||
+			visit.TechnicalError != "" || visit.Decision != nil {
+			return fmt.Errorf("посещение %q нельзя пометить как skipped", visitID)
+		}
+		visit.State = scheduler.Skipped
+	}
+	return nil
+}
+
 // materializeAgentVisits сохраняет порядок planner: сначала выбранные decision
 // targets в порядке Visits/route.to, затем after-barriers в порядке Steps. Номер
 // Visit считается по уже durable истории и возрастает отдельно для StepID.
@@ -183,7 +277,7 @@ func materializeAgentVisits(history []Visit, decision, after []scheduler.AgentAc
 		numbers[activation.StepID]++
 		created = append(created, Visit{
 			VisitID: newID(), StepID: activation.StepID, Visit: numbers[activation.StepID],
-			Iteration: activation.Iteration, State: scheduler.Pending,
+			Iteration: activation.Iteration, State: agentActivationState(activation),
 			Trigger: VisitTrigger{
 				Kind: TriggerKind(activation.Trigger.Kind), SourceVisitIDs: slices.Clone(activation.Trigger.SourceVisitIDs),
 				DecisionKey: activation.Trigger.DecisionKey,

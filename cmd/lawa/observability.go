@@ -131,7 +131,7 @@ func writeAgentStatus(out io.Writer, snapshot runstore.Snapshot, summaries map[s
 				}
 			}
 			if len(decision.Skipped) != 0 {
-				if _, err := fmt.Fprintf(out, "  skipped: %s\n", runstore.SafeTerminalText(strings.Join(decision.Skipped, ", "))); err != nil {
+				if _, err := fmt.Fprintf(out, "  skipped keys: %s\n", runstore.SafeTerminalText(strings.Join(decision.Skipped, ", "))); err != nil {
 					return err
 				}
 			}
@@ -200,7 +200,8 @@ func statusTriggerText(trigger runstore.VisitTrigger) string {
 }
 
 // statusRoutesText сортирует decision keys, но не меняет пользовательский
-// порядок route.to. Невыбранные routes остаются описанием, а не состояниями.
+// порядок route.to. Список описывает весь статический контракт решения; фактические
+// skipped-visits выводятся отдельно из durable metadata вместе с их состояниями.
 func statusRoutesText(step workflow.Step) string {
 	keys := make([]string, 0, len(step.Decisions))
 	for key := range step.Decisions {
@@ -327,11 +328,11 @@ func terminalEventsRecorded(snapshot runstore.Snapshot, states map[string]eventS
 	}
 	if snapshot.Meta.Version == 4 {
 		for _, visit := range snapshot.Meta.Visits {
-			// Explicit finish и onLimit могут оставить ещё не запущенные ветки.
-			// Для Pending нет и не должно быть visit_state. Starting появляется
-			// при durable reserve до любого thread/turn и также не обещает
-			// отдельного state-события: после crash его уже некому дописать.
-			if visit.State == scheduler.Pending || visit.State == scheduler.Starting {
+			// Для Pending и Starting нет обязательного terminal-события исполнителя:
+			// первый ещё не запускался, второй мог остаться после crash до thread/turn.
+			// Skipped никогда не запускает Codex и атомарно появляется в meta.json как
+			// результат планирования, поэтому ожидать для него visit_state нельзя.
+			if visit.State == scheduler.Pending || visit.State == scheduler.Starting || visit.State == scheduler.Skipped {
 				continue
 			}
 			event, ok := states[visit.VisitID]
