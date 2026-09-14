@@ -26,7 +26,6 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/series"
 	"github.com/stray-live-pixel/Lawa/internal/statusreport"
-	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 const help = `Lawa — выполнение JSON-workflow через Codex App Server.
@@ -296,17 +295,12 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 	}
 }
 
-// validateCommand читает один файл и не выполняет Codex preflight.
+// validateCommand проверяет JSON и Markdown-инструкции без Codex preflight.
 func validateCommand(args []string, out io.Writer) error {
 	if len(args) != 1 {
 		return fmt.Errorf("использование: lawa validate <workflow.json>")
 	}
-	f, err := os.Open(args[0])
-	if err != nil {
-		return fmt.Errorf("открыть workflow: %w", err)
-	}
-	defer f.Close()
-	w, err := workflow.Decode(f)
+	_, w, err := loadWorkflowSource(args[0])
 	if err != nil {
 		return fmt.Errorf("проверить %q: %w", args[0], err)
 	}
@@ -341,11 +335,7 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 	if err != nil {
 		return fmt.Errorf("определить cwd: %w", err)
 	}
-	workflowJSON, err := os.ReadFile(parsed.workflow)
-	if err != nil {
-		return fmt.Errorf("открыть workflow: %w", err)
-	}
-	definition, err := workflow.Decode(strings.NewReader(string(workflowJSON)))
+	workflowJSON, definition, err := loadWorkflowSource(parsed.workflow)
 	if err != nil {
 		return fmt.Errorf("проверить %q: %w", parsed.workflow, err)
 	}

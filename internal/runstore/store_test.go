@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // testInput использует продуктовый граф, но с ID, похожим на путь: он должен
@@ -21,6 +22,11 @@ import (
 func testInput(t *testing.T) Input {
 	t.Helper()
 	data, err := os.ReadFile("../../examples/review.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Хранилище получает автономный снимок, как после загрузки входа CLI.
+	data, _, err = workflow.ResolveSource(data, "../../examples/review.json", os.ReadFile)
 	if err != nil {
 		t.Fatal(err)
 	}

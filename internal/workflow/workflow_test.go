@@ -29,12 +29,11 @@ func TestDecode(t *testing.T) {
 	if err != nil || w.Steps[0].Prompt != "  задача\n" {
 		t.Fatalf("вход изменён или отклонён: %+v, %v", w, err)
 	}
-	f, err := os.Open("../../examples/review.json")
+	data, err := os.ReadFile("../../examples/review.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	w, err = Decode(f)
+	_, w, err = ResolveSource(data, "../../examples/review.json", os.ReadFile)
 	if err != nil || len(w.Steps) != 4 || w.Steps[0].ID != "summary" {
 		t.Fatalf("пример с параллельными ветками отклонён: %+v, %v", w, err)
 	}
@@ -59,14 +58,13 @@ func TestDocumentedExamplesValidate(t *testing.T) {
 			continue
 		}
 		path := filepath.Join(directory, entry.Name())
-		file, openErr := os.Open(path)
+		data, openErr := os.ReadFile(path)
 		if openErr != nil {
 			t.Fatal(openErr)
 		}
-		definition, decodeErr := Decode(file)
-		closeErr := file.Close()
-		if decodeErr != nil || closeErr != nil {
-			t.Fatalf("пример %s не проходит валидацию: decode=%v close=%v", entry.Name(), decodeErr, closeErr)
+		_, definition, decodeErr := ResolveSource(data, path, os.ReadFile)
+		if decodeErr != nil {
+			t.Fatalf("пример %s не проходит валидацию: %v", entry.Name(), decodeErr)
 		}
 		if wantID, required := wantAgentGraphs[entry.Name()]; required {
 			seen[entry.Name()] = true
