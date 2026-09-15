@@ -693,8 +693,14 @@ func TestRecurringRunFinalOutputFailureFinishesCurrentRun(t *testing.T) {
 func TestRunCommand(t *testing.T) {
 	root, cwd := filepath.Join(t.TempDir(), "runs"), t.TempDir()
 	workflowPath := filepath.Join(t.TempDir(), "workflow.json")
+	// Инструкция лежит рядом с JSON, отдельно от cwd; preflight удаляет
+	// исходник, чтобы проверить независимость опубликованного снимка.
+	promptPath := filepath.Join(filepath.Dir(workflowPath), "step.md")
+	if err := os.WriteFile(promptPath, []byte("# Сделай\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	taskPath, commentPath := filepath.Join(t.TempDir(), "task.md"), filepath.Join(t.TempDir(), "comment.md")
-	workflowJSON := []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":"Сделай","dependsOn":[]}]}`)
+	workflowJSON := []byte(`{"id":"one","steps":[{"id":"step","type":"agent","prompt":{"file":"step.md"},"dependsOn":[]}]}`)
 	if err := os.WriteFile(workflowPath, workflowJSON, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -708,6 +714,9 @@ func TestRunCommand(t *testing.T) {
 	checks := 0
 	deps := cliTestDependencies(client, func(_ context.Context, connection codex.Connection) error {
 		checks++
+		if err := os.Remove(promptPath); err != nil {
+			t.Fatal(err)
+		}
 		if connection.CWD != cwd || connection.Executable != "/test/codex" {
 			t.Fatalf("искажён preflight: %+v", connection)
 		}
@@ -729,7 +738,7 @@ func TestRunCommand(t *testing.T) {
 		t.Fatalf("ожидался один run: %v, %v", entries, err)
 	}
 	snapshot, err := runstore.Load(root, entries[0].Name())
-	if err != nil || snapshot.Meta.Version != 3 || snapshot.Meta.Steps[0].State != scheduler.Succeeded ||
+	if err != nil || snapshot.Workflow.Steps[0].Prompt != "# Сделай\n" || snapshot.Meta.Version != 3 || snapshot.Meta.Steps[0].State != scheduler.Succeeded ||
 		snapshot.Meta.Steps[0].CodexThreadID != "chat-step" || !strings.Contains(snapshot.Task, "Финальная задача") || !strings.Contains(snapshot.Task, "Срочно") {
 		t.Fatalf("неверно сохранён run: %+v, %v", snapshot, err)
 	}

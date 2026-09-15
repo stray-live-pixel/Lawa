@@ -227,7 +227,12 @@ func (m *childRunManager) resolve(ctx context.Context, parent runstore.Snapshot,
 	if err != nil {
 		return resolvedChild{}, fmt.Errorf("прочитать workflow: %w", err)
 	}
-	if _, err = workflow.Decode(bytes.NewReader(workflowJSON)); err != nil {
+	// Каждый Markdown читается с теми же ограничениями, что и исходный JSON.
+	// Относительный request.Workflow уже считается от workspace родителя.
+	workflowJSON, _, err = workflow.ResolveSource(workflowJSON, request.Workflow, func(path string) ([]byte, error) {
+		return readAllowedFile(workspaceRoot, runRoot, workspace, runDir, path)
+	})
+	if err != nil {
 		return resolvedChild{}, fmt.Errorf("проверить workflow: %w", err)
 	}
 	task := request.Task
@@ -300,6 +305,12 @@ func readRegularFile(root *os.Root, path string) (_ []byte, err error) {
 	if err != nil {
 		return nil, err
 	}
+	return readOpenedRegularFile(file)
+}
+
+// readOpenedRegularFile принимает владение дескриптором и закрывает его после
+// чтения. Проверка типа относится к тому же объекту, из которого читается текст.
+func readOpenedRegularFile(file *os.File) (_ []byte, err error) {
 	defer func() { err = errors.Join(err, file.Close()) }()
 	info, err := file.Stat()
 	if err != nil {

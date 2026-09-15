@@ -1,5 +1,6 @@
-// Package workflow читает и проверяет схему Lawa без файловых и сетевых побочных
-// эффектов. Общий валидатор используют validate, run и чтение сохранённого resume.
+// Package workflow читает и проверяет схему Lawa. Decode проверяет автономный
+// снимок без I/O; ResolveSource раскрывает Markdown через переданное чтение.
+// Общий валидатор используют validate, run и чтение сохранённого resume.
 package workflow
 
 import (

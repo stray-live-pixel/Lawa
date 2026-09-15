@@ -46,12 +46,11 @@ func TestEvaluateRejectsSkippedInLegacy(t *testing.T) {
 // а два ревью должны выполняться независимо после общих метрик.
 func reviewWorkflow(t *testing.T) workflow.Workflow {
 	t.Helper()
-	f, err := os.Open("../../examples/review.json")
+	data, err := os.ReadFile("../../examples/review.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	w, err := workflow.Decode(f)
+	_, w, err := workflow.ResolveSource(data, "../../examples/review.json", os.ReadFile)
 	if err != nil {
 		t.Fatal(err)
 	}
