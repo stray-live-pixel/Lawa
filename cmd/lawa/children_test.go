@@ -218,3 +218,55 @@ func TestChildMarkdownPermissions(t *testing.T) {
 		}
 	}
 }
+
+// TestChildTemplatePermissions проверяет, что шаблоны используют тот же
+// ограниченный reader: нельзя прочитать внешний симлинк или зависнуть на FIFO.
+func TestChildTemplatePermissions(t *testing.T) {
+	root, workspace, outside := t.TempDir(), t.TempDir(), t.TempDir()
+	inline := []byte(`{"id":"parent","steps":[{"id":"one","type":"agent","prompt":"text","dependsOn":[]}]}`)
+	parent, err := runstore.Create(root, runstore.Input{WorkflowJSON: inline, Task: "root", CWD: workspace})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := filepath.Join(workspace, "templates")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(outside, "secret.md"), []byte("outside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(outside, "secret.md"), filepath.Join(dir, "escape.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "pipe.md"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ok.md"), []byte("# Проверка\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager := newChildRunManager(t.Context(), root, "codex", nil, nil, dependencies{check: func(context.Context, codex.Connection) error { return nil }})
+	for _, name := range []string{"ok.md", "escape.md", "pipe.md", "missing.md"} {
+		source := `{"id":"child","templates":{"shared":{"file":"templates/` + name + `"}},"steps":[{"id":"one","type":"agent","prompt":"{{shared}}","dependsOn":[]}]}`
+		if err := os.WriteFile(filepath.Join(workspace, "workflow.json"), []byte(source), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := manager.resolve(t.Context(), parent, childRequest{Workflow: "workflow.json", CWD: outside, Task: "child", ParentRun: parent.Meta.RunID})
+		if name != "ok.md" {
+			if err == nil {
+				_ = resolved.directory.Close()
+				t.Fatalf("принят запрещённый шаблон %s", name)
+			}
+			if !strings.Contains(err.Error(), "templates.shared.file") {
+				t.Fatalf("нет контекста шаблона: %v", err)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resolved.directory.Close()
+		if !strings.Contains(string(resolved.input.WorkflowJSON), `# Проверка\n`) {
+			t.Fatalf("нет текста в снимке: %s", resolved.input.WorkflowJSON)
+		}
+	}
+}

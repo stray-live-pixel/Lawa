@@ -10,7 +10,7 @@ import (
 	"unicode/utf8"
 )
 
-// ResolveSource превращает пользовательский JSON со ссылками prompt.file в
+// ResolveSource превращает пользовательский JSON с templates и prompt.file в
 // автономный снимок с текстовыми prompt и проверяет весь граф через Decode.
 // Путь ссылки считается от каталога sourcePath, а не от cwd исполнителя.
 // readFile задаёт файловые полномочия вызывающего кода: дочерний запуск обязан
@@ -28,7 +28,12 @@ func ResolveSource(data []byte, sourcePath string, readFile func(string) ([]byte
 			return nil, Workflow{}, fmt.Errorf("workflow steps: %w", err)
 		}
 	}
-	changed := false
+	templates, err := readTemplates(document["templates"], sourcePath, readFile)
+	if err != nil {
+		return nil, Workflow{}, err
+	}
+	_, changed := document["templates"]
+	delete(document, "templates")
 	for index, step := range steps {
 		raw := bytes.TrimSpace(step["prompt"])
 		if len(raw) == 0 || raw[0] != '{' {
@@ -78,6 +83,35 @@ func ResolveSource(data []byte, sourcePath string, readFile func(string) ([]byte
 	definition, err := Decode(bytes.NewReader(data))
 	if err != nil {
 		return nil, Workflow{}, err
+	}
+	// Контекст берётся только из проверенной схемы. Раскрытие выполняется один
+	// раз: Decode сохранённого снимка не интерпретирует даже буквальные {{...}}.
+	for index, step := range definition.Steps {
+		prompt, err := expandPrompt(step.Prompt, templates, templateContext(definition, step))
+		if err != nil {
+			return nil, Workflow{}, fmt.Errorf("шаг %q: %w", step.ID, err)
+		}
+		if prompt != step.Prompt {
+			definition.Steps[index].Prompt = prompt
+			steps[index]["prompt"], err = json.Marshal(prompt)
+			if err != nil {
+				return nil, Workflow{}, err
+			}
+			changed = true
+		}
+	}
+	if err := definition.Validate(); err != nil {
+		return nil, Workflow{}, err
+	}
+	if changed {
+		document["steps"], err = json.Marshal(steps)
+		if err != nil {
+			return nil, Workflow{}, err
+		}
+		data, err = json.Marshal(document)
+		if err != nil {
+			return nil, Workflow{}, err
+		}
 	}
 	return data, definition, nil
 }
