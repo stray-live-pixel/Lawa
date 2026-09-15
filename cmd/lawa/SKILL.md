@@ -276,9 +276,3 @@ terminal `safe`/`cannot_assess`, fan-out `risk → [security-audit, impact-audit
 DAG. Если маршрут зависит от смысла результата, используй решение v2. Если состав
 самих дочерних workflow определяется только во время работы, используй run_child
 или run_children, а не ручные задачи Desktop и не фоновый shell.
-
-## Картинка графа
-
-`lawa graph <run-id> [--theme dark|light] [--output <файл.png>] [--root <путь>]`
-создаёт PNG через локальный PlantUML без запуска агентов. По умолчанию тема тёмная;
-существующий файл не перезаписывается. В dashboard также есть показ и скачивание PNG.

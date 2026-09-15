@@ -109,7 +109,6 @@ func Handler(root string) http.Handler {
 	mux.HandleFunc("GET /api/trace/{run}", h.trace)
 	mux.HandleFunc("POST /api/runs/{run}/stop-and-delete", h.stopAndDelete)
 	mux.HandleFunc("GET /graph/{run}", h.graph)
-	mux.HandleFunc("GET /graph-image/{run}", h.graphImage)
 	mux.HandleFunc("GET /api/graph/{run}", h.graph)
 	mux.HandleFunc("GET /uml/{run}", h.uml)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

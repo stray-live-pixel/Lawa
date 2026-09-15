@@ -36,8 +36,8 @@ const (
 var pngSignature = []byte("\x89PNG\r\n\x1a\n")
 
 // Renderer отделяет построение PlantUML source от локального процесса рендера.
-// Автоматическое обновление run не использует renderer. Он нужен для PNG
-// по запросу, а в тестах заменяется процессом без Java, Graphviz и PlantUML.
+// Штатные run не используют renderer. Контракт оставлен для явного старого
+// экспорта и тестов совместимости без установки Java, Graphviz или PlantUML.
 type Renderer interface {
 	Render(context.Context, []byte) ([]byte, error)
 }
