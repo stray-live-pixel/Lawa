@@ -136,8 +136,8 @@ lawa update
 sh install.sh --uninstall
 ```
 
-Граф dashboard не требует PlantUML, Java или Graphviz. Новые run сохраняют
-Markdown-статус; граф строится программно из состояния запуска.
+Интерактивный граф dashboard не требует PlantUML. Для экспорта PNG нужен локальный
+PlantUML (`sh install.sh --yes --install-plantuml`). Картинки создаются по запросу.
 
 ## Быстрый старт
 
@@ -284,6 +284,19 @@ attempt, решение и объяснение, выбранный перехо
 Выбор, масштаб и прокрутка сохраняются при обновлении.
 
 ![Интерактивный граф — демонстрационный запуск](assets/examples/interactive-run-graph.png)
+
+Экспорт графа по ID запуска (тёмная тема по умолчанию):
+
+```sh
+lawa graph <run-id> --output workflow.png
+lawa graph <run-id> --theme light --output workflow-light.png
+```
+
+Без `--output` файл `workflow-<run-id>-<theme>.png` создаётся в текущей папке;
+существующий файл не перезаписывается. Можно указать `--root` для другого хранилища.
+В графе UI выберите тему картинки и «Показать PNG» или «Скачать PNG».
+Экспорт не запускает агентов и не меняет run. Для v2 PNG показывает сохранённые
+посещения и фактические переходы; интерактивный граф показывает статическую схему.
 
 Новые агенты получают встроенные правила mom и concise: короткий итог простыми
 словами, выполненная работа, проверки и ограничения. Финальный ответ с маркером
@@ -625,7 +638,7 @@ internal/coordinator/ orchestration и нормализация событий
 internal/codex/       клиент официального App Server
 internal/runstore/    атомарный state и приватный журнал
 internal/dashboard/   read-only observability UI
-internal/statusreport/ Markdown-статус; совместимость старого экспорта
+internal/statusreport/ Markdown-статус и PNG-экспорт через PlantUML
 internal/series/      повторяющиеся app-server run
 ```
 

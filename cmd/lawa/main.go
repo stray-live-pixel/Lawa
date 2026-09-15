@@ -35,6 +35,7 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
       Создать run, запустить готовые кубики и наблюдать их до результата.
   lawa resume <run-id>
       Сверить thread и продолжить interrupted-кубики / cancelled-посещения v2.
+  lawa graph <run-id> [--theme dark|light] [--output <файл.png>] [--root <путь>]
   lawa status <run-id>
       Показать состояния и активность; для v2 — visits, решения и причину итога.
   lawa logs <run-id> [step-id] [--visit <visit-id>] [--follow]
@@ -93,15 +94,16 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
                                требует --yes.
   --codex-home <путь>          Корень скиллов; по умолчанию $CODEX_HOME или ~/.codex.
 
-status, logs, serve, validate, skill, version, update и help не запускают агентов.
+graph, status, logs, serve, validate, skill, version, update и help не запускают агентов.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
 Resume отправляет continue только interrupted-чатам и cancelled-посещениям v2;
 технически failed visit не повторяется, но может быть источником v2 after.
 Run и resume печатают краткую статистику и VS Code-ссылку не чаще раза в 5 минут;
-первый и финальный снимки выводятся сразу. Подробный workflow-status.md и схема
-обновляются локально при изменениях и не реже раза в минуту.
+первый и финальный снимки выводятся сразу. Подробный workflow-status.md
+обновляется локально при изменениях и не реже раза в минуту.
+Картинка создаётся по запросу: lawa graph. Тема по умолчанию — dark; нужен PlantUML.
 Max-parallel сохраняется для root и суммарно ограничивает отдельные процессы run
 и resume; без сохранённого значения собственного лимита нет.
 Кубики могут запускать дочерние workflow через встроенные run_child/run_children;
@@ -277,6 +279,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return runCommand(ctx, args[1:], out, stderr, deps)
 	case "resume":
 		return resumeCommand(ctx, args[1:], out, stderr, deps)
+	case "graph":
+		return graphCommand(ctx, args[1:], out, deps)
 	case "status":
 		return statusCommand(args[1:], out, deps)
 	case "logs":
