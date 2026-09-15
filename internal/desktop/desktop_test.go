@@ -256,3 +256,94 @@ func TestBusyPortRemainsUntouched(t *testing.T) {
 		t.Fatalf("ожидалась ошибка порта: %v", err)
 	}
 }
+
+// TestCertificateRenewalWriteFailurePreservesPair воспроизводит обновление
+// действующей установки за 25 дней до истечения сертификата. Отказ публикации
+// нового сертификата не должен ломать HTTPS и последующую попытку обновления.
+func TestCertificateRenewalWriteFailurePreservesPair(t *testing.T) {
+	p := UserPaths(t.TempDir())
+	if err := os.MkdirAll(p.Dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := ensureCertificate(p, now.Add(-340*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	certPath, keyPath := filepath.Join(p.Dir, "server.pem"), filepath.Join(p.Dir, "server.key")
+	originalCert, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalKey, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeErr := errors.New("отказ записи нового сертификата")
+	err = ensureCertificateWithWriter(p, now, func(path string, data []byte, mode os.FileMode) error {
+		if path == certPath {
+			return writeErr
+		}
+		return writeFile(path, data, mode)
+	})
+	if !errors.Is(err, writeErr) {
+		t.Fatalf("ошибка записи потеряна: %v", err)
+	}
+	// Сравнение файлов доказывает сохранность прежней пары, а загрузка и TLS-
+	// запрос ниже проверяют пользовательский результат: HTTPS всё ещё работает.
+	for path, want := range map[string][]byte{certPath: originalCert, keyPath: originalKey} {
+		got, err := os.ReadFile(path)
+		if err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("после сбоя изменён %s: %v", filepath.Base(path), err)
+		}
+	}
+	pair, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(desktopHandler(http.NotFoundHandler()))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{pair}}
+	server.StartTLS()
+	defer server.Close()
+	client, err := readyClient(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.CloseIdleConnections()
+	client.Transport.(*http.Transport).DialContext = func(ctx context.Context, _, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", server.Listener.Addr().String())
+	}
+	if err = ready(context.Background(), client); err != nil {
+		t.Fatalf("HTTPS после сбоя недоступен: %v", err)
+	}
+	// Обычный повтор без отказа выпускает новый сертификат с прежним ключом.
+	if err = ensureCertificate(p, now); err != nil {
+		t.Fatalf("повторная попытка: %v", err)
+	}
+	renewedCert, err := os.ReadFile(certPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unchangedKey, err := os.ReadFile(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Equal(renewedCert, originalCert) || !bytes.Equal(unchangedKey, originalKey) {
+		t.Fatal("сертификат должен обновиться, а ключ — сохраниться")
+	}
+	renewedPair, err := tls.LoadX509KeyPair(certPath, keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	renewed, err := x509.ParseCertificate(renewedPair.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(renewed)
+	if _, err = renewed.Verify(x509.VerifyOptions{Roots: roots, DNSName: Host, CurrentTime: now}); err != nil {
+		t.Fatal(err)
+	}
+	if !renewed.NotAfter.After(now.Add(364 * 24 * time.Hour)) {
+		t.Fatal("срок сертификата не продлён")
+	}
+}
