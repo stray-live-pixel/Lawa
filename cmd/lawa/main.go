@@ -35,6 +35,8 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
       Создать run, запустить готовые кубики и наблюдать их до результата.
   lawa resume <run-id>
       Сверить thread и продолжить interrupted-кубики / cancelled-посещения v2.
+  lawa graph <run-id> [--theme dark|light] [--output <файл.png>] [--root <путь>]
+      Сохранить PNG графа; по умолчанию тёмная тема, нужен PlantUML.
   lawa status <run-id>
       Показать состояния и активность; для v2 — visits, решения и причину итога.
   lawa logs <run-id> [step-id] [--visit <visit-id>] [--follow]
@@ -93,7 +95,7 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
                                требует --yes.
   --codex-home <путь>          Корень скиллов; по умолчанию $CODEX_HOME или ~/.codex.
 
-status, logs, serve, validate, skill, version, update и help не запускают агентов.
+graph, status, logs, serve, validate, skill, version, update и help не запускают агентов.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
@@ -277,6 +279,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return runCommand(ctx, args[1:], out, stderr, deps)
 	case "resume":
 		return resumeCommand(ctx, args[1:], out, stderr, deps)
+	case "graph":
+		return graphCommand(ctx, args[1:], out, deps)
 	case "status":
 		return statusCommand(args[1:], out, deps)
 	case "logs":

@@ -103,6 +103,7 @@ func Handler(root string) http.Handler {
 	mux.HandleFunc("GET /api/preview", h.preview)
 	mux.HandleFunc("GET /assets/lawa-logo.png", h.logo)
 	mux.HandleFunc("GET /memory/{run}/{thread}", h.memory)
+	mux.HandleFunc("GET /graph-image/{run}", h.graphImage)
 	mux.HandleFunc("GET /events/{run}", h.events)
 	mux.HandleFunc("GET /api/trace/{run}", h.trace)
 	mux.HandleFunc("POST /api/runs/{run}/stop-and-delete", h.stopAndDelete)

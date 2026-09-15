@@ -16,6 +16,7 @@ import type { Graph, GraphEdge, GraphNode } from '../types';
 import { usePoll } from '../hooks/api';
 import { MarkdownDocument, MemoryDialog } from './MarkdownDocument';
 import { Trace } from './Trace';
+import { ImageExport } from './ImageExport';
 import { Button, Dialog, ErrorNotice, Status, statusNames } from './ui';
 
 // Dagre раскладывает зависимости, развилки и циклы. Только topology участвует
@@ -85,6 +86,7 @@ export function WorkflowGraph({
   return (
     <GraphView
       graph={graph}
+      preview={!!preview}
       error={error}
       initialStep={stepID}
       initialVisit={visitID}
@@ -97,12 +99,14 @@ export function WorkflowGraph({
 // Выбор конкретного visit независим от последнего статуса узла на схеме.
 function GraphView({
   graph,
+  preview,
   error,
   initialStep,
   initialVisit,
   onSelectionChange,
 }: {
   graph: Graph;
+  preview?: boolean;
   error?: string;
   initialStep?: string;
   initialVisit?: string;
@@ -221,6 +225,7 @@ function GraphView({
           </footer>
         </div>
         <aside className="cube-details" aria-label="Информация о кубике">
+          {!preview && <ImageExport runID={graph.ID} />}
           <h2>{selected?.ID || 'Нет кубиков'}</h2>
           <Status state={execution?.State || 'pending'} />
           {executions.length > 1 && (

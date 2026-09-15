@@ -52,6 +52,7 @@ go build -o bin/lawa ./cmd/lawa
 - `src/components/Tree.tsx`, `RunInfo.tsx` — дерево, детали и действия запуска.
 - `WorkflowGraph.tsx` — React Flow и раскладка Dagre; отдельный lazy chunk.
 - `Trace.tsx` — курсорное чтение сообщений, изоляция turn, ограничение памяти.
+- `ImageExport.tsx` — явный PNG-экспорт через локальный PlantUML, выбор темы.
 - `Continuation.tsx` — выбор и копирование контекста в новый чат.
 - `components/ui.tsx` — общие кнопки, статусы и диалоги Radix; вкладки тоже Radix.
 - `styles.css` — нейтральная тёмная тема и общие CSS-переменные.
@@ -79,6 +80,7 @@ go build -o bin/lawa ./cmd/lawa
 | `GET /api/trace/{run}` | Live-вывод с курсором и необязательным visit |
 | `POST /api/runs/{run}/stop-and-delete` | Подтверждённая остановка и удаление; проверка Origin |
 | `/memory/…`, `/events/…`, `/uml/…` | Существующие текстовые ресурсы и старые PNG |
+| `GET /graph-image/{run}?theme=dark` | PNG по запросу; `light`, `download=1` |
 | `/assets/lawa-logo.png` | Встроенный логотип |
 | `/ui/assets/…` | Хешированные JS/CSS; долгий immutable cache |
 

@@ -16,6 +16,7 @@ import { Continuation } from './Continuation';
 import { mergeTrace } from './Trace';
 import { layout, WorkflowGraph } from './WorkflowGraph';
 import App from '../App';
+import { ImageExport } from './ImageExport';
 import { RunTree } from './Tree';
 import { Dialog } from './ui';
 
@@ -420,4 +421,28 @@ it('сообщения загружаются только после откры
   fireEvent.click(screen.getByRole('button', { name: 'Сообщения и действия' }));
   expect(screen.getByRole('dialog')).toBeInTheDocument();
   await waitFor(() => expect(fetcher).toHaveBeenCalled());
+});
+
+// Экспорт выполняется по клику и сохраняет выбранную тему при polling.
+it('PNG использует тёмную тему по умолчанию и сохраняет выбор при обновлении', () => {
+  const fetcher = vi.fn();
+  vi.stubGlobal('fetch', fetcher);
+  const view = render(<ImageExport runID="run-a" />);
+  expect(screen.getByRole('link', { name: 'Показать PNG ↗' })).toHaveAttribute(
+    'href',
+    '/graph-image/run-a?theme=dark',
+  );
+  fireEvent.change(screen.getByLabelText('Тема картинки'), {
+    target: { value: 'light' },
+  });
+  view.rerender(<ImageExport runID="run-a" />);
+  expect(screen.getByRole('link', { name: 'Показать PNG ↗' })).toHaveAttribute(
+    'href',
+    '/graph-image/run-a?theme=light',
+  );
+  expect(screen.getByRole('link', { name: 'Скачать PNG ↓' })).toHaveAttribute(
+    'href',
+    '/graph-image/run-a?theme=light&download=1',
+  );
+  expect(fetcher).not.toHaveBeenCalled();
 });
