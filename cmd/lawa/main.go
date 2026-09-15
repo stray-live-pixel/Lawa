@@ -23,6 +23,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/dashboard"
+	"github.com/stray-live-pixel/Lawa/internal/desktop"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/series"
 	"github.com/stray-live-pixel/Lawa/internal/statusreport"
@@ -42,7 +43,11 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
   lawa logs <run-id> [step-id] [--visit <visit-id>] [--follow]
       Показать журнал всего run, логического шага или точного посещения v2.
   lawa serve [--root <путь>] [--listen <адрес>]
-      Запустить read-only dashboard; по умолчанию http://127.0.0.1:60800.
+      Запустить read-only dashboard; http://127.0.0.1:60800, после macOS-установки HTTPS.
+  lawa ui
+      Открыть установленный UI macOS (HTTPS, порт 60800).
+  lawa desktop-install
+      Создать значок в Applications, локальный адрес и доверие HTTPS на macOS.
   lawa series-status <series-id>
       Показать режим, прогресс, текущий run и время следующего запуска.
   lawa series-stop <series-id>
@@ -95,7 +100,7 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
                                требует --yes.
   --codex-home <путь>          Корень скиллов; по умолчанию $CODEX_HOME или ~/.codex.
 
-graph, status, logs, serve, validate, skill, version, update и help не запускают агентов.
+graph, status, logs, serve, ui, desktop-install, validate, skill, version, update и help не запускают агентов.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
@@ -285,6 +290,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return statusCommand(args[1:], out, deps)
 	case "logs":
 		return logsCommand(ctx, args[1:], out, deps)
+	case "ui", "desktop-install", "desktop-hosts", "desktop-app":
+		return desktopCommand(ctx, args, out, deps)
 	case "serve":
 		return serveCommand(ctx, args[1:], out, stderr, deps)
 	case "series-status":
@@ -421,6 +428,16 @@ func serveCommand(ctx context.Context, args []string, out, stderr io.Writer, dep
 		if _, err = fmt.Fprintf(stderr, "lawa: предупреждение: dashboard доступен не только с этого компьютера; live-вывод может содержать секреты: %s\n", parsed.address); err != nil {
 			return err
 		}
+	}
+	home, err := deps.userHomeDir()
+	if err != nil {
+		return err
+	}
+	if parsed.address == dashboard.DefaultAddress && desktop.Configured(home) {
+		if _, err = fmt.Fprintln(out, "Dashboard:", desktop.URL); err != nil {
+			return err
+		}
+		return desktop.Serve(ctx, home, parsed.root)
 	}
 	if _, err = fmt.Fprintf(out, "Dashboard: http://%s\nPreview: http://%s/preview\n", parsed.address, parsed.address); err != nil {
 		return err

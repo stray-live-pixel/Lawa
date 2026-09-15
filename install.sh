@@ -269,6 +269,10 @@ say "  Платформа: $release_os/$release_arch"
 say "  Текущая установка: $current_installation"
 say "  Новый бинарник: $binary_path"
 say "  Новый скилл: $skill_path"
+if [ "$release_os" = darwin ]; then
+    say "  macOS: /Applications/Lawa.app и https://local.lawa.app:60800."
+    say "  Потребуются права администратора для /etc/hosts и локального HTTPS-сертификата."
+fi
 if [ "$plantuml_available" -eq 1 ]; then
 	say "  PlantUML: $plantuml_path — $plantuml_version"
 else
@@ -522,6 +526,13 @@ fi
 transaction_active=0
 rm -f "$backup_binary" "$backup_skill"
 [ -n "$backup_profile" ] && rm -f "$backup_profile"
+
+# Desktop регистрируется уже из окончательного бинарника. При отказе системных
+# прав CLI остаётся установленным, а ошибка честно сообщает о незавершённой
+# интеграции. Повторный desktop-install восстанавливает её без нового скачивания.
+if [ "$release_os" = darwin ]; then
+    "$binary_path" desktop-install || die "CLI установлен, но интеграция macOS не завершена. Повторите: $binary_path desktop-install"
+fi
 
 say "[9/9] Lawa $requested_version установлена и проверена."
 say "  Бинарник: $binary_path"

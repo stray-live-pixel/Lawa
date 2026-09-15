@@ -27,6 +27,7 @@ type installerFixture struct {
 	managerLog  string
 	downloadLog string
 	version     string
+	releaseOS   string
 	script      string
 	shell       string
 	installDir  string
@@ -143,7 +144,11 @@ func (fixture *installerFixture) writeTool(name, body string) {
 // skill, поэтому установщик проверяет согласованность двух компонентов.
 func (fixture *installerFixture) writeRelease(version string, corruptChecksum bool) {
 	fixture.t.Helper()
-	archiveName := "lawa_" + version + "_linux_amd64.tar.gz"
+	releaseOS := fixture.releaseOS
+	if releaseOS == "" {
+		releaseOS = "linux"
+	}
+	archiveName := "lawa_" + version + "_" + releaseOS + "_amd64.tar.gz"
 	archivePath := filepath.Join(fixture.release, archiveName)
 	var archive bytes.Buffer
 	gzipWriter := gzip.NewWriter(&archive)
@@ -152,6 +157,7 @@ func (fixture *installerFixture) writeRelease(version string, corruptChecksum bo
 case "$1" in
   version) printf '%%s\n' %q ;;
   skill) printf '# Fake Lawa skill for %%s\n' %q ;;
+  desktop-install) printf '%%s\n' "$0" >> "$FAKE_DESKTOP_LOG"; exit "${FAKE_DESKTOP_EXIT:-0}" ;;
   *) exit 2 ;;
 esac
 `, version, version))
@@ -560,6 +566,38 @@ func TestInstallerRejectsUnsupportedPlatform(t *testing.T) {
 			}
 			if _, statErr := os.Stat(fixture.downloadLog); !os.IsNotExist(statErr) {
 				t.Fatalf("до ошибки платформы началась загрузка: %v", statErr)
+			}
+		})
+	}
+}
+
+// TestMacDesktopInstall проверяет вызов окончательного бинарника, а также
+// честную частичную установку при отказе системных прав: CLI уже доступен,
+// но успех desktop-интеграции не объявляется и скачивать всё заново не нужно.
+func TestMacDesktopInstall(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(fmt.Sprint(failure), func(t *testing.T) {
+			fixture := newInstallerFixture(t, false)
+			fixture.releaseOS = "darwin"
+			fixture.writeRelease(fixture.version, false)
+			log := filepath.Join(fixture.root, "desktop.log")
+			fixture.extraEnv = []string{"FAKE_UNAME_S=Darwin", "FAKE_DESKTOP_LOG=" + log}
+			if failure {
+				fixture.extraEnv = append(fixture.extraEnv, "FAKE_DESKTOP_EXIT=1")
+			}
+			stdout, stderr, err := fixture.run("--version", fixture.version, "--yes")
+			if (err != nil) != failure {
+				t.Fatalf("установка: %v\n%s\n%s", err, stdout, stderr)
+			}
+			called, readErr := os.ReadFile(log)
+			if readErr != nil || strings.TrimSpace(string(called)) != filepath.Join(fixture.installDir, "lawa") {
+				t.Fatalf("desktop вызван не из установленного бинарника: %v %s", readErr, called)
+			}
+			if fixture.installedVersion() != fixture.version {
+				t.Fatal("CLI потерян")
+			}
+			if failure && !strings.Contains(stderr, "CLI установлен, но интеграция macOS не завершена") {
+				t.Fatal(stderr)
 			}
 		})
 	}
