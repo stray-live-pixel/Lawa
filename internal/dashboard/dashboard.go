@@ -69,18 +69,18 @@ type scheduledRun struct {
 // runNode — готовая к HTML структура одного workflow и его потомков. Все URL
 // строит сервер из проверенных ID, поэтому template.URL не содержит сырого ввода.
 type runNode struct {
-	ID, ParentID, Name, State, Tone, Updated           string
-	TicketID, TicketTitle                              string
-	StopReason, StopVisit, StopLimit                   string
-	EventsURL, VSCodeURL, UMLURL, DeleteURL            template.URL
-	TicketURL                                          template.URL
-	HasUML, Open, HasUnfinished, HasWorking, HasFailed bool
-	AgentGraph                                         bool
-	CompletedSteps, TotalSteps                         int
-	Steps, ActiveSteps                                 []stepNode
-	Children                                           []*runNode
-	createdAt, updatedAt, activityAt                   time.Time
-	baseSearch, searchText, treeState                  string
+	ID, ParentID, Name, State, Tone, Updated   string
+	TicketID, TicketTitle                      string
+	StopReason, StopVisit, StopLimit           string
+	EventsURL, VSCodeURL, DeleteURL            template.URL
+	TicketURL                                  template.URL
+	Open, HasUnfinished, HasWorking, HasFailed bool
+	AgentGraph                                 bool
+	CompletedSteps, TotalSteps                 int
+	Steps, ActiveSteps                         []stepNode
+	Children                                   []*runNode
+	createdAt, updatedAt, activityAt           time.Time
+	baseSearch, searchText, treeState          string
 }
 
 // stepNode описывает лист дерева и доступность его сохранённой памяти.
@@ -108,6 +108,8 @@ func Handler(root string) http.Handler {
 	mux.HandleFunc("GET /events/{run}", h.events)
 	mux.HandleFunc("GET /api/trace/{run}", h.trace)
 	mux.HandleFunc("POST /api/runs/{run}/stop-and-delete", h.stopAndDelete)
+	mux.HandleFunc("GET /graph/{run}", h.graph)
+	mux.HandleFunc("GET /api/graph/{run}", h.graph)
 	mux.HandleFunc("GET /uml/{run}", h.uml)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// ServeMux канонизирует пути с `..` редиректом. Для read-only локального
@@ -689,14 +691,6 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		node.updatedAt = info.ModTime()
 		node.Updated = node.updatedAt.Local().Format("2006-01-02 15:04:05")
 	}
-	// Наличие артефактов определяется по метаданным файлов: обычный polling
-	// сохраняет рабочие ссылки, но не читает содержимое UML и memory.
-	if info, err := os.Lstat(filepath.Join(root, runID, runstore.StatusImageFilename)); err == nil && info.Mode().IsRegular() {
-		// Версия из ModTime меняет HTML при обновлении PNG. Polling заменяет
-		// карточку и браузер запрашивает новое изображение, не показывая старый кэш.
-		node.HasUML = true
-		node.UMLURL = template.URL("/uml/" + runID + "?v=" + strconv.FormatInt(info.ModTime().UnixNano(), 10))
-	}
 	for _, step := range snapshot.Meta.Steps {
 		active := activeStepState(step.State)
 		if step.State == scheduler.Succeeded {
@@ -1075,7 +1069,7 @@ func previewPage(params viewParams, now time.Time) page {
 		}
 		node := &runNode{
 			ID: id, Name: name, State: state, Tone: tone(state), Updated: "2026-08-31 18:42:10",
-			EventsURL: action, VSCodeURL: action, UMLURL: action, DeleteURL: action, HasUML: true, Steps: steps, TotalSteps: len(steps),
+			EventsURL: action, VSCodeURL: action, DeleteURL: action, Steps: steps, TotalSteps: len(steps),
 			createdAt: now.Add(-age), updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
 		}
 		for _, item := range node.Steps {

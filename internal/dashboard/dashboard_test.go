@@ -285,7 +285,7 @@ TRACKER_CONTEXT_END`)
 		"selectionInside", "editableFocusInside", "schedulePanelOpen", "freshMarkup===dashboardMarkup", "traceRenderPending", "node.open=!node.open",
 		"setTimeout(()=>input.form?.requestSubmit(),1000)", "setInterval(fetchTrace,10000)",
 		"/assets/lawa-logo.png", "Расписание запусков", "data-schedule-open", "next-run-time", "scheduled-workflow", "Запуск: " + plannedAt.Local().Format("02.01.2006 15:04:05"), "cron 0 10 * * * · Europe/Moscow",
-		"/uml/" + parent.Meta.RunID, "/memory/" + child.Meta.RunID + "/" + child.Meta.Steps[0].ThreadID,
+		"/graph/" + parent.Meta.RunID, "/memory/" + child.Meta.RunID + "/" + child.Meta.Steps[0].ThreadID,
 	} {
 		if !strings.Contains(html, fragment) {
 			t.Errorf("на странице нет %q", fragment)
@@ -300,10 +300,11 @@ TRACKER_CONTEXT_END`)
 	if strings.Contains(html, `class="tree-state"`) {
 		t.Fatal("дерево снова печатает текстовый статус справа от кубика")
 	}
-	if !strings.Contains(html, `class="uml-preview"`) || !strings.Contains(html, `target="_blank"`) ||
-		!strings.Contains(html, `<img src="/uml/`+parent.Meta.RunID+`?v=`) || strings.Contains(html, `>UML</`) {
-		t.Fatal("UML не показан ссылкой-превью или отдельная кнопка UML вернулась")
+	// Даже при сохранённом старом PNG UI должен открывать программный граф.
+	if !strings.Contains(html, "/graph/"+parent.Meta.RunID) || strings.Contains(html, `<img src="/uml/`) {
+		t.Fatal("интерактивный граф отсутствует или вернулось превью PlantUML")
 	}
+
 	allRecorder := httptest.NewRecorder()
 	dashboard.ServeHTTP(allRecorder, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
 	allHTML := allRecorder.Body.String()

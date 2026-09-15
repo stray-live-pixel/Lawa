@@ -12,6 +12,22 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
+// TestResultContractInBothPrompts гарантирует одинаковые правила отчёта для
+// legacy и v2 без зависимости от личных файлов скиллов на машине исполнителя.
+func TestResultContractInBothPrompts(t *testing.T) {
+	snapshot := runstore.Snapshot{}
+	legacy := buildPrompt(snapshot, workflow.Step{}, runstore.Step{}, t.TempDir())
+	agent, err := buildAgentPrompt(snapshot, workflow.Step{}, runstore.Visit{}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []string{legacy, agent} {
+		if !strings.Contains(prompt, resultInstructions) {
+			t.Fatal("в prompt потеряны правила финального отчёта")
+		}
+	}
+}
+
 // TestApplyRuntimeSettingsModelPriority фиксирует все три ступени выбора модели:
 // значение кубика, общий default workflow и наследование Codex через пустую Command.
 func TestApplyRuntimeSettingsModelPriority(t *testing.T) {
