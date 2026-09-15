@@ -798,6 +798,22 @@ func currentStatus(run *runstore.LockedRun) (Status, string, error) {
 	if err != nil {
 		return Status{}, "", fmt.Errorf("координатор: прочитать статус запуска: %w", err)
 	}
+	return snapshotStatus(snapshot)
+}
+
+// ReadStatus читает сохранённый снимок без coordinator.lock и обращения к Codex.
+// Экспорт не мешает активному run; содержимое фиксируется до запуска renderer.
+func ReadStatus(root, runID string) (Status, error) {
+	snapshot, err := runstore.LoadForDashboard(root, runID)
+	if err != nil {
+		return Status{}, err
+	}
+	status, _, err := snapshotStatus(snapshot)
+	return status, err
+}
+
+// snapshotStatus используется одинаково координатором и read-only экспортом.
+func snapshotStatus(snapshot runstore.Snapshot) (Status, string, error) {
 	status := Status{RunID: snapshot.Meta.RunID, WorkflowID: snapshot.Workflow.ID}
 	if snapshot.Meta.Version == 4 {
 		status.RunState, status.StopReason, status.StopVisitID = snapshot.Meta.RunState, snapshot.Meta.StopReason, snapshot.Meta.StopVisitID

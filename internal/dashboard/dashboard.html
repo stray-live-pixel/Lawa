@@ -109,6 +109,8 @@
   // серверных данных инспектор возвращает прежний workflow или кубик, если он всё
   // ещё проходит фильтр; иначе безопасно выбирает первый доступный узел.
   let inspectorSelection='';
+  // Тема переживает замену карточек при polling; ссылки открывают PNG нативно.
+  const imageThemes=new Map();
   const selectInspector=(root,requested)=>{
     const selectors=[...root.querySelectorAll('[data-inspector-select]')];
     const details=[...root.querySelectorAll('[data-inspector-detail]')];
@@ -131,6 +133,16 @@
   const maxTraceBlocks=500;
   const labels={agent_message_delta:'Сообщение агента',reasoning_summary_delta:'Краткое объяснение',command_output_delta:'Вывод команды',plan_updated:'План',item_started:'Действие',item_completed:'Результат',error:'Ошибка'};
   const initialize=root=>{
+    root.querySelectorAll('[data-image-export]').forEach(section=>{
+      const path=section.dataset.imageExport, select=section.querySelector('select');
+      select.value=imageThemes.get(path)||'dark';
+      const update=()=>{
+        imageThemes.set(path,select.value);
+        section.querySelector('[data-image-show]').href=path+'?theme='+select.value;
+        section.querySelector('[data-image-download]').href=path+'?theme='+select.value+'&download=1';
+      };
+      select.addEventListener('change',update);update();
+    });
     root.querySelectorAll('details[data-node]').forEach(node=>{
       if(searchActive||workingOnly||failedOnly)node.open=true;else remember(node,node.dataset.node);
       const toggle=node.querySelector(':scope>summary [data-folder-toggle]');
@@ -264,6 +276,7 @@
     <header class="detail-header">{{template "folder-icon" .}}<div class="detail-heading"><h2>{{.Name}}</h2><span class="detail-kind">Workflow · {{.State}}</span></div></header>
     <dl class="fact-grid"><dt>Run</dt><dd>{{.ID}}</dd>{{if .AgentGraph}}<dt>Посещения</dt>{{else}}<dt>Кубики</dt>{{end}}<dd>{{.CompletedSteps}} из {{.TotalSteps}} завершено</dd>{{if .Updated}}<dt>Обновлён</dt><dd>{{.Updated}}</dd>{{end}}{{if .TicketID}}<dt>Тикет</dt><dd>{{.TicketID}}{{if .TicketTitle}} · {{.TicketTitle}}{{end}}</dd>{{end}}{{if .StopReason}}<dt>Причина остановки</dt><dd>{{.StopReason}}</dd>{{end}}{{if .StopVisit}}<dt>Остановившее посещение</dt><dd>{{.StopVisit}}</dd>{{end}}{{if .StopLimit}}<dt>Достигнут лимит</dt><dd>{{.StopLimit}}</dd>{{end}}</dl>
     <div class="detail-actions"><a class="action" href="{{.EventsURL}}" title="Открыть краткий журнал событий Lawa">События</a><a class="action" href="{{.VSCodeURL}}" title="Открыть папку run в VS Code">Папка</a>{{if .TicketID}}{{if .TicketURL}}<a class="action action-ticket" href="{{.TicketURL}}" target="_blank" rel="noreferrer">Тикет · {{.TicketID}}</a>{{else}}<span class="action action-ticket disabled">Тикет · {{.TicketID}}</span>{{end}}{{end}}<button class="action action-danger" type="button" data-stop-delete="{{.DeleteURL}}">Остановить и удалить</button></div>
+    {{if ne .DeleteURL "#preview"}}<section class="detail-section" data-image-export="/graph-image/{{.ID}}"><h3>Картинка графа · PlantUML</h3><div class="detail-actions"><select class="action" name="theme" aria-label="Тема картинки"><option value="dark">Тёмная</option><option value="light">Светлая</option></select><a class="action" data-image-show href="/graph-image/{{.ID}}?theme=dark" target="_blank" rel="noopener">Показать PNG ↗</a><a class="action" data-image-download href="/graph-image/{{.ID}}?theme=dark&amp;download=1">Скачать PNG ↓</a></div></section>{{end}}
     {{if .HasUML}}<a class="uml-preview" href="{{.UMLURL}}" target="_blank" rel="noreferrer" title="Открыть UML-схему в новой вкладке"><img src="{{.UMLURL}}" loading="lazy" alt="UML-схема workflow {{.Name}}"></a>{{end}}
     {{if .ActiveSteps}}<section class="detail-section"><h3>Сейчас выполняются</h3><div class="current-steps">{{range .ActiveSteps}}<button class="current-step" type="button" data-trace="{{.TraceURL}}" data-title="{{$run.Name}} / {{.ID}}">{{template "cube-icon" .}}<span><span class="name">{{.ID}}</span>{{if .Action}}<span class="meta">{{.Action}}</span>{{end}}</span></button>{{end}}</div></section>{{end}}
   </article>
