@@ -8,7 +8,7 @@
 <header><a class="brand" href="/"><img src="/assets/lawa-logo.png" alt="">Lawa</a><a href="/">← Все запуски</a></header>
 <main><div class="heading"><div><div class="subtle">WORKFLOW / НАБЛЮДЕНИЕ</div><h1>{{.Name}}</h1><div class="subtle">Run {{.ID}}</div></div><div><span class="status" id="run-state"></span><div class="subtle" id="sync" aria-live="polite">Обновление каждые 3 секунды</div></div></div>
 <div class="workspace"><section class="graph-area" aria-label="Граф workflow"><div class="toolbar"><div class="legend"><span class="good"><i class="dot"></i>Готово</span><span class="busy"><i class="dot"></i>В работе</span><span class="bad"><i class="dot"></i>Ошибка</span><span class="muted"><i class="dot"></i>Ожидание</span></div><div class="controls"><button id="zoom-out" aria-label="Уменьшить граф">−</button><span id="scale">100%</span><button id="zoom-in" aria-label="Увеличить граф">+</button><button id="fit">Вместить</button></div></div><div class="viewport" id="viewport"><div class="stage" id="stage"><div class="canvas" id="canvas"><svg class="edges" id="edges" aria-hidden="true"></svg><div id="nodes"></div></div></div></div><div class="hint">Выберите кубик, чтобы увидеть результат и сообщения. Перетаскивайте фон для перемещения.</div></section>
-<aside class="details" aria-label="Работа выбранного кубика"><div class="detail-top"><div class="subtle">ВЫБРАННЫЙ КУБИК</div><h2 id="step-title">Выберите кубик</h2><span class="status" id="step-state"></span></div><select id="visits" aria-label="Посещение кубика"></select><h3>Результат работы</h3><div class="result hidden" id="result"></div><p class="note" id="note"></p><div class="facts" id="facts"></div><div class="links"><a id="memory" class="hidden">Память кубика ↗</a></div><section class="messages"><h3>Сообщения и действия</h3><div class="subtle" id="trace-status" aria-live="polite"></div><div id="messages"></div></section></aside></div></main>
+<aside class="details" aria-label="Работа выбранного кубика"><div class="detail-top"><div class="subtle">ВЫБРАННЫЙ КУБИК</div><h2 id="step-title">Выберите кубик</h2><span class="status" id="step-state"></span></div><select id="visits" aria-label="Посещение кубика"></select><h3>Результат работы</h3><div class="result hidden" id="result"></div><p class="note" id="note"></p><div class="facts" id="facts"></div><div class="links"><a id="memory" class="hidden">Память кубика ↗</a></div><section><h3>Продолжить в новом чате Codex</h3><select id="prompt-scope" aria-label="Контекст продолжения"><option value="cube">Выбранный кубик</option><option value="workflow">Весь workflow</option></select><textarea id="continuation" readonly aria-label="Промпт продолжения" style="width:100%;height:140px;margin:10px 0;background:var(--surface);color:var(--text);border:1px solid var(--line);padding:10px;font:11px/1.5 monospace;resize:vertical"></textarea><button id="copy-prompt">Скопировать промпт</button><div class="subtle" id="copy-status" aria-live="polite"></div></section><section class="messages"><h3>Сообщения и действия</h3><div class="subtle" id="trace-status" aria-live="polite"></div><div id="messages"></div></section></aside></div></main>
 <script>
 // Данные — обычный JSON, экранируемый Go html/template. Любой текст агента
 // попадает в DOM только через textContent, без HTML и исполнения Markdown.
@@ -226,8 +226,32 @@ function updateDetails() {
   if (chosenVisit) target.searchParams.set("visit", chosenVisit);
   else target.searchParams.delete("visit");
   history.replaceState(null, "", target);
+  updatePrompt();
   startTrace(entry?.TraceURL);
 }
+// Текст обновляется только при смене контекста: polling не сбрасывает выделение.
+function updatePrompt() {
+  const node = data.Nodes.find((item) => item.ID === selected);
+  const visits = executions(selected);
+  const entry = visits.find((item) => item.Key === chosenVisit) || visits.at(-1);
+  const prompt = $("prompt-scope").value === "workflow" ? data.Prompt : entry?.Prompt || node?.Prompt || "";
+  if ($("continuation").value !== prompt) {
+    $("continuation").value = prompt;
+    setText("copy-status", "");
+  }
+}
+$("prompt-scope").onchange = updatePrompt;
+$("copy-prompt").onclick = async () => {
+  const prompt = $("continuation").value;
+  try {
+    await navigator.clipboard.writeText(prompt);
+    setText("copy-status", "Скопировано. Вставьте в новый чат и добавьте задачу.");
+  } catch {
+    $("continuation").focus();
+    $("continuation").select();
+    setText("copy-status", "Скопируйте выделенный текст: Ctrl+C или ⌘C.");
+  }
+};
 $("visits").onchange = () => {
   chosenVisit = $("visits").value;
   updateDetails();

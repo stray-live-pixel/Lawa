@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"html/template"
 	"net/http"
+	"path/filepath"
 	"strings"
 
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
@@ -21,15 +22,15 @@ var graphTemplate = template.Must(template.New("graph").Parse(graphHTML))
 // graphView разделяет неизменяемую схему workflow и историю её исполнений.
 // Поэтому ещё не посещённый кубик виден, а цикл не затирает предыдущий результат.
 type graphView struct {
-	ID, Name, State, StopReason string
-	Nodes                       []graphNode
-	Edges                       []graphEdge
-	Executions                  []graphExecution
+	ID, Name, State, StopReason, Prompt string
+	Nodes                               []graphNode
+	Edges                               []graphEdge
+	Executions                          []graphExecution
 }
 
 type graphNode struct {
-	ID     string
-	Routes []string
+	ID, Prompt string
+	Routes     []string
 }
 
 type graphEdge struct{ From, To, Label string }
@@ -38,7 +39,7 @@ type graphEdge struct{ From, To, Label string }
 // загружаются отдельно по существующим защищённым маршрутам, не для всего графа.
 type graphExecution struct {
 	Key, StepID, State, Result, Note, Decision, Trigger string
-	TraceURL, MemoryURL                                 string
+	TraceURL, MemoryURL, Prompt                         string
 	Visit, Attempt                                      int
 }
 
@@ -72,10 +73,14 @@ func (h handler) loadGraph(runID string) (graphView, error) {
 	if err != nil {
 		return graphView{}, err
 	}
+	root, err := filepath.Abs(h.root)
+	if err != nil {
+		return graphView{}, err
+	}
 	node := makeRunNode(h.root, snapshot)
-	view := graphView{ID: runID, Name: node.Name, State: node.State, StopReason: node.StopReason}
+	view := graphView{ID: runID, Name: node.Name, State: node.State, StopReason: node.StopReason, Prompt: continuationPrompt(root, snapshot, "", "")}
 	for _, step := range snapshot.Workflow.Steps {
-		item := graphNode{ID: step.ID}
+		item := graphNode{ID: step.ID, Prompt: continuationPrompt(root, snapshot, step.ID, "")}
 		for _, source := range append(append([]string{}, step.DependsOn...), step.After...) {
 			view.Edges = append(view.Edges, graphEdge{From: source, To: step.ID, Label: "после"})
 		}
@@ -118,6 +123,7 @@ func (h handler) loadGraph(runID string) (graphView, error) {
 			Visit: step.Visit, Attempt: step.Attempt, Result: result, Note: note,
 			Decision: strings.Join(nonemptyStrings(step.Decision, step.Explanation, step.Transition), " · "),
 			Trigger:  step.Trigger, TraceURL: string(step.TraceURL)}
+		entry.Prompt = continuationPrompt(root, snapshot, step.StepID, step.VisitID)
 		if step.HasMemory {
 			entry.MemoryURL = string(step.MemoryURL)
 		}
