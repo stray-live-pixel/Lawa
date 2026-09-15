@@ -6,7 +6,6 @@ package dashboard
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,11 +37,6 @@ const (
 	runStopPoll      = 50 * time.Millisecond
 )
 
-//go:embed dashboard.html
-var pageHTML string
-
-var pageTemplate = template.Must(template.New("dashboard").Parse(pageHTML))
-
 // page — единая модель live и preview; Refresh пуст только у статичного макета.
 type page struct {
 	Title, Refresh, EmptyMessage string
@@ -66,7 +60,7 @@ type scheduledRun struct {
 	nextRunAt                                                 time.Time
 }
 
-// runNode — готовая к HTML структура одного workflow и его потомков. Все URL
+// runNode — готовая к JSON структура одного workflow и его потомков. Все URL
 // строит сервер из проверенных ID, поэтому template.URL не содержит сырого ввода.
 type runNode struct {
 	ID, ParentID, Name, State, Tone, Updated   string
@@ -101,14 +95,17 @@ type stepNode struct {
 func Handler(root string) http.Handler {
 	h := handler{root: root}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", h.live)
-	mux.HandleFunc("GET /preview", h.preview)
+	mux.HandleFunc("GET /{$}", serveUI)
+	mux.HandleFunc("GET /api/dashboard", h.live)
+	mux.HandleFunc("GET /ui/", serveUIAssets)
+	mux.HandleFunc("GET /preview", serveUI)
+	mux.HandleFunc("GET /api/preview", h.preview)
 	mux.HandleFunc("GET /assets/lawa-logo.png", h.logo)
 	mux.HandleFunc("GET /memory/{run}/{thread}", h.memory)
 	mux.HandleFunc("GET /events/{run}", h.events)
 	mux.HandleFunc("GET /api/trace/{run}", h.trace)
 	mux.HandleFunc("POST /api/runs/{run}/stop-and-delete", h.stopAndDelete)
-	mux.HandleFunc("GET /graph/{run}", h.graph)
+	mux.HandleFunc("GET /graph/{run}", serveUI)
 	mux.HandleFunc("GET /api/graph/{run}", h.graph)
 	mux.HandleFunc("GET /uml/{run}", h.uml)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -245,7 +242,7 @@ func (h handler) live(w http.ResponseWriter, r *http.Request) {
 	roots, problems := loadTree(h.root)
 	// Обычный polling сначала выбирает нужное временное окно по компактным
 	// meta.json. Содержимое журналов и memory требуется только карточкам,
-	// которые действительно попадут в HTML. Явный поиск остаётся полнотекстовым,
+	// которые действительно попадут в JSON ответа. Явный поиск остаётся полнотекстовым,
 	// поэтому для него подробности нужны до фильтрации.
 	if params.Query != "" {
 		problems = append(problems, hydrateRunNodes(h.root, roots, true)...)
@@ -370,20 +367,15 @@ func scheduleLabel(config series.Config) string {
 	}
 }
 
-// preview использует тот же шаблон, но никогда не обращается к runstore.
+// preview отдаёт демонстрационный DTO, не обращаясь к runstore.
 func (h handler) preview(w http.ResponseWriter, r *http.Request) {
 	render(w, previewPage(parseViewParams(r.URL.Query()), time.Now()))
 }
 
-// render полагается на html/template для экранирования всех видимых данных.
+// render отдаёт DTO: React строит интерфейс из JSON, не из серверной разметки.
+// Закрытые поля моделей не сериализуются; приватные ответы нельзя кэшировать.
 func render(w http.ResponseWriter, view page) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Cache-Control", "no-store")
-	if err := pageTemplate.ExecuteTemplate(w, "page", view); err != nil {
-		http.Error(w, "не удалось построить страницу", http.StatusInternalServerError)
-	}
+	writeJSON(w, view)
 }
 
 type traceResponse struct {
@@ -582,7 +574,7 @@ func (h handler) uml(w http.ResponseWriter, r *http.Request) {
 
 // loadTree изолирует повреждение одного каталога. Сначала все корректные run
 // собираются в map, затем связи проверяются на потерянных родителей и циклы.
-// Только после этого создаётся рекурсивная структура для безопасного шаблона.
+// Только после этого создаётся рекурсивная структура для JSON API.
 func loadTree(root string) ([]*runNode, []problem) {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {

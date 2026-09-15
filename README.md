@@ -277,7 +277,7 @@ attempt, решение и объяснение, выбранный перехо
 мешает удалению.
 Клик по папке выбирает run без изменения дерева; отдельный шеврон рядом сворачивает
 и разворачивает её потомков.
-Кнопка «Открыть интерактивный граф» открывает схему workflow: масштабирование,
+Выбор workflow в левом списке открывает схему: масштабирование,
 перемещение и выбор кубика. Справа — статус, сообщения и финальный отчёт.
 Для циклов можно выбрать конкретное посещение; схема показывает и ещё не
 запущенные кубики, зависимости `after`/`dependsOn` и именованные маршруты.
@@ -614,6 +614,11 @@ go mod tidy -diff
 sh -n install.sh
 ```
 
+Frontend собирается отдельно: `cd ui && npm ci && npm test && npm run build`.
+Нужен Node.js 22.12+; готовая статика хранится в Git и встраивается в Go-бинарник.
+После изменения UI пересоберите статику **перед** `go build`. Установленному
+пользователю Node.js не нужен. [Разработка UI и API](ui/README.md).
+
 Основные пакеты:
 
 ```text
@@ -624,7 +629,8 @@ internal/capacity/    общий root-level лимит через межпроц
 internal/coordinator/ orchestration и нормализация событий
 internal/codex/       клиент официального App Server
 internal/runstore/    атомарный state и приватный журнал
-internal/dashboard/   read-only observability UI
+internal/dashboard/  JSON API и встроенная статика dashboard
+ui/                  Vite + React + TypeScript; React Flow, Radix, CSS-тема
 internal/statusreport/ Markdown-статус; совместимость старого экспорта
 internal/series/      повторяющиеся app-server run
 ```

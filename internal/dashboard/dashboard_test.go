@@ -269,72 +269,31 @@ TRACKER_CONTEXT_END`)
 	addFutureMetadataFields(t, root, child.Meta.RunID)
 
 	dashboard := Handler(root)
-	recorder := httptest.NewRecorder()
-	dashboard.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/", nil))
-	html := recorder.Body.String()
-	for _, fragment := range []string{
-		"&lt;release&gt;&amp;", "child-workflow", "broken-run", "tone-running", "vscode://file/",
-		"0 из 1 завершено", "Работа агента", "Активные", "Все", "Все состояния", "В работе", "Сломавшиеся", "data-inspector", "folder-icon", "cube-icon",
-		`class="tree-ticket"`, ">THINKTWICE-592</span>", "Тикет · THINKTWICE-592", "[СП] Проблемы с модалкой на уровнях", "https://st.yandex-team.ru/THINKTWICE-592",
-		"Остановить и удалить", "data-stop-delete", "destructiveActionPending",
-		"События", "Папка", "/events/" + child.Meta.RunID, "/api/trace/" + child.Meta.RunID,
-		"За последний час", "За последние 2 часа", "За последние 4 часа", "За последние 8 часов", "За последние 12 часов",
-		"За последние 24 часа", "За последние 2 дня", "За последние 5 дней", "За последнюю неделю", "За последние 2 недели", "За последний месяц", "За всё время",
-		"Поиск по workflow, кубикам и тикетам…", "data-auto-submit", "data-search-input", "top-controls", "tree-scroll", "pin-button", "data-root-target", "data-folder-toggle",
-		"html,body{height:100%;overflow:hidden}", "flex:1;min-height:0",
-		"selectionInside", "editableFocusInside", "schedulePanelOpen", "freshMarkup===dashboardMarkup", "traceRenderPending", "node.open=!node.open",
-		"setTimeout(()=>input.form?.requestSubmit(),1000)", "setInterval(fetchTrace,10000)",
-		"/assets/lawa-logo.png", "Расписание запусков", "data-schedule-open", "next-run-time", "scheduled-workflow", "Запуск: " + plannedAt.Local().Format("02.01.2006 15:04:05"), "cron 0 10 * * * · Europe/Moscow",
-		"/graph/" + parent.Meta.RunID, "/memory/" + child.Meta.RunID + "/" + child.Meta.Steps[0].ThreadID,
-	} {
-		if !strings.Contains(html, fragment) {
-			t.Errorf("на странице нет %q", fragment)
-		}
+	view := readDashboard(t, dashboard, "/api/dashboard")
+	if len(view.Roots) != 1 || view.Roots[0].ID != parent.Meta.RunID || view.Roots[0].Name != `<release>&` || len(view.Roots[0].Children) != 1 {
+		t.Fatalf("API потерял активное дерево или исказил текст: %+v", view.Roots)
 	}
-	if strings.Contains(html, "failed-workflow") || strings.Contains(html, "succeeded-workflow") {
-		t.Fatal("режим по умолчанию показывает полностью завершённые workflow")
+	node := view.Roots[0].Children[0]
+	if node.TicketID != "THINKTWICE-592" || node.TicketTitle != "[СП] Проблемы с модалкой на уровнях" || node.TicketURL != "https://st.yandex-team.ru/THINKTWICE-592" || node.DeleteURL == "" || node.Steps[0].TraceURL == "" || !node.Steps[0].HasMemory {
+		t.Fatalf("API потерял тикет или действия: %+v", node)
 	}
-	if strings.Contains(html, ">Применить<") {
-		t.Fatal("dashboard снова требует отдельного применения фильтров")
+	if len(view.Problems) != 1 || view.Problems[0].Name != "broken-run" || len(view.Scheduled) != 1 || view.Scheduled[0].WorkflowID != "scheduled-workflow" || len(view.Filter.Periods) != len(periodDefinitions) {
+		t.Fatalf("потеряны диагностика, расписание или фильтры: %+v", view)
 	}
-	if strings.Contains(html, `class="tree-state"`) {
-		t.Fatal("дерево снова печатает текстовый статус справа от кубика")
+	all := readDashboard(t, dashboard, "/api/dashboard?period=all&view=all")
+	if len(all.Roots) != 3 {
+		t.Fatalf("режим Все потерял завершённые run: %+v", all.Roots)
 	}
-	// Даже при сохранённом старом PNG UI должен открывать программный граф.
-	if !strings.Contains(html, "/graph/"+parent.Meta.RunID) || strings.Contains(html, `<img src="/uml/`) {
-		t.Fatal("интерактивный граф отсутствует или вернулось превью PlantUML")
-	}
-
-	allRecorder := httptest.NewRecorder()
-	dashboard.ServeHTTP(allRecorder, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
-	allHTML := allRecorder.Body.String()
-	for _, fragment := range []string{"failed-workflow", "succeeded-workflow", "1 из 1 завершено", `value="all"`} {
-		if !strings.Contains(allHTML, fragment) {
-			t.Errorf("режим «Все» не показывает %q", fragment)
-		}
-	}
-	if strings.Index(html, parent.Meta.RunID) > strings.Index(html, child.Meta.RunID) {
-		t.Fatal("дочерний workflow показан вне родителя")
-	}
-	if strings.Contains(html, `data-group=`) || strings.Contains(html, `data-node="`+succeeded.Meta.RunID+`" open`) {
-		t.Fatal("workflow снова разбиты по статусам или завершённый run раскрыт по умолчанию")
-	}
-	if strings.Contains(html, "codex://") || strings.Contains(html, "Тред JSONL") {
-		t.Fatal("dashboard снова раскрыл нативные ссылки или сырой rollout Codex")
+	search := readDashboard(t, dashboard, "/api/dashboard?period=all&q=thinktwice-592")
+	if len(search.Roots) != 1 || search.Roots[0].ID != parent.Meta.RunID || len(search.Roots[0].Children) != 1 || search.Filter.Query != "thinktwice-592" || !search.Filter.HasActiveQuery {
+		t.Fatalf("поиск по тикету не сохранил дерево и параметры: %+v", search)
 	}
 	logo := httptest.NewRecorder()
 	dashboard.ServeHTTP(logo, httptest.NewRequest(http.MethodGet, "/assets/lawa-logo.png", nil))
-	if logo.Code != http.StatusOK || logo.Header().Get("Content-Type") != "image/png" || !bytes.Equal(logo.Body.Bytes(), assets.LawaLogoPNG) {
-		t.Fatalf("dashboard не отдал встроенный логотип: status=%d content-type=%q size=%d", logo.Code, logo.Header().Get("Content-Type"), logo.Body.Len())
+	if logo.Code != 200 || logo.Header().Get("Content-Type") != "image/png" || !bytes.Equal(logo.Body.Bytes(), assets.LawaLogoPNG) {
+		t.Fatal("потерян встроенный логотип")
 	}
-	search := httptest.NewRecorder()
-	dashboard.ServeHTTP(search, httptest.NewRequest(http.MethodGet, "/?period=all&q=thinktwice-592", nil))
-	searchHTML := search.Body.String()
-	if !strings.Contains(searchHTML, parent.Meta.RunID) || !strings.Contains(searchHTML, child.Meta.RunID) ||
-		strings.Contains(searchHTML, failed.Meta.RunID) || strings.Contains(searchHTML, succeeded.Meta.RunID) ||
-		!strings.Contains(searchHTML, `value="thinktwice-592"`) || !strings.Contains(searchHTML, `const searchActive= true ;`) {
-		t.Fatal("поиск по тикету не сохранил дерево, значение поля или режим раскрытия результатов")
-	}
+	var recorder *httptest.ResponseRecorder
 
 	recorder = httptest.NewRecorder()
 	dashboard.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/memory/"+child.Meta.RunID+"/"+child.Meta.Steps[0].ThreadID, nil))
@@ -451,108 +410,68 @@ func TestProtectedRoutes(t *testing.T) {
 // TestDashboardReadsEventsOnlyForSearch защищает границу между лёгким polling и
 // полнотекстовым поиском. Обычная страница строится без журнала даже для видимого
 // run; поисковый запрос читает журнал и показывает его повреждение оператору.
+// TestDashboardReadsEventsOnlyForSearch сохраняет границу лёгкого списка и
+// явного полнотекстового поиска после отделения JSON от React-рендера.
 func TestDashboardReadsEventsOnlyForSearch(t *testing.T) {
 	root := t.TempDir()
 	run := createRun(t, root, "visible-with-broken-events", "")
 	if err := os.WriteFile(filepath.Join(root, run.Meta.RunID, "events.jsonl"), []byte("not json\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	recorder := httptest.NewRecorder()
-	Handler(root).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/?period=all", nil))
-	body := recorder.Body.String()
-	if !strings.Contains(body, "visible-with-broken-events") || strings.Contains(body, `class="problem"`) {
-		t.Fatalf("обычный polling прочитал журнал видимого run: %q", body)
-	}
-	search := httptest.NewRecorder()
-	Handler(root).ServeHTTP(search, httptest.NewRequest(http.MethodGet, "/?period=all&q=visible", nil))
-	if !strings.Contains(search.Body.String(), `class="problem"`) {
-		t.Fatal("полнотекстовый поиск не сообщил о повреждённом журнале")
-	}
-}
-
-// TestDashboardSkipsHiddenEventLogs защищает основной сценарий оптимизации:
-// polling активного представления не должен разбирать журнал завершённого run,
-// который отфильтрован и не попадёт в HTML. Переход ко всем запускам тоже остаётся
-// лёгким: сам выбор временного окна не означает полнотекстовый поиск.
-func TestDashboardSkipsHiddenEventLogs(t *testing.T) {
-	root := t.TempDir()
-	run := createRun(t, root, "hidden-completed", "")
-	setState(t, root, run, scheduler.Succeeded)
-	if err := os.WriteFile(filepath.Join(root, run.Meta.RunID, "events.jsonl"), []byte("not json\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-
 	dashboard := Handler(root)
-	active := httptest.NewRecorder()
-	dashboard.ServeHTTP(active, httptest.NewRequest(http.MethodGet, "/", nil))
-	if strings.Contains(active.Body.String(), "журнал событий") {
-		t.Fatal("dashboard прочитал журнал скрытого завершённого run")
+	view := readDashboard(t, dashboard, "/api/dashboard?period=all")
+	if len(view.Roots) != 1 || len(view.Problems) != 0 {
+		t.Fatalf("polling прочитал журнал: %+v", view)
 	}
-
-	all := httptest.NewRecorder()
-	dashboard.ServeHTTP(all, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
-	if strings.Contains(all.Body.String(), `class="problem"`) {
-		t.Fatal("dashboard прочитал журнал после показа завершённого run")
+	search := readDashboard(t, dashboard, "/api/dashboard?period=all&q=visible")
+	if len(search.Problems) == 0 {
+		t.Fatal("поиск скрыл повреждение журнала")
+	}
+	setState(t, root, run, scheduler.Succeeded)
+	active := readDashboard(t, dashboard, "/api/dashboard")
+	all := readDashboard(t, dashboard, "/api/dashboard?period=all&view=all")
+	if len(active.Roots) != 0 || len(all.Roots) != 1 || len(all.Problems) != 0 {
+		t.Fatal("фильтр вызвал чтение скрытого журнала")
 	}
 }
 
-// TestPreview гарантирует, что макет использует production-шаблон и остаётся
-// достаточно сложным для визуальной оценки без run-хранилища.
+// TestPreview проверяет серверные фикстуры и все виды фильтрации без хранилища.
+// Вёрстку, диалоги и клавиатурную навигацию теперь проверяют тесты React.
 func TestPreview(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/preview?period=all&view=all", nil)
-	recorder := httptest.NewRecorder()
-	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(recorder, request)
-	body := recorder.Body.String()
-	for _, fragment := range []string{
-		"TEST DATA", "Consolas", "nightly-review", "35 мин", "Расписание запусков", "Запуск: ", "sync-project-status", "weekly-report",
-		"release-v0.3.0", "repair-failed-macos-build", "nightly-maintenance",
-		"prepare-release-notes-with-a-deliberately-long-name", "tone-running", "tone-failed", "tone-succeeded", "tone-skipped", "skipped", "#preview",
-		"Работа агента", "0 из 2 завершено", "1 из 2 завершено", "failed-nightly-cleanup", "previous-release", "За последние 24 часа", "За всё время",
-	} {
-		if !strings.Contains(body, fragment) {
-			t.Errorf("preview не показывает %q", fragment)
+	dashboard := Handler(filepath.Join(t.TempDir(), "missing"))
+	view := readDashboard(t, dashboard, "/api/preview?period=all&view=all")
+	if !view.Preview || view.Refresh != "" || len(view.Roots) < 2 || len(view.Scheduled) != 3 {
+		t.Fatalf("preview неполон: %+v", view)
+	}
+	for _, state := range []string{"working", "failed"} {
+		filtered := readDashboard(t, dashboard, "/api/preview?period=all&view=all&states="+state)
+		if len(filtered.Roots) == 0 || filtered.Filter.States != state {
+			t.Fatalf("preview потерял фильтр %s", state)
 		}
 	}
-	if strings.Contains(body, "Прогресс workflow и live-вывод") || strings.Contains(body, "<h1") || strings.Contains(body, "fake data") {
-		t.Fatal("preview снова показывает старый заголовок, subtitle или неоформленную тестовую метку")
+	focused := readDashboard(t, dashboard, "/api/preview?period=all&view=all&root=preview-repair")
+	if !focused.Filter.Focused || len(focused.Filter.FocusPath) < 2 || focused.Roots[0].ID != "preview-repair" {
+		t.Fatalf("preview потерял закреплённый run: %+v", focused)
 	}
-	if strings.Contains(body, "Ближайший") || strings.Contains(body, "через 35 мин") {
-		t.Fatal("пилюля ближайшего запуска снова содержит лишние пояснения")
+	live := readDashboard(t, dashboard, "/api/dashboard")
+	if live.Preview || live.Refresh != "3" || !strings.Contains(live.EmptyMessage, "Запусков пока нет") {
+		t.Fatal("пустой live API не содержит подсказку и polling")
 	}
-	if strings.Contains(body, "Будущие запуски") || strings.Contains(body, "schedule-eyebrow") {
-		t.Fatal("панель снова показывает двухстрочный заголовок")
+}
+
+// readDashboard проверяет HTTP-контракт, затем декодирует реальный ответ API.
+func readDashboard(t *testing.T, handler http.Handler, target string) page {
+	t.Helper()
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, target, nil))
+	if recorder.Code != 200 || recorder.Header().Get("Content-Type") != "application/json; charset=utf-8" || recorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("неверный API ответ: %d %s", recorder.Code, recorder.Body.String())
 	}
-	if strings.Contains(body, `data-refresh="3"`) {
-		t.Fatal("статичный preview неожиданно начал polling")
+	var view page
+	if err := json.Unmarshal(recorder.Body.Bytes(), &view); err != nil {
+		t.Fatal(err)
 	}
-	working := httptest.NewRecorder()
-	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(working, httptest.NewRequest(http.MethodGet, "/preview?period=all&view=all&states=working", nil))
-	workingBody := working.Body.String()
-	if !strings.Contains(workingBody, "build-all-platforms") || !strings.Contains(workingBody, "fix-and-rebuild") ||
-		strings.Contains(workingBody, "prepare-release-notes-with-a-deliberately-long-name") || strings.Contains(workingBody, "nightly-maintenance") {
-		t.Fatal("фильтр «В работе» не отделил выполняющиеся кубики и workflow")
-	}
-	focused := httptest.NewRecorder()
-	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(focused, httptest.NewRequest(http.MethodGet, "/preview?period=all&view=all&root=preview-repair", nil))
-	focusedBody := focused.Body.String()
-	if !strings.Contains(focusedBody, `aria-label="Закреплённая папка"`) || !strings.Contains(focusedBody, "release-v0.3.0") ||
-		!strings.Contains(focusedBody, "verify-related-artifacts") || !strings.Contains(focusedBody, "repair-failed-macos-build") ||
-		!strings.Contains(focusedBody, `class="tree-row parent-row"`) || strings.Contains(focusedBody, "focus-up") ||
-		strings.Index(focusedBody, `class="focus-nav"`) > strings.Index(focusedBody, `class="inspector-body"`) || strings.Contains(focusedBody, "nightly-maintenance") {
-		t.Fatal("закреплённый preview не показал путь, ../ или скрыл лишние корни")
-	}
-	failed := httptest.NewRecorder()
-	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(failed, httptest.NewRequest(http.MethodGet, "/preview?period=all&view=all&states=failed", nil))
-	failedBody := failed.Body.String()
-	if !strings.Contains(failedBody, "macos-arm64") || !strings.Contains(failedBody, "failed-nightly-cleanup") ||
-		!strings.Contains(failedBody, "cleanup-skipped-artifacts") || strings.Contains(failedBody, "build-all-platforms") || strings.Contains(failedBody, "linux-amd64") {
-		t.Fatal("фильтр «Сломавшиеся» не отделил аварийные кубики и workflow")
-	}
-	live := httptest.NewRecorder()
-	Handler(filepath.Join(t.TempDir(), "missing")).ServeHTTP(live, httptest.NewRequest(http.MethodGet, "/", nil))
-	if !strings.Contains(live.Body.String(), "Запусков пока нет") || !strings.Contains(live.Body.String(), `data-refresh="3"`) {
-		t.Fatal("пустой live dashboard не показывает подсказку или polling")
-	}
+	return view
 }
 
 // TestSortNodesByCreationTime фиксирует стабильный порядок папок: активность

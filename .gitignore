@@ -6,3 +6,7 @@
 
 # Результат локальной сборки CLI.
 /bin/
+
+# Зависимости и локальные отчёты frontend; web-сборка для go:embed хранится в Git.
+/ui/node_modules/
+/ui/coverage/

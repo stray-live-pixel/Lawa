@@ -1,23 +1,12 @@
 package dashboard
 
 import (
-	_ "embed"
-	"encoding/json"
-	"html/template"
 	"net/http"
 	"path/filepath"
 	"strings"
 
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 )
-
-// graphHTML — самостоятельный экран без CDN и renderer. Начальные данные
-// встроены через html/template, который экранирует их в JavaScript-контексте.
-//
-//go:embed graph.html
-var graphHTML string
-
-var graphTemplate = template.Must(template.New("graph").Parse(graphHTML))
 
 // graphView разделяет неизменяемую схему workflow и историю её исполнений.
 // Поэтому ещё не посещённый кубик виден, а цикл не затирает предыдущий результат.
@@ -43,26 +32,15 @@ type graphExecution struct {
 	Visit, Attempt                                      int
 }
 
-// graph показывает тот же снимок, что API; обход путей и повреждённые run
-// отклоняет runstore. Ни HTML, ни JSON с приватными результатами не кэшируются.
+// graph отдаёт JSON снимка; обход путей и повреждённые run отклоняет runstore.
+// Приватные результаты не кешируются. Статическую оболочку обслуживает serveUI.
 func (h handler) graph(w http.ResponseWriter, r *http.Request) {
 	view, err := h.loadGraph(r.PathValue("run"))
 	if err != nil {
 		http.Error(w, "Не удалось прочитать запуск: "+diagnostic(err), http.StatusNotFound)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	if strings.HasPrefix(r.URL.Path, "/api/") {
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(view)
-		return
-	}
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := graphTemplate.Execute(w, view); err != nil {
-		http.Error(w, "Не удалось построить граф", http.StatusInternalServerError)
-	}
+	writeJSON(w, view)
 }
 
 // loadGraph строит рёбра по workflow, а не по порядку строк metadata. after и
