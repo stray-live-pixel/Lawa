@@ -26,7 +26,7 @@ func TestGraphIncludesUnstartedDependencies(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(view.Nodes) != 2 || len(view.Edges) != 1 || view.Edges[0] != (graphEdge{"a", "b", "после"}) {
+		if len(view.Nodes) != 2 || len(view.Edges) != 1 || view.Edges[0] != (graphEdge{"a", "b", ""}) {
 			t.Fatalf("потеряна зависимость ещё не запущенного кубика: %+v", view)
 		}
 	}
