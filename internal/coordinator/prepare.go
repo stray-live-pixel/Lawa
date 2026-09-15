@@ -277,6 +277,9 @@ func buildPromptWithClosing(snapshot runstore.Snapshot, step workflow.Step, save
 	for _, saved := range snapshot.Meta.Steps {
 		path := filepath.Join(runDir, "memory", saved.ThreadID+".md")
 		memories = append(memories, fmt.Sprintf("- %s: %s", saved.ID, path))
+		if saved.Result != "" {
+			memories = append(memories, resultContext(saved.Result))
+		}
 		if saved.ID == step.ID {
 			ownMemory = path
 		}

@@ -3,6 +3,7 @@ import {
   Background,
   Controls,
   Handle,
+  MarkerType,
   Position,
   ReactFlow,
   type Node,
@@ -13,9 +14,9 @@ import dagre from '@dagrejs/dagre';
 import '@xyflow/react/dist/style.css';
 import type { Graph, GraphEdge, GraphNode } from '../types';
 import { usePoll } from '../hooks/api';
-import { Continuation } from './Continuation';
+import { MarkdownDocument, MemoryDialog } from './MarkdownDocument';
 import { Trace } from './Trace';
-import { ErrorNotice, Status, statusNames } from './ui';
+import { Button, Dialog, ErrorNotice, Status, statusNames } from './ui';
 
 // Dagre раскладывает зависимости, развилки и циклы. Только topology участвует
 // в раскладке: новые сообщения и состояния не меняют координаты или viewport.
@@ -107,6 +108,8 @@ function GraphView({
   initialVisit?: string;
   onSelectionChange?: (step: string, visit?: string) => void;
 }) {
+  const [memoryOpen, setMemoryOpen] = useState(false);
+  const [messagesOpen, setMessagesOpen] = useState(false);
   const [choice, setChoice] = useState({
     step: initialStep || '',
     visit: initialVisit || '',
@@ -156,8 +159,17 @@ function GraphView({
     target: edge.To,
     label: edge.Label,
     type: 'smoothstep',
+    markerEnd: {
+      type: MarkerType.ArrowClosed,
+      width: 22,
+      height: 22,
+      color: '#999',
+    },
+    style: { stroke: '#999', strokeWidth: 1.5 },
   }));
   const select = (step: string, visit = '') => {
+    setMemoryOpen(false);
+    setMessagesOpen(false);
     setChoice({ step, visit, source });
     onSelectionChange?.(step, visit);
   };
@@ -227,7 +239,11 @@ function GraphView({
           )}
           <h3>Результат работы</h3>
           {execution?.Result && (
-            <pre className="result">{execution.Result}</pre>
+            <MarkdownDocument
+              text={execution.Result}
+              label="Результат работы"
+              copyLabel="Скопировать результат"
+            />
           )}
           <p className="note">
             {execution?.Note || (!execution ? 'Кубик ещё не запускался.' : '')}
@@ -243,25 +259,32 @@ function GraphView({
               .filter(Boolean)
               .join('\n')}
           </div>
-          {execution?.MemoryURL && (
-            <a
-              className="button"
-              href={execution.MemoryURL}
-              target="_blank"
-              rel="noopener noreferrer"
+          <div className="actions">
+            {execution?.MemoryURL && (
+              <Button onClick={() => setMemoryOpen(true)}>Память кубика</Button>
+            )}
+            <Button
+              disabled={!execution?.TraceURL}
+              onClick={() => setMessagesOpen(true)}
             >
-              Память кубика ↗
-            </a>
-          )}
-          {selected && (
-            <Continuation
-              key={`${selected.ID}/${execution?.Key}`}
-              cube={execution?.Prompt || selected.Prompt}
-              workflow={graph.Prompt}
-            />
-          )}
-          <h3>Сообщения и действия</h3>
-          <Trace url={execution?.TraceURL} />
+              Сообщения и действия
+            </Button>
+          </div>
+          <MemoryDialog
+            key={`memory/${execution?.Key}`}
+            url={execution?.MemoryURL}
+            open={memoryOpen}
+            onOpenChange={setMemoryOpen}
+          />
+          <Dialog
+            open={messagesOpen}
+            onOpenChange={setMessagesOpen}
+            title={`Сообщения и действия · ${selected?.ID || ''}`}
+          >
+            {messagesOpen && (
+              <Trace key={execution?.Key} url={execution?.TraceURL} />
+            )}
+          </Dialog>
         </aside>
       </div>
     </section>

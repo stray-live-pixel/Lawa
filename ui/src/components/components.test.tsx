@@ -10,6 +10,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { MemoryRouter } from 'react-router-dom';
 import type { Dashboard, Graph, Run } from '../types';
 import { usePoll } from '../hooks/api';
+import { MarkdownDocument } from './MarkdownDocument';
+import { ContinuationPanel } from './Continuation';
 import { Continuation } from './Continuation';
 import { mergeTrace } from './Trace';
 import { layout, WorkflowGraph } from './WorkflowGraph';
@@ -34,6 +36,7 @@ vi.mock('@xyflow/react', () => ({
   Controls: () => null,
   Handle: () => null,
   Position: { Left: 'left', Right: 'right' },
+  MarkerType: { ArrowClosed: 'arrowclosed' },
 }));
 afterEach(() => {
   cleanup();
@@ -136,8 +139,10 @@ describe('Контекст и история', () => {
     );
     writeText.mockRejectedValueOnce(new Error('denied'));
     fireEvent.click(screen.getByRole('button', { name: 'Скопировать промпт' }));
-    await screen.findByText(/Скопируйте выделенный текст/);
-    expect(screen.getByLabelText('Промпт продолжения')).toHaveFocus();
+    await screen.findByText(/Скопируйте выделенную разметку/);
+    expect(
+      screen.getByLabelText('Исходный Markdown: Промпт продолжения'),
+    ).toHaveFocus();
   });
   it('различает turn, завершённый item заменяет delta, большие блоки ограничены', () => {
     const blocks = new Map();
@@ -189,9 +194,9 @@ describe('Контекст и история', () => {
       target: { value: 'visit-1' },
     });
     expect(screen.getByText('Итог: проход 1')).toBeInTheDocument();
-    expect(screen.getByLabelText('Промпт продолжения')).toHaveValue(
-      'context visit-1',
-    );
+    expect(
+      screen.queryByLabelText('Промпт продолжения'),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'next' }));
     expect(screen.getByText('Кубик ещё не запускался.')).toBeInTheDocument();
     expect(screen.queryByText('Итог: проход 1')).not.toBeInTheDocument();
@@ -354,4 +359,65 @@ it('возвращает фокус инициатору и связывает �
     </>,
   );
   await waitFor(() => expect(opener).toHaveFocus());
+});
+
+// HTML и адреса из Markdown — недоверенный текст. Проверяем безопасный render
+// одновременно с точной копией исходника, включая таблицы и fenced code.
+it('рендерит Markdown и копирует точный исходник без HTML и загрузки картинок', async () => {
+  const text =
+    '# Заголовок\n\n**Важно**\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n```go\nfmt.Println("ok")\n```\n<script>alert(1)</script>\n![secret](https://example.com/secret)\n[опасно](javascript:alert(1))';
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    value: { writeText },
+    configurable: true,
+  });
+  const { container } = render(
+    <MarkdownDocument text={text} label="Документ" />,
+  );
+  expect(
+    screen.getByRole('heading', { name: 'Заголовок' }),
+  ).toBeInTheDocument();
+  expect(screen.getByRole('table')).toBeInTheDocument();
+  expect(container.querySelector('script, img')).toBeNull();
+  expect(screen.getByText('опасно')).not.toHaveAttribute(
+    'href',
+    'javascript:alert(1)',
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Скопировать Markdown' }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith(text));
+});
+
+it('вкладка продолжения получает точное выбранное посещение', () => {
+  render(
+    <ContinuationPanel
+      runID="run-a"
+      stepID="loop"
+      visitID="visit-1"
+      preview={graph}
+      onSelectionChange={() => {}}
+    />,
+  );
+  expect(screen.getByLabelText('Промпт продолжения')).toHaveTextContent(
+    'context visit-1',
+  );
+  expect(screen.getByLabelText('Посещение для продолжения')).toHaveValue(
+    'visit-1',
+  );
+});
+
+it('сообщения загружаются только после открытия модалки', async () => {
+  const fetcher = vi.fn(() => response({ events: [], nextOffset: 0 }));
+  vi.stubGlobal('fetch', fetcher);
+  const sample = {
+    ...graph,
+    Executions: graph.Executions!.map((e) => ({
+      ...e,
+      TraceURL: '/api/trace/run-a?visit=' + e.Key,
+    })),
+  };
+  render(<WorkflowGraph runID="run-a" preview={sample} />);
+  expect(fetcher).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'Сообщения и действия' }));
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  await waitFor(() => expect(fetcher).toHaveBeenCalled());
 });

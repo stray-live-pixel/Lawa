@@ -373,6 +373,9 @@ func writeAgentVisitContext(target *strings.Builder, runDir string, visit runsto
 	fmt.Fprintf(target, "- step=%s, visit=%d, iteration=%d, visitId=%s, state=%s%s%s, memory=%s\n",
 		visit.StepID, visit.Visit, visit.Iteration, visit.VisitID, visit.State, diagnostic, decision,
 		filepath.Join(runDir, "memory", visit.VisitID+".md"))
+	if visit.Result != "" {
+		fmt.Fprintln(target, resultContext(visit.Result))
+	}
 }
 
 // addChooseDecision резервирует имя graph-control tool после внешнего

@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { Run, Step } from '../types';
 import { Button, Dialog, ErrorNotice, Facts, Status } from './ui';
 import { Trace } from './Trace';
+import { MarkdownDocument, MemoryDialog } from './MarkdownDocument';
 
 // Raw memory/events остаются экспортируемыми текстовыми ресурсами. Диалоги
 // действий реализованы React/Radix; destructive POST требует отдельного клика.
@@ -19,6 +20,7 @@ export function RunInfo({
   const [confirm, setConfirm] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
+  const [memoryOpen, setMemoryOpen] = useState(false);
   const [trace, setTrace] = useState<{ url: string; title: string } | null>(
     null,
   );
@@ -74,7 +76,13 @@ export function RunInfo({
             : []),
         ]}
       />
-      {step?.Message && <pre className="result">{step.Message}</pre>}
+      {step?.Result && (
+        <MarkdownDocument
+          text={step.Result}
+          label="Результат работы"
+          copyLabel="Скопировать результат"
+        />
+      )}
       <div className="actions">
         <a
           className="button"
@@ -117,9 +125,9 @@ export function RunInfo({
               Live-вывод
             </Button>
             {step.HasMemory && (
-              <a className="button" href={step.MemoryURL}>
-                Память
-              </a>
+              <Button disabled={preview} onClick={() => setMemoryOpen(true)}>
+                Память кубика
+              </Button>
             )}
           </>
         )}
@@ -147,6 +155,11 @@ export function RunInfo({
           ))}
         </section>
       )}
+      <MemoryDialog
+        url={step?.MemoryURL}
+        open={memoryOpen}
+        onOpenChange={setMemoryOpen}
+      />
       <Dialog
         open={confirm}
         onOpenChange={(open) => {

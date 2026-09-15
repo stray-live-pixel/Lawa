@@ -1,6 +1,7 @@
 // Контракт read-only API Go. Внешние поля сохраняют имена DTO; nullable-массивы
 // нормализуются у потребителя. Внутренние поля runstore сюда не передаются.
 export interface Step {
+  Result?: string;
   Key: string;
   ID: string;
   StepID: string;

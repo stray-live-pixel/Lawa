@@ -79,6 +79,7 @@ type runNode struct {
 
 // stepNode описывает лист дерева и доступность его сохранённой памяти.
 type stepNode struct {
+	Result                                                     string
 	Key, ID, StepID, VisitID                                   string
 	State, Tone, Runtime, Message, Action, Updated             string
 	Trigger, Decision, Explanation, Transition, Skipped, Limit string
@@ -691,7 +692,7 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State))
 		memoryPath := filepath.Join(root, runID, "memory", step.ThreadID+".md")
 		node.Steps = append(node.Steps, stepNode{
-			Key: step.ID, ID: step.ID, StepID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
+			Result: step.Result, Key: step.ID, ID: step.ID, StepID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
 			EventsURL: template.URL("/events/" + runID + "?step=" + url.QueryEscape(step.ID)),
 			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID), HasMemory: nonEmptyRegularFile(memoryPath),
 			TraceURL: template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
@@ -733,7 +734,7 @@ func makeAgentStepNode(root, runID string, visit runstore.Visit, definition work
 	query := url.QueryEscape(visit.VisitID)
 	memoryPath := filepath.Join(root, runID, "memory", visit.VisitID+".md")
 	item := stepNode{
-		Key: visit.VisitID, ID: fmt.Sprintf("%s#%d", visit.StepID, visit.Visit),
+		Result: visit.Result, Key: visit.VisitID, ID: fmt.Sprintf("%s#%d", visit.StepID, visit.Visit),
 		StepID: visit.StepID, VisitID: visit.VisitID, Visit: visit.Visit,
 		Iteration: visit.Iteration, Attempt: visit.Attempt,
 		State: string(visit.State), Tone: tone(string(visit.State)), Active: activeStepState(visit.State),

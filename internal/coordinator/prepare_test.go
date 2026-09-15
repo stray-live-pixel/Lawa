@@ -218,3 +218,22 @@ func TestPrepareChecksRoot(t *testing.T) {
 		t.Fatalf("ошибка root зарезервировала шаг: %+v, %v", saved.Meta.Steps, err)
 	}
 }
+
+// Следующий агент получает уже сохранённое свойство результата источника как
+// JSON-строку Markdown. Точный visit важен для циклов; разметка не теряется.
+func TestResultPropertyInNextAgentContext(t *testing.T) {
+	text := "Итог: **исправлено**\n\n- тесты прошли"
+	snapshot := runstore.Snapshot{Meta: runstore.Metadata{Steps: []runstore.Step{{ID: "source", Result: text}}}}
+	legacy := buildPrompt(snapshot, workflow.Step{ID: "next"}, runstore.Step{}, t.TempDir())
+	source := runstore.Visit{VisitID: "source-visit", StepID: "source", State: scheduler.Succeeded, Result: text}
+	snapshot.Meta.Visits = []runstore.Visit{source}
+	agent, err := buildAgentPrompt(snapshot, workflow.Step{ID: "next"}, runstore.Visit{VisitID: "next-visit", Trigger: runstore.VisitTrigger{SourceVisitIDs: []string{source.VisitID}}}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []string{legacy, agent} {
+		if !strings.Contains(prompt, resultContext(text)) {
+			t.Fatal("следующий агент не получил result источника")
+		}
+	}
+}
