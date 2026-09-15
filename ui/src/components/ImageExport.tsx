@@ -7,7 +7,7 @@ export function ImageExport({ runID }: { runID: string }) {
   const [theme, setTheme] = useState('dark');
   const path = `/graph-image/${encodeURIComponent(runID)}?theme=${theme}`;
   return (
-    <section aria-label="Экспорт графа" className="actions">
+    <section aria-label="Экспорт графа" className="image-export">
       <select
         aria-label="Тема картинки"
         value={theme}

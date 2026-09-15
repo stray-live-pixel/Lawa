@@ -64,6 +64,8 @@ type DecisionRecord struct {
 // Attempt возрастает при каждом новом turn того же Codex-чата. Старые посещения
 // никогда не переиспользуются для следующего прохода цикла.
 type Visit struct {
+	// Result относится к этому посещению и текущей попытке, не к последнему visit логического кубика.
+	Result         string          `json:"result,omitempty"`
 	VisitID        string          `json:"visitId"`
 	StepID         string          `json:"stepId"`
 	Visit          int             `json:"visit"`
@@ -134,6 +136,9 @@ func (s Snapshot) validateAgentGraph(runID string) error {
 	terminalSyntheticVisits := make(map[string]bool)
 	seenTerminalSynthetic := false
 	for index, visit := range m.Visits {
+		if !validResult(visit.Result, visit.TurnID, visit.State) {
+			return fmt.Errorf("посещение %q: result не соответствует исполнению", visit.VisitID)
+		}
 		step, exists := steps[visit.StepID]
 		if !exists || !validID(visit.VisitID) {
 			return fmt.Errorf("посещение %q: неизвестный stepId или неверный visitId", visit.VisitID)

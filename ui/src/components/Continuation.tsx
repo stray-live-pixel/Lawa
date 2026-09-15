@@ -1,8 +1,78 @@
-import { useRef, useState } from 'react';
-import { Button } from './ui';
+import { useState } from 'react';
+import { MarkdownDocument } from './MarkdownDocument';
+import type { Graph } from '../types';
+import { usePoll } from '../hooks/api';
+import { ErrorNotice } from './ui';
 
-// Поле остаётся обычным текстом: промпт можно прочитать и скопировать вручную,
-// в том числе в браузере без Clipboard API или на несекьюрном HTTP origin.
+// Выбор из графа передаётся вкладке по step/visit. Самостоятельное открытие
+// вкладки позволяет выбрать любой кубик, в том числе ещё не запущенный.
+export function ContinuationPanel({
+  runID,
+  stepID,
+  visitID,
+  preview,
+  onSelectionChange,
+}: {
+  runID: string;
+  stepID?: string;
+  visitID?: string;
+  preview?: Graph;
+  onSelectionChange: (step: string, visit?: string) => void;
+}) {
+  const { data, error } = usePoll<Graph>(
+    preview ? null : `/api/graph/${encodeURIComponent(runID)}`,
+  );
+  const graph = preview || data;
+  const selected =
+    graph?.Nodes?.find((node) => node.ID === stepID) || graph?.Nodes?.[0];
+  const executions = (graph?.Executions || []).filter(
+    (entry) => entry.StepID === selected?.ID,
+  );
+  const execution =
+    executions.find((entry) => entry.Key === visitID) || executions.at(-1);
+  return (
+    <section className="continuation-tab">
+      <h2>Продолжить в новом чате Codex</h2>
+      <ErrorNotice error={error} />
+      {graph ? (
+        <>
+          <div className="actions">
+            <select
+              aria-label="Кубик для продолжения"
+              value={selected?.ID || ''}
+              onChange={(event) => onSelectionChange(event.target.value)}
+            >
+              {graph.Nodes?.map((node) => (
+                <option key={node.ID}>{node.ID}</option>
+              ))}
+            </select>
+            {executions.length > 1 && (
+              <select
+                aria-label="Посещение для продолжения"
+                value={execution?.Key || ''}
+                onChange={(event) =>
+                  onSelectionChange(selected!.ID, event.target.value)
+                }
+              >
+                {executions.map((entry) => (
+                  <option key={entry.Key} value={entry.Key}>
+                    Посещение {entry.Visit || 1}
+                  </option>
+                ))}
+              </select>
+            )}
+          </div>
+          <Continuation
+            cube={execution?.Prompt || selected?.Prompt || graph.Prompt}
+            workflow={graph.Prompt}
+          />
+        </>
+      ) : (
+        !error && <p>Загрузка контекста…</p>
+      )}
+    </section>
+  );
+}
 export function Continuation({
   cube,
   workflow,
@@ -11,43 +81,21 @@ export function Continuation({
   workflow: string;
 }) {
   const [scope, setScope] = useState('cube');
-  const [copied, setCopied] = useState('');
-  const field = useRef<HTMLTextAreaElement>(null);
-  const prompt = scope === 'workflow' ? workflow : cube;
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(prompt);
-      setCopied('Скопировано. Добавьте задачу в новом чате.');
-    } catch {
-      field.current?.focus();
-      field.current?.select();
-      setCopied('Скопируйте выделенный текст: Ctrl+C или ⌘C.');
-    }
-  };
   return (
     <section>
-      <h3>Продолжить в новом чате Codex</h3>
       <select
         aria-label="Контекст продолжения"
         value={scope}
-        onChange={(event) => {
-          setScope(event.target.value);
-          setCopied('');
-        }}
+        onChange={(event) => setScope(event.target.value)}
       >
         <option value="cube">Этот кубик</option>
         <option value="workflow">Весь workflow</option>
       </select>
-      <textarea
-        ref={field}
-        readOnly
-        aria-label="Промпт продолжения"
-        value={prompt}
+      <MarkdownDocument
+        text={scope === 'workflow' ? workflow : cube}
+        label="Промпт продолжения"
+        copyLabel="Скопировать промпт"
       />
-      <Button onClick={() => void copy()}>Скопировать промпт</Button>
-      <p role="status" className="muted">
-        {copied}
-      </p>
     </section>
   );
 }

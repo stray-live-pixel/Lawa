@@ -93,7 +93,10 @@ func (h handler) loadGraph(runID string) (graphView, error) {
 			key = "visit:" + step.VisitID
 		}
 		result, note := executionResult(step, byExecution[key])
-		if eventErr != nil {
+		if step.Result != "" {
+			result, note = step.Result, strings.Join(nonemptyStrings(step.TechnicalError, step.DecisionError), "\n")
+		}
+		if eventErr != nil && step.Result == "" {
 			// Ошибка журнала не должна выглядеть как отсутствие ответа агента.
 			result, note = "", "Не удалось прочитать отчёт: "+diagnostic(eventErr)
 		}

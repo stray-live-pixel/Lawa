@@ -298,6 +298,14 @@ func (r *LockedRun) update(stepID string, state scheduler.State, chat string, sy
 		old.CodexThreadID != "" && old.CodexThreadID != chat {
 		return fmt.Errorf("шаг %q: нельзя сбросить запуск или изменить известный ID чата", stepID)
 	}
+	result := old.Result
+	if state != old.State || result == "" {
+		result, err = r.resultForState(stepID, "", old.TurnID, state)
+		if err != nil {
+			return err
+		}
+	}
+	s.Meta.Steps[index].Result = result
 	s.Meta.Steps[index].State, s.Meta.Steps[index].CodexThreadID = state, chat
 	if err = s.validate(r.runID); err != nil {
 		return err
@@ -331,6 +339,9 @@ func (r *LockedRun) SetTurn(stepID, turnID string) error {
 		}
 		if step.CodexThreadID == "" || step.State == scheduler.Pending || step.State == scheduler.Starting {
 			return fmt.Errorf("шаг %q ещё не связан с чатом Codex", stepID)
+		}
+		if step.TurnID != turnID {
+			s.Meta.Steps[index].Result = ""
 		}
 		s.Meta.Steps[index].TurnID = turnID
 		if err = s.validate(r.runID); err != nil {

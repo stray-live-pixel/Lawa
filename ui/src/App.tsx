@@ -12,6 +12,7 @@ import type { Dashboard, Run, Step } from './types';
 import { usePoll } from './hooks/api';
 import { Button, Dialog, ErrorNotice } from './components/ui';
 import { findRun, RunTree, type Selection } from './components/Tree';
+import { ContinuationPanel } from './components/Continuation';
 import { RunInfo } from './components/RunInfo';
 import { previewGraph } from './components/previewGraph';
 
@@ -34,6 +35,11 @@ function DashboardPage() {
     preview ? 0 : 3000,
   );
   const [selection, setSelection] = useState<Selection>();
+  const [graphChoice, setGraphChoice] = useState<{
+    runID: string;
+    step: string;
+    visit?: string;
+  }>();
   const [tab, setTab] = useState('graph');
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const change = (values: Record<string, string>) => {
@@ -47,6 +53,11 @@ function DashboardPage() {
   };
   const select = (run: Run, step?: Step) => {
     setSelection({ runID: run.ID, stepKey: step?.Key });
+    setGraphChoice({
+      runID: run.ID,
+      step: step?.StepID || '',
+      visit: step?.VisitID,
+    });
     setTab(step ? 'info' : 'graph');
   };
   const filterLink = (url: string) =>
@@ -235,6 +246,9 @@ function DashboardPage() {
                       <Tabs.List className="tabs" aria-label="Вид workflow">
                         <Tabs.Trigger value="graph">Граф</Tabs.Trigger>
                         <Tabs.Trigger value="info">Информация</Tabs.Trigger>
+                        <Tabs.Trigger value="continue">
+                          Продолжить в новом чате Codex
+                        </Tabs.Trigger>
                       </Tabs.List>
                       <Tabs.Content className="graph-tab" value="graph">
                         <Suspense
@@ -243,11 +257,42 @@ function DashboardPage() {
                           <WorkflowGraph
                             key={run.ID}
                             runID={run.ID}
-                            stepID={step?.StepID}
-                            visitID={step?.VisitID}
+                            stepID={
+                              graphChoice?.runID === run.ID
+                                ? graphChoice.step
+                                : step?.StepID
+                            }
+                            visitID={
+                              graphChoice?.runID === run.ID
+                                ? graphChoice.visit
+                                : step?.VisitID
+                            }
+                            onSelectionChange={(step, visit) =>
+                              setGraphChoice({ runID: run.ID, step, visit })
+                            }
                             preview={preview ? previewGraph(run) : undefined}
                           />
                         </Suspense>
+                      </Tabs.Content>
+                      <Tabs.Content className="info-tab" value="continue">
+                        <ContinuationPanel
+                          key={run.ID}
+                          runID={run.ID}
+                          stepID={
+                            graphChoice?.runID === run.ID
+                              ? graphChoice.step
+                              : step?.StepID
+                          }
+                          visitID={
+                            graphChoice?.runID === run.ID
+                              ? graphChoice.visit
+                              : step?.VisitID
+                          }
+                          preview={preview ? previewGraph(run) : undefined}
+                          onSelectionChange={(step, visit) =>
+                            setGraphChoice({ runID: run.ID, step, visit })
+                          }
+                        />
                       </Tabs.Content>
                       <Tabs.Content className="info-tab" value="info">
                         <RunInfo
@@ -332,6 +377,19 @@ function Search({
 function GraphPage() {
   const { run = '' } = useParams();
   const [params, setParams] = useSearchParams();
+  const select = (step: string, visit?: string) => {
+    const next = new URLSearchParams(params);
+    next.set('step', step);
+    if (visit) next.set('visit', visit);
+    else next.delete('visit');
+    setParams(next, { replace: true });
+  };
+  const props = {
+    runID: run,
+    stepID: params.get('step') || undefined,
+    visitID: params.get('visit') || undefined,
+    onSelectionChange: select,
+  };
   return (
     <div className="app">
       <header className="app-header">
@@ -342,21 +400,22 @@ function GraphPage() {
         <Link to="/">← Все запуски</Link>
       </header>
       <main className="standalone-graph">
-        <Suspense fallback={<p className="loading">Загрузка графа…</p>}>
-          <WorkflowGraph
-            key={run}
-            runID={run}
-            stepID={params.get('step') || undefined}
-            visitID={params.get('visit') || undefined}
-            onSelectionChange={(step, visit) => {
-              const next = new URLSearchParams(params);
-              next.set('step', step);
-              if (visit) next.set('visit', visit);
-              else next.delete('visit');
-              setParams(next, { replace: true });
-            }}
-          />
-        </Suspense>
+        <Tabs.Root className="run-tabs" defaultValue="graph">
+          <Tabs.List className="tabs" aria-label="Вид workflow">
+            <Tabs.Trigger value="graph">Граф</Tabs.Trigger>
+            <Tabs.Trigger value="continue">
+              Продолжить в новом чате Codex
+            </Tabs.Trigger>
+          </Tabs.List>
+          <Tabs.Content className="graph-tab" value="graph">
+            <Suspense fallback={<p>Загрузка графа…</p>}>
+              <WorkflowGraph key={run} {...props} />
+            </Suspense>
+          </Tabs.Content>
+          <Tabs.Content className="info-tab" value="continue">
+            <ContinuationPanel key={run} {...props} />
+          </Tabs.Content>
+        </Tabs.Root>
       </main>
     </div>
   );

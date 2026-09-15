@@ -94,6 +94,8 @@ type Metadata struct {
 // turn Codex App Server. Произвольный ID workflow не используется как имя файла.
 // Revision сохраняется только для чтения исторического app-native формата v2.
 type Step struct {
+	// Result — Markdown финального ответа текущего turn; пусто для старых запусков или отсутствующего отчёта.
+	Result        string          `json:"result,omitempty"`
 	ID            string          `json:"id"`
 	ThreadID      string          `json:"threadId"`
 	CodexThreadID string          `json:"codexThreadId"`
@@ -577,6 +579,9 @@ func (s Snapshot) validate(runID string) error {
 	states := make(map[string]scheduler.State)
 	threads, chats := make(map[string]bool), make(map[string]bool)
 	for _, step := range m.Steps {
+		if !validResult(step.Result, step.TurnID, step.State) {
+			return fmt.Errorf("шаг %q: result не соответствует исполнению", step.ID)
+		}
 		if !validID(step.ThreadID) || threads[step.ThreadID] {
 			return fmt.Errorf("шаг %q: неверный или повторный threadId", step.ID)
 		}

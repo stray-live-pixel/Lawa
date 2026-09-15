@@ -730,3 +730,75 @@ a.button {
     display: none;
   }
 }
+
+/* Handles нужны React Flow для расчёта привязок; скрываем только их отрисовку,
+   сохраняя размеры и координаты. display:none ломает геометрию рёбер. */
+.cube .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
+}
+.markdown-document {
+  min-width: 0;
+}
+.markdown {
+  overflow-wrap: anywhere;
+  line-height: 1.65;
+}
+.markdown pre {
+  overflow: auto;
+  background: var(--raised);
+  padding: 12px;
+  border-radius: 6px;
+}
+.markdown code {
+  font-size: 0.95em;
+}
+.markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+.markdown th,
+.markdown td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+}
+.markdown blockquote {
+  margin-left: 0;
+  padding-left: 12px;
+  border-left: 3px solid var(--line);
+  color: var(--muted);
+}
+.markdown h1 {
+  font-size: 20px;
+}
+.markdown h2 {
+  font-size: 18px;
+}
+.markdown h3 {
+  font-size: 15px;
+}
+.continuation-tab {
+  max-width: 1000px;
+}
+.markdown-document textarea {
+  width: 100%;
+  min-height: 160px;
+}
+
+/* Экспорт занимает две компактные строки вверху sidebar, не высоту графа. */
+.image-export {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+.image-export select {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.image-export .button {
+  padding: 6px;
+  font-size: 11px;
+  text-align: center;
+}

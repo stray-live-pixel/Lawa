@@ -141,6 +141,13 @@ func readEvents(root, runID string, afterInitialLoad func() error) ([]RuntimeEve
 		return nil, err
 	}
 	defer dir.Close()
+	return readEventsFromDir(dir, runID, afterInitialLoad)
+}
+
+// readEventsFromDir читает через уже открытый os.Root. Terminal commit использует
+// тот же дескриптор, что и metadata, не открывая подменяемый внешний путь заново.
+func readEventsFromDir(dir *os.Root, runID string, afterInitialLoad func() error) ([]RuntimeEvent, error) {
+	var err error
 	if _, err = loadForDashboard(dir, runID); err != nil {
 		return nil, err
 	}
