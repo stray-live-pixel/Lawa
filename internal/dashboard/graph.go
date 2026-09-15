@@ -60,7 +60,9 @@ func (h handler) loadGraph(runID string) (graphView, error) {
 	for _, step := range snapshot.Workflow.Steps {
 		item := graphNode{ID: step.ID, Prompt: continuationPrompt(root, snapshot, step.ID, "")}
 		for _, source := range append(append([]string{}, step.DependsOn...), step.After...) {
-			view.Edges = append(view.Edges, graphEdge{From: source, To: step.ID, Label: "после"})
+			// Направление зависимости уже показывает стрелка. Подписи нужны только
+			// именованным решениям, в том числе если сам маршрут назван «после».
+			view.Edges = append(view.Edges, graphEdge{From: source, To: step.ID})
 		}
 		for _, key := range sortedRouteKeys(step.Decisions) {
 			route := step.Decisions[key]
