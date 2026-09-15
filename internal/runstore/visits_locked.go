@@ -117,6 +117,11 @@ func (r *LockedRun) updateVisit(visitID string, state scheduler.State, chat, dia
 			old.CodexThreadID != "" && old.CodexThreadID != chat {
 			return false, fmt.Errorf("посещение %q: нельзя сбросить запуск или изменить известный ID чата", visitID)
 		}
+		result, err := r.resultForState(old.StepID, visitID, old.TurnID, state)
+		if err != nil {
+			return false, err
+		}
+		s.Meta.Visits[index].Result = result
 		s.Meta.Visits[index].State = state
 		s.Meta.Visits[index].CodexThreadID = chat
 		s.Meta.Visits[index].TechnicalError = diagnostic
@@ -151,6 +156,7 @@ func (r *LockedRun) SetVisitTurn(visitID, turnID string) error {
 		if visit.CodexThreadID == "" || visit.State == scheduler.Pending || visit.State == scheduler.Starting {
 			return false, fmt.Errorf("посещение %q ещё не связано с чатом Codex", visitID)
 		}
+		s.Meta.Visits[index].Result = ""
 		s.Meta.Visits[index].TurnID = turnID
 		s.Meta.Visits[index].Attempt++
 		return true, nil

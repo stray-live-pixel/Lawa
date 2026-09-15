@@ -235,9 +235,8 @@ func productionDependencies() dependencies {
 		chatInterval:     defaultChatInterval,
 		now:              time.Now,
 		waitUntil:        series.WaitUntil,
-		// Pipe-режим не даёт renderer доступ к путям run. Отсутствующий или
-		// сломанный PlantUML станет видимой диагностикой, но не остановит workflow.
-		renderer:    statusreport.CommandRenderer{Executable: "plantuml", Timeout: 30 * time.Second},
+		// Граф строится dashboard напрямую из snapshot; внешний renderer не нужен.
+		renderer:    nil,
 		userHomeDir: os.UserHomeDir,
 		update:      productionUpdateDependencies(),
 	}

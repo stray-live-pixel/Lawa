@@ -104,34 +104,22 @@ func finishDashboardVisit(t *testing.T, run *runstore.LockedRun, visit runstore.
 func TestAgentDashboardShowsDurableVisitHistory(t *testing.T) {
 	root, snapshot := createAgentDashboardRun(t)
 	first, skipped, second := snapshot.Meta.Visits[0], snapshot.Meta.Visits[1], snapshot.Meta.Visits[2]
-	recorder := httptest.NewRecorder()
-	Handler(root).ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/?period=all&view=all", nil))
-	if recorder.Code != http.StatusOK {
-		t.Fatalf("dashboard вернул status %d", recorder.Code)
+	view := readDashboard(t, Handler(root), "/api/dashboard?period=all&view=all")
+	if len(view.Roots) != 1 {
+		t.Fatal("API потерял run")
 	}
-	html := recorder.Body.String()
-	for _, fragment := range []string{
-		"dashboard-v2", "Workflow · failed", "Посещения", "3 из 3 завершено",
-		"loop#1", "loop#2", "unused#1", "Причина остановки", "Достигнут лимит",
-		"Посещение · skipped", "tone-skipped",
-		"loop · iteration=3 · decision:again ← " + second.VisitID,
-		"Причина запуска", "decision:again ← " + first.VisitID,
-		"Решение", "again · applied=true", "again · applied=false",
-		"Объяснение решения", "Повторить проверку", "Остановившее посещение", second.VisitID,
-		"Переход", "Пропущенные routes", "done", "maxVisits=2 · onLimit=failed",
-		`data-inspector-select="step:` + snapshot.Meta.RunID + `:` + first.VisitID + `"`,
-		`data-inspector-select="step:` + snapshot.Meta.RunID + `:` + second.VisitID + `"`,
-		`/events/` + snapshot.Meta.RunID + `?visit=` + first.VisitID,
-		`/api/trace/` + snapshot.Meta.RunID + `?visit=` + second.VisitID,
-		`/memory/` + snapshot.Meta.RunID + `/` + first.VisitID,
-	} {
-		if !strings.Contains(html, fragment) {
-			t.Errorf("dashboard не содержит %q", fragment)
+	item := view.Roots[0]
+	if item.State != "failed" || !item.AgentGraph || item.CompletedSteps != 3 || len(item.Steps) != 3 || item.StopVisit != second.VisitID {
+		t.Fatalf("неверный снимок посещений: %+v", item)
+	}
+	for i, visit := range snapshot.Meta.Visits {
+		step := item.Steps[i]
+		if step.Key != visit.VisitID || step.VisitID != visit.VisitID || !strings.Contains(string(step.TraceURL), "visit="+visit.VisitID) || !strings.Contains(string(step.EventsURL), "visit="+visit.VisitID) {
+			t.Fatalf("потерян точный scope: %+v", step)
 		}
 	}
-	if strings.Contains(html, `step:`+snapshot.Meta.RunID+`:loop"`) ||
-		!strings.Contains(html, `data-inspector-select="step:`+snapshot.Meta.RunID+`:`+skipped.VisitID+`"`) {
-		t.Fatal("повторы получили общий inspector key или durable Skipped visit потерян")
+	if item.Steps[1].State != "skipped" || !strings.Contains(item.Steps[2].Trigger, first.VisitID) || item.Steps[0].Decision == "" || item.StopLimit == "" {
+		t.Fatalf("потеряны trigger/решение/лимит: %+v", item)
 	}
 
 	node := makeRunNode(root, snapshot)
@@ -248,9 +236,9 @@ func TestAgentDashboardUsesRunStateAfterHandledFailure(t *testing.T) {
 		t.Fatalf("handled Failed visit подменил RunState: %+v", node)
 	}
 	active := httptest.NewRecorder()
-	Handler(root).ServeHTTP(active, httptest.NewRequest(http.MethodGet, "/?period=all", nil))
+	Handler(root).ServeHTTP(active, httptest.NewRequest(http.MethodGet, "/api/dashboard?period=all", nil))
 	failed := httptest.NewRecorder()
-	Handler(root).ServeHTTP(failed, httptest.NewRequest(http.MethodGet, "/?period=all&view=all&states=failed", nil))
+	Handler(root).ServeHTTP(failed, httptest.NewRequest(http.MethodGet, "/api/dashboard?period=all&view=all&states=failed", nil))
 	if !strings.Contains(active.Body.String(), "handled-failure") || strings.Contains(failed.Body.String(), "handled-failure") {
 		t.Fatal("dashboard-фильтры не следуют авторитетному v4 RunState")
 	}

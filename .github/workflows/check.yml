@@ -1,0 +1,40 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: ui/.nvmrc
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+      # Сборка коммитится ради обычного go build без Node. Проверяем и изменение
+      # существующих ресурсов, и появление новых hash-файлов вместо старых.
+      - name: UI tests and reproducible static build
+        working-directory: ui
+        run: |
+          npm ci
+          npm run format:check
+          npm test
+          npm run build
+          git diff --exit-code -- ../internal/dashboard/web
+          test -z "$(git ls-files --others --exclude-standard ../internal/dashboard/web)"
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go test -race -count=1 ./...
+      - run: go vet ./...
+      - run: go mod tidy -diff
+      - run: sh -n install.sh
+      - run: go build ./cmd/lawa

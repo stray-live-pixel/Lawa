@@ -12,6 +12,22 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
+// TestResultContractInBothPrompts гарантирует одинаковые правила отчёта для
+// legacy и v2 без зависимости от личных файлов скиллов на машине исполнителя.
+func TestResultContractInBothPrompts(t *testing.T) {
+	snapshot := runstore.Snapshot{}
+	legacy := buildPrompt(snapshot, workflow.Step{}, runstore.Step{}, t.TempDir())
+	agent, err := buildAgentPrompt(snapshot, workflow.Step{}, runstore.Visit{}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []string{legacy, agent} {
+		if !strings.Contains(prompt, resultInstructions) {
+			t.Fatal("в prompt потеряны правила финального отчёта")
+		}
+	}
+}
+
 // TestApplyRuntimeSettingsModelPriority фиксирует все три ступени выбора модели:
 // значение кубика, общий default workflow и наследование Codex через пустую Command.
 func TestApplyRuntimeSettingsModelPriority(t *testing.T) {
@@ -200,5 +216,24 @@ func TestPrepareChecksRoot(t *testing.T) {
 	saved, err := run.Load()
 	if err != nil || saved.Meta.Steps[0].State != scheduler.Pending {
 		t.Fatalf("ошибка root зарезервировала шаг: %+v, %v", saved.Meta.Steps, err)
+	}
+}
+
+// Следующий агент получает уже сохранённое свойство результата источника как
+// JSON-строку Markdown. Точный visit важен для циклов; разметка не теряется.
+func TestResultPropertyInNextAgentContext(t *testing.T) {
+	text := "Итог: **исправлено**\n\n- тесты прошли"
+	snapshot := runstore.Snapshot{Meta: runstore.Metadata{Steps: []runstore.Step{{ID: "source", Result: text}}}}
+	legacy := buildPrompt(snapshot, workflow.Step{ID: "next"}, runstore.Step{}, t.TempDir())
+	source := runstore.Visit{VisitID: "source-visit", StepID: "source", State: scheduler.Succeeded, Result: text}
+	snapshot.Meta.Visits = []runstore.Visit{source}
+	agent, err := buildAgentPrompt(snapshot, workflow.Step{ID: "next"}, runstore.Visit{VisitID: "next-visit", Trigger: runstore.VisitTrigger{SourceVisitIDs: []string{source.VisitID}}}, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, prompt := range []string{legacy, agent} {
+		if !strings.Contains(prompt, resultContext(text)) {
+			t.Fatal("следующий агент не получил result источника")
+		}
 	}
 }

@@ -6,7 +6,6 @@ package dashboard
 
 import (
 	"context"
-	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,11 +37,6 @@ const (
 	runStopPoll      = 50 * time.Millisecond
 )
 
-//go:embed dashboard.html
-var pageHTML string
-
-var pageTemplate = template.Must(template.New("dashboard").Parse(pageHTML))
-
 // page — единая модель live и preview; Refresh пуст только у статичного макета.
 type page struct {
 	Title, Refresh, EmptyMessage string
@@ -66,25 +60,26 @@ type scheduledRun struct {
 	nextRunAt                                                 time.Time
 }
 
-// runNode — готовая к HTML структура одного workflow и его потомков. Все URL
+// runNode — готовая к JSON структура одного workflow и его потомков. Все URL
 // строит сервер из проверенных ID, поэтому template.URL не содержит сырого ввода.
 type runNode struct {
-	ID, ParentID, Name, State, Tone, Updated           string
-	TicketID, TicketTitle                              string
-	StopReason, StopVisit, StopLimit                   string
-	EventsURL, VSCodeURL, UMLURL, DeleteURL            template.URL
-	TicketURL                                          template.URL
-	HasUML, Open, HasUnfinished, HasWorking, HasFailed bool
-	AgentGraph                                         bool
-	CompletedSteps, TotalSteps                         int
-	Steps, ActiveSteps                                 []stepNode
-	Children                                           []*runNode
-	createdAt, updatedAt, activityAt                   time.Time
-	baseSearch, searchText, treeState                  string
+	ID, ParentID, Name, State, Tone, Updated   string
+	TicketID, TicketTitle                      string
+	StopReason, StopVisit, StopLimit           string
+	EventsURL, VSCodeURL, DeleteURL            template.URL
+	TicketURL                                  template.URL
+	Open, HasUnfinished, HasWorking, HasFailed bool
+	AgentGraph                                 bool
+	CompletedSteps, TotalSteps                 int
+	Steps, ActiveSteps                         []stepNode
+	Children                                   []*runNode
+	createdAt, updatedAt, activityAt           time.Time
+	baseSearch, searchText, treeState          string
 }
 
 // stepNode описывает лист дерева и доступность его сохранённой памяти.
 type stepNode struct {
+	Result                                                     string
 	Key, ID, StepID, VisitID                                   string
 	State, Tone, Runtime, Message, Action, Updated             string
 	Trigger, Decision, Explanation, Transition, Skipped, Limit string
@@ -101,13 +96,18 @@ type stepNode struct {
 func Handler(root string) http.Handler {
 	h := handler{root: root}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", h.live)
-	mux.HandleFunc("GET /preview", h.preview)
+	mux.HandleFunc("GET /{$}", serveUI)
+	mux.HandleFunc("GET /api/dashboard", h.live)
+	mux.HandleFunc("GET /ui/", serveUIAssets)
+	mux.HandleFunc("GET /preview", serveUI)
+	mux.HandleFunc("GET /api/preview", h.preview)
 	mux.HandleFunc("GET /assets/lawa-logo.png", h.logo)
 	mux.HandleFunc("GET /memory/{run}/{thread}", h.memory)
 	mux.HandleFunc("GET /events/{run}", h.events)
 	mux.HandleFunc("GET /api/trace/{run}", h.trace)
 	mux.HandleFunc("POST /api/runs/{run}/stop-and-delete", h.stopAndDelete)
+	mux.HandleFunc("GET /graph/{run}", serveUI)
+	mux.HandleFunc("GET /api/graph/{run}", h.graph)
 	mux.HandleFunc("GET /uml/{run}", h.uml)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// ServeMux канонизирует пути с `..` редиректом. Для read-only локального
@@ -243,7 +243,7 @@ func (h handler) live(w http.ResponseWriter, r *http.Request) {
 	roots, problems := loadTree(h.root)
 	// Обычный polling сначала выбирает нужное временное окно по компактным
 	// meta.json. Содержимое журналов и memory требуется только карточкам,
-	// которые действительно попадут в HTML. Явный поиск остаётся полнотекстовым,
+	// которые действительно попадут в JSON ответа. Явный поиск остаётся полнотекстовым,
 	// поэтому для него подробности нужны до фильтрации.
 	if params.Query != "" {
 		problems = append(problems, hydrateRunNodes(h.root, roots, true)...)
@@ -368,20 +368,15 @@ func scheduleLabel(config series.Config) string {
 	}
 }
 
-// preview использует тот же шаблон, но никогда не обращается к runstore.
+// preview отдаёт демонстрационный DTO, не обращаясь к runstore.
 func (h handler) preview(w http.ResponseWriter, r *http.Request) {
 	render(w, previewPage(parseViewParams(r.URL.Query()), time.Now()))
 }
 
-// render полагается на html/template для экранирования всех видимых данных.
+// render отдаёт DTO: React строит интерфейс из JSON, не из серверной разметки.
+// Закрытые поля моделей не сериализуются; приватные ответы нельзя кэшировать.
 func render(w http.ResponseWriter, view page) {
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.Header().Set("Referrer-Policy", "no-referrer")
-	w.Header().Set("Cache-Control", "no-store")
-	if err := pageTemplate.ExecuteTemplate(w, "page", view); err != nil {
-		http.Error(w, "не удалось построить страницу", http.StatusInternalServerError)
-	}
+	writeJSON(w, view)
 }
 
 type traceResponse struct {
@@ -580,7 +575,7 @@ func (h handler) uml(w http.ResponseWriter, r *http.Request) {
 
 // loadTree изолирует повреждение одного каталога. Сначала все корректные run
 // собираются в map, затем связи проверяются на потерянных родителей и циклы.
-// Только после этого создаётся рекурсивная структура для безопасного шаблона.
+// Только после этого создаётся рекурсивная структура для JSON API.
 func loadTree(root string) ([]*runNode, []problem) {
 	entries, err := os.ReadDir(root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -689,14 +684,6 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		node.updatedAt = info.ModTime()
 		node.Updated = node.updatedAt.Local().Format("2006-01-02 15:04:05")
 	}
-	// Наличие артефактов определяется по метаданным файлов: обычный polling
-	// сохраняет рабочие ссылки, но не читает содержимое UML и memory.
-	if info, err := os.Lstat(filepath.Join(root, runID, runstore.StatusImageFilename)); err == nil && info.Mode().IsRegular() {
-		// Версия из ModTime меняет HTML при обновлении PNG. Polling заменяет
-		// карточку и браузер запрашивает новое изображение, не показывая старый кэш.
-		node.HasUML = true
-		node.UMLURL = template.URL("/uml/" + runID + "?v=" + strconv.FormatInt(info.ModTime().UnixNano(), 10))
-	}
 	for _, step := range snapshot.Meta.Steps {
 		active := activeStepState(step.State)
 		if step.State == scheduler.Succeeded {
@@ -705,7 +692,7 @@ func makeRunNode(root string, snapshot runstore.Snapshot) *runNode {
 		search = append(search, step.ID, step.ThreadID, step.CodexThreadID, step.TurnID, string(step.State))
 		memoryPath := filepath.Join(root, runID, "memory", step.ThreadID+".md")
 		node.Steps = append(node.Steps, stepNode{
-			Key: step.ID, ID: step.ID, StepID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
+			Result: step.Result, Key: step.ID, ID: step.ID, StepID: step.ID, State: string(step.State), Tone: tone(string(step.State)),
 			EventsURL: template.URL("/events/" + runID + "?step=" + url.QueryEscape(step.ID)),
 			MemoryURL: template.URL("/memory/" + runID + "/" + step.ThreadID), HasMemory: nonEmptyRegularFile(memoryPath),
 			TraceURL: template.URL("/api/trace/" + runID + "?step=" + url.QueryEscape(step.ID)),
@@ -747,7 +734,7 @@ func makeAgentStepNode(root, runID string, visit runstore.Visit, definition work
 	query := url.QueryEscape(visit.VisitID)
 	memoryPath := filepath.Join(root, runID, "memory", visit.VisitID+".md")
 	item := stepNode{
-		Key: visit.VisitID, ID: fmt.Sprintf("%s#%d", visit.StepID, visit.Visit),
+		Result: visit.Result, Key: visit.VisitID, ID: fmt.Sprintf("%s#%d", visit.StepID, visit.Visit),
 		StepID: visit.StepID, VisitID: visit.VisitID, Visit: visit.Visit,
 		Iteration: visit.Iteration, Attempt: visit.Attempt,
 		State: string(visit.State), Tone: tone(string(visit.State)), Active: activeStepState(visit.State),
@@ -1075,7 +1062,7 @@ func previewPage(params viewParams, now time.Time) page {
 		}
 		node := &runNode{
 			ID: id, Name: name, State: state, Tone: tone(state), Updated: "2026-08-31 18:42:10",
-			EventsURL: action, VSCodeURL: action, UMLURL: action, DeleteURL: action, HasUML: true, Steps: steps, TotalSteps: len(steps),
+			EventsURL: action, VSCodeURL: action, DeleteURL: action, Steps: steps, TotalSteps: len(steps),
 			createdAt: now.Add(-age), updatedAt: now.Add(-age), searchText: strings.Join(search, " "),
 		}
 		for _, item := range node.Steps {

@@ -321,6 +321,7 @@ func buildAgentPrompt(snapshot runstore.Snapshot, step workflow.Step, visit runs
 		"Не изменяй чужую память, workflow.json, task.md, meta.json и coordinator.lock в папке запуска.",
 		"Если задача требует дочерний workflow, используй только доступные встроенные run_child/run_children, а не shell-команду lawa run.",
 		"Перед завершением запиши в собственную память итог, пути к результатам и оставшиеся ограничения.",
+		resultInstructions,
 	}
 	if visit.TechnicalError != "" {
 		sections = append(sections, "Техническая диагностика предыдущего turn этого посещения: "+visit.TechnicalError)
@@ -372,6 +373,9 @@ func writeAgentVisitContext(target *strings.Builder, runDir string, visit runsto
 	fmt.Fprintf(target, "- step=%s, visit=%d, iteration=%d, visitId=%s, state=%s%s%s, memory=%s\n",
 		visit.StepID, visit.Visit, visit.Iteration, visit.VisitID, visit.State, diagnostic, decision,
 		filepath.Join(runDir, "memory", visit.VisitID+".md"))
+	if visit.Result != "" {
+		fmt.Fprintln(target, resultContext(visit.Result))
+	}
 }
 
 // addChooseDecision резервирует имя graph-control tool после внешнего
