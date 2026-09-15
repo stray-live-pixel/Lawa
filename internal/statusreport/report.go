@@ -36,8 +36,8 @@ const (
 var pngSignature = []byte("\x89PNG\r\n\x1a\n")
 
 // Renderer отделяет построение PlantUML source от локального процесса рендера.
-// Production использует CommandRenderer, а тесты возвращают известный PNG без
-// установки Java, Graphviz или PlantUML.
+// Штатные run не используют renderer. Контракт оставлен для явного старого
+// экспорта и тестов совместимости без установки Java, Graphviz или PlantUML.
 type Renderer interface {
 	Render(context.Context, []byte) ([]byte, error)
 }
@@ -93,17 +93,21 @@ type Artifacts struct {
 	ImagePath  string
 }
 
-// WriteReport обновляет подробный Markdown и визуализацию одного Status. Сначала
-// публикуются source и PNG, затем Markdown со ссылками на уже готовые файлы. При
-// отказе renderer новый отчёт всё равно сохраняется, а прежний PNG удаляется:
-// пользователь не примет старую картинку за текущую. Ошибки не меняют meta.json,
-// workflow.json или память кубиков и возвращаются вызывающему коду для краткой
-// диагностики в чат-сводке.
+// WriteReport атомарно обновляет Markdown одного Status. Без renderer граф
+// строится dashboard из snapshot; PNG/PUML больше не создаются. Явный renderer
+// сохраняет старый контракт экспорта и удаления устаревшего PNG при ошибке.
+// Ошибки отчёта не меняют metadata и память кубиков.
 func WriteReport(ctx context.Context, runDir string, status coordinator.Status, renderer Renderer) (Artifacts, error) {
 	if !filepath.IsAbs(runDir) {
 		return Artifacts{}, fmt.Errorf("папка run должна быть абсолютной: %q", runDir)
 	}
-	artifacts, visualizationErr := writeVisualization(ctx, runDir, status, renderer)
+	// nil означает штатный режим интерактивного dashboard. Явный renderer
+	// оставлен для совместимости старого экспорта и его контрактных тестов.
+	var artifacts Artifacts
+	var visualizationErr error
+	if renderer != nil {
+		artifacts, visualizationErr = writeVisualization(ctx, runDir, status, renderer)
+	}
 	reportPath := filepath.Join(runDir, ReportFilename)
 	report := DetailedReport(status, runDir, artifacts, visualizationErr)
 	if err := writeAtomic(reportPath, []byte(report)); err != nil {
@@ -203,7 +207,7 @@ func DetailedReport(status coordinator.Status, runDir string, artifacts Artifact
 	if visualizationErr == nil && artifacts.SourcePath != "" && artifacts.ImagePath != "" {
 		fmt.Fprintf(&message, "\n![Текущая схема workflow](%s)\n\n[PlantUML source](%s)\n",
 			ImageFilename, SourceFilename)
-	} else {
+	} else if visualizationErr != nil {
 		message.WriteString("\nСхема PlantUML не обновлена")
 		if visualizationErr != nil {
 			fmt.Fprintf(&message, ": %s", safeDiagnostic(visualizationErr.Error()))
@@ -213,7 +217,7 @@ func DetailedReport(status coordinator.Status, runDir string, artifacts Artifact
 			fmt.Fprintf(&message, "Актуальный PlantUML source: %s\n", markdownText(artifacts.SourcePath))
 		}
 	}
-	message.WriteByte('\n')
+	message.WriteString("\nИнтерактивный граф и итоги кубиков: откройте запуск в dashboard (`lawa serve`).\n")
 	return message.String()
 }
 

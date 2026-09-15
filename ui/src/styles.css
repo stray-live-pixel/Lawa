@@ -1,0 +1,732 @@
+/* Единая нейтральная тема. Цвет обозначает состояние, а не фон приложения.
+   Компоненты используют эти токены; сторонние библиотеки переопределены ниже. */
+:root {
+  color-scheme: dark;
+  --bg: #080808;
+  --surface: #111;
+  --raised: #181818;
+  --hover: #242424;
+  --line: #292929;
+  --text: #f5f5f5;
+  --muted: #888;
+  --link: #58a6ff;
+  --red: #f85149;
+  --green: #3fb950;
+  font:
+    13px/1.5 Consolas,
+    'Courier New',
+    monospace;
+  color: var(--text);
+  background: var(--bg);
+}
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  overflow: hidden;
+}
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+button,
+a,
+select {
+  -webkit-tap-highlight-color: transparent;
+}
+button {
+  cursor: pointer;
+}
+button:disabled,
+[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: default;
+}
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 2px solid var(--link);
+  outline-offset: 2px;
+}
+a {
+  color: var(--link);
+  text-decoration: none;
+}
+h1 {
+  font-size: 21px;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+h2 {
+  font-size: 17px;
+  margin: 0 0 14px;
+  overflow-wrap: anywhere;
+}
+h3 {
+  font-size: 12px;
+  color: #aaa;
+  margin: 24px 0 10px;
+}
+small,
+.muted {
+  color: var(--muted);
+  font-size: 11px;
+}
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+}
+input,
+select,
+textarea {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 8px;
+  min-width: 0;
+}
+textarea {
+  width: 100%;
+  height: 140px;
+  resize: vertical;
+  margin: 10px 0;
+  font-size: 11px;
+}
+select {
+  max-width: 100%;
+}
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--raised);
+  padding: 7px 10px;
+  color: var(--text);
+  font-size: 12px;
+}
+.button:hover {
+  background: var(--hover);
+}
+a.button {
+  color: var(--link);
+}
+.danger {
+  color: var(--red);
+  border-color: #542822;
+}
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 18px 0;
+}
+.error {
+  background: #211010;
+  border: 1px solid #57302c;
+  color: #ffb4ae;
+  padding: 10px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.loading,
+.empty {
+  padding: 24px;
+  color: var(--muted);
+}
+.app {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+.app-header {
+  flex: none;
+  height: 60px;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--line);
+  background: #0d0d0d;
+}
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 20px;
+  font-weight: bold;
+  color: var(--text);
+}
+.brand img {
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.header-right {
+  margin-left: auto;
+}
+.test-label {
+  font-size: 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 2px 6px;
+  color: var(--muted);
+}
+.dashboard {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  padding: 16px 22px 18px;
+  gap: 12px;
+}
+.filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.filters nav {
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 3px;
+  gap: 2px;
+}
+.filters nav a {
+  padding: 5px 9px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.filters nav a.active {
+  color: var(--text);
+  background: var(--hover);
+  border-radius: 5px;
+}
+.pagination {
+  margin-left: auto;
+}
+.problems {
+  flex: none;
+  max-height: 100px;
+  overflow: auto;
+}
+.problems p {
+  margin: 0 0 6px;
+}
+.inspector {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  overflow: hidden;
+}
+.inspector-body {
+  display: grid;
+  grid-template-columns: 285px minmax(0, 1fr);
+  flex: 1;
+  min-height: 0;
+}
+.breadcrumbs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 5px;
+  border-bottom: 1px solid var(--line);
+}
+.breadcrumbs .button {
+  border: 0;
+  background: none;
+  font-size: 11px;
+}
+.tree {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+}
+.search {
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.search input {
+  width: 100%;
+  font-size: 11px;
+}
+.tree-scroll {
+  padding: 6px;
+  overflow: auto;
+  flex: 1;
+}
+.tree ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.tree .tree-children {
+  padding-left: 13px;
+  border-left: 1px solid #252525;
+  margin-left: 7px;
+}
+.tree-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-radius: 5px;
+  min-height: 32px;
+}
+.selected {
+  background: var(--hover);
+}
+.tree-row:hover,
+.tree-step:hover {
+  background: #1d1d1d;
+}
+.tree-select,
+.tree-step {
+  border: 0;
+  background: none;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  text-align: left;
+  padding: 5px 2px;
+  min-width: 0;
+  width: 100%;
+  color: var(--text);
+  font-size: 11px;
+}
+.tree-select span,
+.tree-step span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.tree-select svg,
+.tree-step svg {
+  flex: none;
+}
+.tree-select small {
+  font-size: 9px;
+}
+.tree-step {
+  padding-left: 7px;
+  border-radius: 5px;
+}
+.icon-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  padding: 3px;
+}
+.rotate {
+  transform: rotate(90deg);
+}
+.pin {
+  opacity: 0;
+}
+.tree-row:hover .pin,
+.pin:focus-visible {
+  opacity: 1;
+}
+.ticket {
+  color: #9bd0ff;
+  background: #101c28;
+  border: 1px solid #254767;
+  border-radius: 10px;
+  padding: 0 4px;
+  max-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.inspector-details {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: #0d0d0d;
+}
+.run-tabs {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+.tabs {
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-bottom: 1px solid var(--line);
+  flex: none;
+}
+.tabs button {
+  background: var(--raised);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 11px;
+}
+.tabs button[data-state='active'] {
+  background: var(--hover);
+  border-color: #666;
+}
+.graph-tab {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+.info-tab {
+  overflow: auto;
+  padding: 22px;
+  flex: 1;
+}
+.graph-tab[data-state='inactive'],
+.info-tab[data-state='inactive'] {
+  display: none;
+}
+.run-info {
+  max-width: 780px;
+}
+.facts {
+  font-size: 12px;
+  margin: 20px 0;
+}
+.facts > div {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 12px;
+  margin: 8px 0;
+}
+.facts dt {
+  color: var(--muted);
+}
+.facts dd {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.tone-succeeded {
+  color: var(--green);
+}
+.tone-running,
+.tone-starting,
+.tone-waiting_for_approval {
+  color: var(--link);
+}
+.tone-failed,
+.tone-cancelled {
+  color: var(--red);
+}
+.tone-skipped,
+.tone-pending,
+.tone-unknown,
+.tone-interrupted {
+  color: var(--muted);
+}
+.status {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 4px 10px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.workflow-graph {
+  padding: 12px;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  flex-direction: column;
+  gap: 12px;
+}
+.graph-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.graph-heading small {
+  overflow-wrap: anywhere;
+}
+.graph-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 310px;
+  flex: 1;
+  min-height: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.graph-area {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  background: #111;
+}
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  border-top: 1px solid var(--line);
+  padding: 10px 14px;
+  font-size: 11px;
+  flex: none;
+}
+.cube-details {
+  padding: 18px;
+  overflow: auto;
+  min-width: 0;
+  border-left: 1px solid var(--line);
+}
+.cube-details select {
+  width: 100%;
+  margin-top: 12px;
+}
+.cube-details .button {
+  margin-top: 10px;
+}
+.cube {
+  width: 220px;
+  height: 80px;
+  border: 1px solid #3c3c3c;
+  border-radius: 9px;
+  background: var(--raised);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px 14px;
+}
+.cube strong {
+  font-size: 12px;
+  color: var(--text);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  line-height: 1.3;
+}
+.cube small {
+  color: inherit;
+  font-size: 10px;
+}
+.cube.selected {
+  border: 2px solid #888;
+  background: #242424;
+  box-shadow: 0 0 0 3px #ffffff10;
+}
+.cube.tone-running,
+.cube.tone-starting {
+  border-color: var(--link);
+}
+.cube.tone-failed {
+  border-color: var(--red);
+}
+.cube.tone-skipped {
+  border-style: dashed;
+}
+.result {
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #141414;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.note {
+  color: #bbb;
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.facts-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.message {
+  margin: 10px 0;
+  background: #151515;
+  border-radius: 7px;
+  padding: 10px;
+}
+.message small {
+  font-size: 10px;
+}
+.message pre {
+  font-size: 12px;
+  margin: 7px 0 0;
+}
+.standalone-graph {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  padding: 10px;
+}
+/* React Flow отвечает за pan/zoom и доступность узлов; палитра общая с UI. */
+.react-flow {
+  --xy-background-color: #111;
+  --xy-edge-stroke: #666;
+  --xy-edge-label-color: #aaa;
+  --xy-edge-label-background-color: #111;
+  --xy-controls-button-background-color: #181818;
+  --xy-controls-button-background-color-hover: #242424;
+  --xy-controls-button-color: #ddd;
+  --xy-controls-button-border-color: #333;
+}
+.react-flow__handle {
+  width: 5px;
+  height: 5px;
+  background: #777;
+  border: 0;
+}
+.react-flow__attribution {
+  font-size: 8px;
+  background: #111 !important;
+}
+.react-flow__attribution a {
+  color: #777;
+}
+.react-flow__edge-text {
+  font-size: 10px;
+}
+.dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: #0009;
+  z-index: 40;
+}
+.dialog-content {
+  position: fixed;
+  z-index: 41;
+  inset: 0 0 0 auto;
+  width: min(720px, 100vw);
+  background: #0d0d0d;
+  border-left: 1px solid #333;
+  box-shadow: -18px 0 50px #000b;
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  outline: none;
+}
+.dialog-header {
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  align-items: flex-start;
+}
+.dialog-header h2 {
+  font-size: 18px;
+}
+.dialog-body {
+  overflow: auto;
+  min-height: 0;
+  flex: 1;
+}
+.schedule article {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 16px;
+}
+.schedule h3 {
+  color: var(--text);
+}
+@media (max-width: 1000px) {
+  .inspector-body {
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
+  .graph-workspace {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+  .cube-details {
+    padding: 12px;
+  }
+}
+@media (max-width: 760px) {
+  .dashboard {
+    padding: 10px;
+  }
+  .app-header {
+    padding: 10px;
+  }
+  .header-right {
+    font-size: 10px;
+    min-width: 0;
+  }
+  .header-right .button {
+    max-width: 55vw;
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .inspector-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: 150px minmax(0, 1fr);
+  }
+  .tree {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .graph-workspace {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+  .graph-area {
+    min-height: 320px;
+    flex: none;
+  }
+  .cube-details {
+    overflow: visible;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+  .graph-heading {
+    align-items: flex-start;
+  }
+  .graph-heading h1 {
+    font-size: 16px;
+  }
+  .graph-heading .status {
+    font-size: 9px;
+  }
+  .facts > div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+  .filters {
+    gap: 6px;
+  }
+  .filters nav a {
+    padding: 4px 6px;
+  }
+  .pagination {
+    margin: 0;
+  }
+  .test-label {
+    display: none;
+  }
+}

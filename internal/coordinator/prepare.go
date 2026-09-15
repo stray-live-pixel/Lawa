@@ -266,6 +266,7 @@ func buildPrompt(snapshot runstore.Snapshot, step workflow.Step, savedStep runst
 		"Не изменяй workflow.json, task.md, meta.json и coordinator.lock в папке запуска.",
 		"Если задача требует динамически запустить дочерний workflow, используй только встроенные run_child/run_children, а не shell-команду lawa run; передавай каждому ребёнку нужный существующий абсолютный cwd.",
 		"Перед завершением запиши в свою память итог, пути к результатам и оставшиеся ограничения.",
+		resultInstructions,
 	})
 }
 

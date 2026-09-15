@@ -1,0 +1,3 @@
+# Vite сохраняет строковые CSS-шаблоны зависимостей, включая пробелы на пустых
+# строках. Не меняем содержимое generated JS ради проверки whitespace.
+internal/dashboard/web/ui/assets/*.js -whitespace

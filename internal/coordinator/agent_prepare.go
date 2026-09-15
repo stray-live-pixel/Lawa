@@ -321,6 +321,7 @@ func buildAgentPrompt(snapshot runstore.Snapshot, step workflow.Step, visit runs
 		"Не изменяй чужую память, workflow.json, task.md, meta.json и coordinator.lock в папке запуска.",
 		"Если задача требует дочерний workflow, используй только доступные встроенные run_child/run_children, а не shell-команду lawa run.",
 		"Перед завершением запиши в собственную память итог, пути к результатам и оставшиеся ограничения.",
+		resultInstructions,
 	}
 	if visit.TechnicalError != "" {
 		sections = append(sections, "Техническая диагностика предыдущего turn этого посещения: "+visit.TechnicalError)

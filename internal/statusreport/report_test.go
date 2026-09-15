@@ -16,6 +16,28 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
+// TestReportWithoutRenderer подтверждает, что штатному run не нужен PlantUML:
+// Markdown создаётся без ошибки и не ссылается на отсутствующую картинку.
+func TestReportWithoutRenderer(t *testing.T) {
+	runDir := t.TempDir()
+	artifacts, err := WriteReport(t.Context(), runDir, coordinator.Status{WorkflowID: "test"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(artifacts.ReportPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "PlantUML") || !strings.Contains(string(data), "Интерактивный граф") {
+		t.Fatalf("неверный штатный отчёт: %s", data)
+	}
+	for _, name := range []string{ImageFilename, SourceFilename} {
+		if _, err := os.Stat(filepath.Join(runDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("создан старый артефакт %s: %v", name, err)
+		}
+	}
+}
+
 // rendererFunc позволяет тесту задать renderer без отдельной служебной структуры.
 type rendererFunc func(context.Context, []byte) ([]byte, error)
 
