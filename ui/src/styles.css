@@ -395,31 +395,28 @@ pre {
   align-items: center;
   gap: 2px;
 }
-.graph-run-id small {
+.graph-run-id {
   font-size: 7px;
   line-height: 9px;
+  color: var(--muted);
+}
+/* Библиотечная кнопка сохраняет клавиатурный фокус и семантику действия,
+   но выглядит как строка заголовка. Обрезается текст, не копируемое значение. */
+.copy-identity {
+  --g-button-padding: 0;
+  --g-button-height: auto;
+  max-width: 100%;
   min-width: 0;
+  font: inherit;
+  color: inherit;
+  vertical-align: top;
+}
+.copy-identity .g-button__text {
+  display: block;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-/* После уменьшения xs до 10px добавляем 2px. Явный квадрат сохраняет
-   размер кнопки при обрезании длинного ID в узкой панели. */
-.run-id-copy {
-  --g-button-height: 12px;
-  width: 12px;
-  min-width: 12px;
-  height: 12px;
-  flex: 0 0 12px;
-  --g-button-padding: 0;
-}
-.run-id-copy .g-button__icon {
   margin: 0;
-  width: 12px;
-}
-.run-id-copy svg {
-  width: 10px;
-  height: 10px;
 }
 .run-tabs-toolbar {
   display: flex;

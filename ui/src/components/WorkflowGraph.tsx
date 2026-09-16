@@ -1,3 +1,4 @@
+import { CopyIdentity } from './CopyIdentity';
 import { ResizableRunList } from './ResizableRunList';
 import { useMemo, useState } from 'react';
 import { displayVisit } from './displayVisit';
@@ -16,7 +17,7 @@ import {
   type NodeProps,
   type Edge,
 } from '@xyflow/react';
-import { Card, ClipboardButton, Icon, useThemeValue } from '@gravity-ui/uikit';
+import { Card, Icon, useThemeValue } from '@gravity-ui/uikit';
 import { Plus, Minus, ArrowsExpand } from '@gravity-ui/icons';
 import { graphLayout, type RoutedEdge } from './graphLayout';
 import '@xyflow/react/dist/style.css';
@@ -293,17 +294,19 @@ function GraphView({
           <div className="graph-heading">
             <Status state={graph.State} />
             <div className="graph-identity">
-              <h1 title={graph.Name}>{graph.Name}</h1>
+              <h1>
+                <CopyIdentity
+                  text={graph.Name}
+                  label="Скопировать название workflow"
+                  success="Название workflow скопировано"
+                />
+              </h1>
               <div className="graph-run-id">
-                <small title={`runId=${graph.ID}`}>runId={graph.ID}</small>
-                <ClipboardButton
-                  className="run-id-copy"
+                <CopyIdentity
                   text={graph.ID}
-                  size="xs"
-                  view="flat"
-                  aria-label="Скопировать ID запуска"
-                  tooltipInitialText="Скопировать ID запуска"
-                  tooltipSuccessText="ID скопирован"
+                  prefix="runId="
+                  label="Скопировать runId"
+                  success="runId скопирован"
                 />
               </div>
             </div>
