@@ -97,7 +97,7 @@ func parseViewParams(values url.Values) viewParams {
 		page = 1
 	}
 	scope := values.Get("view")
-	if scope != "all" {
+	if scope != "all" && scope != "completed" {
 		scope = defaultScope
 	}
 	states := values.Get("states")
@@ -118,7 +118,7 @@ func parseViewParams(values url.Values) viewParams {
 // не должна скрыть продолжающуюся работу. Страница означает соседний временной
 // интервал, а не лимит элементов: все совпавшие корни окна показываются целиком.
 func applyDashboardView(roots []*runNode, params viewParams, now time.Time) ([]*runNode, filterView, paginationView) {
-	if params.Scope != "all" {
+	if params.Scope != "all" && params.Scope != "completed" {
 		params.Scope = defaultScope
 	}
 	if params.States != "working" && params.States != "failed" {
@@ -134,6 +134,11 @@ func applyDashboardView(roots []*runNode, params viewParams, now time.Time) ([]*
 	for _, original := range viewRoots {
 		root := original
 		if params.Scope == defaultScope && !root.HasUnfinished {
+			continue
+		}
+		// Завершённое дерево не содержит живых потомков, даже если корень уже
+		// терминальный. Ошибки тоже являются завершением, а не только succeeded.
+		if params.Scope == "completed" && root.HasUnfinished {
 			continue
 		}
 		if params.States == "working" {
@@ -464,8 +469,8 @@ func pageNumbers(current, total int) []int {
 func viewURL(params viewParams, page int) template.URL {
 	values := make(url.Values)
 	values.Set("period", params.Period)
-	if params.Scope == "all" {
-		values.Set("view", "all")
+	if params.Scope == "all" || params.Scope == "completed" {
+		values.Set("view", params.Scope)
 	}
 	if params.States != defaultStates {
 		values.Set("states", params.States)

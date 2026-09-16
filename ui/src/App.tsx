@@ -24,6 +24,10 @@ import {
   ArrowLeft,
   ArrowRight,
 } from '@gravity-ui/icons';
+import {
+  DashboardFilters,
+  filtersChanged,
+} from './components/DashboardFilters';
 import { ThemePicker } from './components/Theme';
 import type { LinkProps } from 'react-router-dom';
 
@@ -33,7 +37,7 @@ function Link(props: LinkProps) {
 }
 import type { Dashboard, Run, Step } from './types';
 import { usePoll } from './hooks/api';
-import { Button, Choice, Dialog, ErrorNotice } from './components/ui';
+import { Button, Dialog, ErrorNotice } from './components/ui';
 import { findRun, RunTree, type Selection } from './components/Tree';
 import { ContinuationPanel } from './components/Continuation';
 import { RunInfo } from './components/RunInfo';
@@ -122,65 +126,11 @@ function DashboardPage() {
         ) : (
           <>
             <div className="filters">
-              <nav aria-label="Какие workflow показывать">
-                <NavigationButton
-                  view="flat"
-                  component={RouterLink}
-                  selected={data.Filter.ActiveOnly}
-                  to={filterLink(data.Filter.ActiveURL)}
-                >
-                  Активные
-                </NavigationButton>
-                <NavigationButton
-                  view="flat"
-                  component={RouterLink}
-                  selected={!data.Filter.ActiveOnly}
-                  to={filterLink(data.Filter.AllURL)}
-                >
-                  Все
-                </NavigationButton>
-              </nav>
-              <nav aria-label="Какие состояния показывать">
-                {[
-                  [
-                    data.Filter.AllStatesURL,
-                    'Все состояния',
-                    !data.Filter.WorkingOnly && !data.Filter.FailedOnly,
-                  ],
-                  [data.Filter.WorkingURL, 'В работе', data.Filter.WorkingOnly],
-                  [
-                    data.Filter.FailedURL,
-                    'Сломавшиеся',
-                    data.Filter.FailedOnly,
-                  ],
-                ].map(([url, label, active]) => (
-                  <NavigationButton
-                    view="flat"
-                    component={RouterLink}
-                    selected={Boolean(active)}
-                    key={String(label)}
-                    to={filterLink(String(url))}
-                  >
-                    {label}
-                  </NavigationButton>
-                ))}
-              </nav>
-              <Choice
-                aria-label="Период"
-                value={data.Filter.Period}
-                onUpdate={(period) => change({ period })}
-                options={data.Filter.Periods.map((period) => ({
-                  value: period.Value,
-                  content: period.Label,
-                }))}
+              <DashboardFilters
+                data={data}
+                onChange={change}
+                onReset={() => setParams({ period: '24h' })}
               />
-              <NavigationButton
-                view="flat"
-                component={RouterLink}
-                to={`${location.pathname}?period=24h`}
-              >
-                Сбросить
-              </NavigationButton>
               {data.Pagination.Visible && (
                 <nav aria-label="Страницы" className="pagination">
                   {data.Pagination.PreviousURL && (
@@ -276,7 +226,17 @@ function DashboardPage() {
                       ))}
                     </ul>
                     {!roots.length && (
-                      <p className="muted">{data.EmptyMessage}</p>
+                      <div className="empty-search">
+                        <p className="muted">{data.EmptyMessage}</p>
+                        {filtersChanged(data) && (
+                          <Button
+                            view="flat"
+                            onClick={() => setParams({ period: '24h' })}
+                          >
+                            Сбросить фильтры
+                          </Button>
+                        )}
+                      </div>
                     )}
                   </div>
                 </aside>

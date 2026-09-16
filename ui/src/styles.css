@@ -132,6 +132,13 @@ pre {
   display: flex;
   gap: 2px;
 }
+.filter-count {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.empty-search {
+  padding: 6px;
+}
 .pagination {
   margin-left: auto;
 }

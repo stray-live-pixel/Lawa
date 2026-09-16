@@ -20,6 +20,7 @@ import { layout, WorkflowGraph } from './WorkflowGraph';
 import App from '../App';
 import { ImageExport } from './ImageExport';
 import { RunTree } from './Tree';
+import { DashboardFilters } from './DashboardFilters';
 import { Dialog } from './ui';
 
 // Те же провайдеры, что и в приложении: тестируем реальные popup/диалоги UIKit.
@@ -453,4 +454,48 @@ it('PNG начинает с темы UI и сохраняет ручной вы�
     '/graph-image/run-a?theme=light&download=1',
   );
   expect(fetcher).not.toHaveBeenCalled();
+});
+
+// Статус меняет scope и states вместе: завершённые ошибки не должны исчезать
+// из-за оставшегося active-scope. В покое сброс не занимает место.
+it('компактный статус задаёт полную выборку, а период меняется независимо', async () => {
+  const onChange = vi.fn(),
+    onReset = vi.fn();
+  const sample = {
+    ...page,
+    Filter: {
+      ...page.Filter,
+      Scope: 'active',
+      States: 'all',
+      Period: '24h',
+      Matched: 2,
+      Periods: [
+        { Value: '24h', Label: 'За последние 24 часа', Selected: true },
+        { Value: 'all', Label: 'За всё время', Selected: false },
+      ],
+    },
+    Pagination: { ...page.Pagination, Current: 1 },
+  };
+  const view = render(
+    <DashboardFilters data={sample} onChange={onChange} onReset={onReset} />,
+  );
+  expect(
+    screen.queryByRole('button', { name: 'Сбросить фильтры' }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent('Найдено: 2');
+  await choose('Статус workflow', 'С ошибками');
+  expect(onChange).toHaveBeenLastCalledWith({ view: 'all', states: 'failed' });
+  await choose('Статус workflow', 'Завершённые');
+  expect(onChange).toHaveBeenLastCalledWith({ view: 'completed', states: '' });
+  await choose('Период', 'За всё время');
+  expect(onChange).toHaveBeenLastCalledWith({ period: 'all' });
+  view.rerender(
+    <DashboardFilters
+      data={{ ...sample, Filter: { ...sample.Filter, Query: 'needle' } }}
+      onChange={onChange}
+      onReset={onReset}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Сбросить фильтры' }));
+  expect(onReset).toHaveBeenCalledOnce();
 });

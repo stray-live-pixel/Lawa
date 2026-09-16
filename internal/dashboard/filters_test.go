@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -194,4 +195,23 @@ func nodeIDs(nodes []*runNode) string {
 		ids = append(ids, node.ID)
 	}
 	return strings.Join(ids, ",")
+}
+
+// Завершённый scope исключает терминального родителя с живым потомком,
+// но сохраняет целиком успешные и упавшие деревья. URL не теряет новый scope.
+func TestCompletedScopeExcludesUnfinishedDescendants(t *testing.T) {
+	now := time.Now()
+	roots := finalizeTestRoots(
+		testFilterNode("mixed", "failed", "mixed", now, testFilterNode("child", "running", "child", now)),
+		testFilterNode("done", "succeeded", "done", now),
+		testFilterNode("failed", "failed", "failed", now),
+	)
+	params := parseViewParams(url.Values{"view": {"completed"}, "period": {"all"}})
+	visible, filter, _ := applyDashboardView(roots, params, now)
+	if got := nodeIDs(visible); got != "done,failed" || filter.ActiveOnly || filter.Matched != 2 {
+		t.Fatalf("неверная завершённая выборка: %s %+v", got, filter)
+	}
+	if !strings.Contains(string(viewURL(params, 2)), "view=completed") {
+		t.Fatal("URL потерял завершённый scope")
+	}
 }
