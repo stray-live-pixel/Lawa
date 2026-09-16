@@ -140,7 +140,7 @@ pre {
 .inspector-body {
   display: grid;
   position: relative;
-  --run-list-size: clamp(220px, var(--run-list-width, 285px), 45%);
+  --run-list-size: clamp(2%, var(--panel-width, 25%), 98%);
   grid-template-columns: var(--run-list-size) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
@@ -161,6 +161,7 @@ pre {
   flex-direction: column;
   border-right: 1px solid var(--line);
   background: var(--bg);
+  overflow: hidden;
 }
 /* Поиск остаётся над прокручиваемым деревом в боковой колонке. */
 .search {
@@ -384,8 +385,9 @@ pre {
   overflow-wrap: anywhere;
 }
 .graph-workspace {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 310px;
+  grid-template-columns: minmax(0, 1fr) clamp(2%, var(--panel-width, 25%), 98%);
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -594,9 +596,6 @@ pre {
   .inspector-body {
     grid-template-columns: var(--run-list-size) minmax(0, 1fr);
   }
-  .graph-workspace {
-    grid-template-columns: minmax(0, 1fr) 260px;
-  }
   .cube-details {
     padding: 12px;
   }
@@ -699,6 +698,10 @@ pre {
   cursor: col-resize;
   touch-action: none;
   z-index: 5;
+}
+.details-resizer {
+  left: auto;
+  right: calc(var(--panel-width, 25%) - 4px);
 }
 .run-list-resizer:hover,
 .run-list-resizer:focus-visible {

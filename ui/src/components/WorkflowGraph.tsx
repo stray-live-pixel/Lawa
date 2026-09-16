@@ -1,3 +1,4 @@
+import { ResizableRunList } from './ResizableRunList';
 import { useMemo, useState } from 'react';
 import { displayVisit } from './displayVisit';
 import {
@@ -275,7 +276,7 @@ function GraphView({
         </div>
       </div>
       <ErrorNotice error={error} />
-      <div className="graph-workspace">
+      <ResizableRunList side="right">
         <div className="graph-area">
           <ReactFlow
             nodes={[...groups, ...nodes]}
@@ -381,7 +382,7 @@ function GraphView({
             )}
           </Dialog>
         </aside>
-      </div>
+      </ResizableRunList>
     </section>
   );
 }
