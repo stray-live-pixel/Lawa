@@ -219,8 +219,8 @@ function DashboardPage() {
                       </div>
                     )}
                   </div>
-                  <footer className="sidebar-footer">
-                    {data.Pagination.Visible && (
+                  {data.Pagination.Visible && (
+                    <footer className="sidebar-footer">
                       <nav aria-label="Страницы" className="pagination">
                         {data.Pagination.PreviousURL && (
                           <NavigationButton
@@ -252,8 +252,8 @@ function DashboardPage() {
                           </NavigationButton>
                         )}
                       </nav>
-                    )}
-                  </footer>
+                    </footer>
+                  )}
                 </aside>
                 <section className="inspector-details">
                   {run ? (

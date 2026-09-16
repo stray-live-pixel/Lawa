@@ -164,6 +164,7 @@ pre {
 }
 /* Поиск остаётся над прокручиваемым деревом в боковой колонке. */
 .search {
+  border-bottom: 1px solid var(--line);
   height: 36px;
   flex: none;
   display: flex;
@@ -713,6 +714,7 @@ pre {
 /* Управление находится в боковой колонке; граф использует всю высоту окна.
    Дерево прокручивается отдельно, пагинация и настройки остаются доступны. */
 .tree .app-header {
+  border-bottom: 0;
   flex-wrap: wrap;
 }
 .tree .filters {
