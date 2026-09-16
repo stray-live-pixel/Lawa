@@ -5,7 +5,7 @@ import { Trace } from './Trace';
 import { MarkdownDocument, MemoryDialog } from './MarkdownDocument';
 
 // Raw memory/events остаются экспортируемыми текстовыми ресурсами. Диалоги
-// действий реализованы React/Radix; destructive POST требует отдельного клика.
+// действий реализованы Gravity UI; destructive POST требует отдельного клика.
 export function RunInfo({
   run,
   step,
@@ -84,37 +84,18 @@ export function RunInfo({
         />
       )}
       <div className="actions">
-        <a
-          className="button"
-          href={step?.EventsURL || run.EventsURL}
-          aria-disabled={preview}
-          onClick={(event) => {
-            if (preview) event.preventDefault();
-          }}
-        >
+        <Button href={step?.EventsURL || run.EventsURL} disabled={preview}>
           События
-        </a>
+        </Button>
         {!step && (
-          <a
-            className="button"
-            href={run.VSCodeURL}
-            aria-disabled={preview}
-            onClick={(event) => {
-              if (preview) event.preventDefault();
-            }}
-          >
+          <Button href={run.VSCodeURL} disabled={preview}>
             Папка
-          </a>
+          </Button>
         )}
         {run.TicketURL && (
-          <a
-            className="button"
-            href={run.TicketURL}
-            target="_blank"
-            rel="noreferrer"
-          >
+          <Button href={run.TicketURL} target="_blank" rel="noreferrer">
             Тикет · {run.TicketID}
-          </a>
+          </Button>
         )}
         {step && (
           <>

@@ -716,7 +716,7 @@ internal/coordinator/ orchestration и нормализация событий
 internal/codex/       клиент официального App Server
 internal/runstore/    атомарный state и приватный журнал
 internal/dashboard/  JSON API и встроенная статика dashboard
-ui/                  Vite + React + TypeScript; React Flow, Radix, CSS-тема
+ui/                  Vite + React + TypeScript; React Flow, Gravity UI, системная/светлая/тёмная тема
 internal/statusreport/ Markdown-статус; совместимость старого экспорта
 internal/series/      повторяющиеся app-server run
 ```

@@ -1,12 +1,14 @@
 import {
   act,
   fireEvent,
-  render,
+  render as baseRender,
   screen,
   waitFor,
   cleanup,
 } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ThemeProvider } from '@gravity-ui/uikit';
+import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import type { Dashboard, Graph, Run } from '../types';
 import { usePoll } from '../hooks/api';
@@ -18,7 +20,22 @@ import { layout, WorkflowGraph } from './WorkflowGraph';
 import App from '../App';
 import { ImageExport } from './ImageExport';
 import { RunTree } from './Tree';
+import { DashboardFilters } from './DashboardFilters';
 import { Dialog } from './ui';
+
+// Те же провайдеры, что и в приложении: тестируем реальные popup/диалоги UIKit.
+const render = (node: ReactNode) =>
+  baseRender(node, {
+    wrapper: ({ children }) => (
+      <ThemeProvider theme="dark" lang="ru">
+        {children}
+      </ThemeProvider>
+    ),
+  });
+async function choose(label: string, option: string) {
+  fireEvent.click(screen.getByRole('combobox', { name: label }));
+  fireEvent.click(await screen.findByRole('option', { name: option }));
+}
 
 // Проверяем нашу обработку выбора и данных, а DOM/геометрию React Flow — живым
 // браузером. Заглушка сохраняет контракт клика по узлу, не вычисляя layout за нас.
@@ -34,7 +51,8 @@ vi.mock('@xyflow/react', () => ({
     </div>
   ),
   Background: () => null,
-  Controls: () => null,
+  Panel: () => null,
+  useReactFlow: () => ({ zoomIn() {}, zoomOut() {}, fitView() {} }),
   Handle: () => null,
   Position: { Left: 'left', Right: 'right' },
   MarkerType: { ArrowClosed: 'arrowclosed' },
@@ -131,9 +149,7 @@ describe('Контекст и история', () => {
       configurable: true,
     });
     render(<Continuation cube="cube context" workflow="workflow context" />);
-    fireEvent.change(screen.getByLabelText('Контекст продолжения'), {
-      target: { value: 'workflow' },
-    });
+    await choose('Контекст продолжения', 'Весь workflow');
     fireEvent.click(screen.getByRole('button', { name: 'Скопировать промпт' }));
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith('workflow context'),
@@ -191,9 +207,7 @@ describe('Контекст и история', () => {
   it('не смешивает результаты повторных посещений и показывает незапущенный узел', async () => {
     render(<WorkflowGraph runID="run-a" preview={graph} />);
     expect(screen.getByText('Итог: проход 2')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Посещение кубика'), {
-      target: { value: 'visit-1' },
-    });
+    await choose('Посещение кубика', 'Посещение 1 · Готово');
     expect(screen.getByText('Итог: проход 1')).toBeInTheDocument();
     expect(
       screen.queryByLabelText('Промпт продолжения'),
@@ -249,10 +263,7 @@ describe('Главная страница', () => {
       </MemoryRouter>,
     );
     await screen.findByRole('tab', { name: 'Информация' });
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Информация' }), {
-      button: 0,
-      ctrlKey: false,
-    });
+    fireEvent.click(screen.getByRole('tab', { name: 'Информация' }));
     fireEvent.click(
       await screen.findByRole('button', { name: 'Остановить и удалить' }),
     );
@@ -401,8 +412,8 @@ it('вкладка продолжения получает точное выбр
   expect(screen.getByLabelText('Промпт продолжения')).toHaveTextContent(
     'context visit-1',
   );
-  expect(screen.getByLabelText('Посещение для продолжения')).toHaveValue(
-    'visit-1',
+  expect(screen.getByLabelText('Посещение для продолжения')).toHaveTextContent(
+    'Посещение 1',
   );
 });
 
@@ -424,25 +435,119 @@ it('сообщения загружаются только после откры
 });
 
 // Экспорт выполняется по клику и сохраняет выбранную тему при polling.
-it('PNG использует тёмную тему по умолчанию и сохраняет выбор при обновлении', () => {
+it('PNG начинает с темы UI и сохраняет ручной выбор при обновлении', async () => {
   const fetcher = vi.fn();
   vi.stubGlobal('fetch', fetcher);
   const view = render(<ImageExport runID="run-a" />);
-  expect(screen.getByRole('link', { name: 'Показать PNG ↗' })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: 'Показать PNG' })).toHaveAttribute(
     'href',
     '/graph-image/run-a?theme=dark',
   );
-  fireEvent.change(screen.getByLabelText('Тема картинки'), {
-    target: { value: 'light' },
-  });
+  await choose('Тема картинки', 'Светлая');
   view.rerender(<ImageExport runID="run-a" />);
-  expect(screen.getByRole('link', { name: 'Показать PNG ↗' })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: 'Показать PNG' })).toHaveAttribute(
     'href',
     '/graph-image/run-a?theme=light',
   );
-  expect(screen.getByRole('link', { name: 'Скачать PNG ↓' })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: 'Скачать PNG' })).toHaveAttribute(
     'href',
     '/graph-image/run-a?theme=light&download=1',
   );
   expect(fetcher).not.toHaveBeenCalled();
+});
+
+// Статус меняет scope и states вместе: завершённые ошибки не должны исчезать
+// из-за оставшегося active-scope. В покое сброс не занимает место.
+it('компактный статус задаёт полную выборку, а период меняется независимо', async () => {
+  const onChange = vi.fn(),
+    onReset = vi.fn();
+  const sample = {
+    ...page,
+    Filter: {
+      ...page.Filter,
+      Scope: 'active',
+      States: 'all',
+      Period: '24h',
+      Matched: 2,
+      Periods: [
+        { Value: '24h', Label: 'За последние 24 часа', Selected: true },
+        { Value: 'all', Label: 'За всё время', Selected: false },
+      ],
+    },
+    Pagination: { ...page.Pagination, Current: 1 },
+  };
+  const view = render(
+    <DashboardFilters data={sample} onChange={onChange} onReset={onReset} />,
+  );
+  expect(
+    screen.queryByRole('button', { name: 'Сбросить фильтры' }),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole('status')).toHaveTextContent('Найдено: 2');
+  await choose('Статус workflow', 'С ошибками');
+  expect(onChange).toHaveBeenLastCalledWith({ view: 'all', states: 'failed' });
+  await choose('Статус workflow', 'Завершённые');
+  expect(onChange).toHaveBeenLastCalledWith({ view: 'completed', states: '' });
+  await choose('Период', 'За всё время');
+  expect(onChange).toHaveBeenLastCalledWith({ period: 'all' });
+  view.rerender(
+    <DashboardFilters
+      data={{ ...sample, Filter: { ...sample.Filter, Query: 'needle' } }}
+      onChange={onChange}
+      onReset={onReset}
+    />,
+  );
+  fireEvent.click(screen.getByRole('button', { name: 'Сбросить фильтры' }));
+  expect(onReset).toHaveBeenCalledOnce();
+});
+
+// Анонимизированная топология: параллельные маршруты внутри цикла раньше
+// обрушали страницу исключением Dagre. Исходные связи должны сохраняться.
+it('раскладывает цикл с параллельными маршрутами', () => {
+  const pairs = [
+    ['node-13', 'node-0'],
+    ['node-0', 'node-14'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-2'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-2'],
+    ['node-0', 'node-3'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-2'],
+    ['node-0', 'node-3'],
+    ['node-0', 'node-4'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-2'],
+    ['node-0', 'node-3'],
+    ['node-0', 'node-4'],
+    ['node-0', 'node-5'],
+    ['node-1', 'node-6'],
+    ['node-2', 'node-6'],
+    ['node-3', 'node-6'],
+    ['node-4', 'node-6'],
+    ['node-5', 'node-6'],
+    ['node-6', 'node-7'],
+    ['node-7', 'node-8'],
+    ['node-8', 'node-9'],
+    ['node-8', 'node-13'],
+    ['node-9', 'node-10'],
+    ['node-10', 'node-11'],
+    ['node-11', 'node-12'],
+    ['node-12', 'node-13'],
+    ['node-14', 'node-15'],
+  ];
+  const nodes = Array.from({ length: 16 }, (_, i) => ({
+    ID: `node-${i}`,
+    Prompt: '',
+    Routes: [],
+  }));
+  const edges = pairs.map(([From, To]) => ({ From, To, Label: '' }));
+  const original = structuredClone(edges);
+  const positions = layout(nodes, edges);
+  expect(positions.size).toBe(nodes.length);
+  for (const point of positions.values()) {
+    expect(Number.isFinite(point.x)).toBe(true);
+    expect(Number.isFinite(point.y)).toBe(true);
+  }
+  expect(edges).toEqual(original);
 });

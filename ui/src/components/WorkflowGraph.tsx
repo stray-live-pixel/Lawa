@@ -1,7 +1,8 @@
 import { useMemo, useState } from 'react';
 import {
   Background,
-  Controls,
+  Panel,
+  useReactFlow,
   Handle,
   MarkerType,
   Position,
@@ -10,6 +11,8 @@ import {
   type NodeProps,
   type Edge,
 } from '@xyflow/react';
+import { Card, Icon, useThemeValue } from '@gravity-ui/uikit';
+import { Plus, Minus, ArrowsExpand } from '@gravity-ui/icons';
 import dagre from '@dagrejs/dagre';
 import '@xyflow/react/dist/style.css';
 import type { Graph, GraphEdge, GraphNode } from '../types';
@@ -17,12 +20,12 @@ import { usePoll } from '../hooks/api';
 import { MarkdownDocument, MemoryDialog } from './MarkdownDocument';
 import { Trace } from './Trace';
 import { ImageExport } from './ImageExport';
-import { Button, Dialog, ErrorNotice, Status, statusNames } from './ui';
+import { Button, Choice, Dialog, ErrorNotice, Status, statusNames } from './ui';
 
 // Dagre раскладывает зависимости, развилки и циклы. Только topology участвует
 // в раскладке: новые сообщения и состояния не меняют координаты или viewport.
 export function layout(nodes: GraphNode[], edges: GraphEdge[]) {
-  const graph = new dagre.graphlib.Graph({ multigraph: true })
+  const graph = new dagre.graphlib.Graph()
     .setGraph({
       rankdir: 'LR',
       nodesep: 40,
@@ -32,9 +35,10 @@ export function layout(nodes: GraphNode[], edges: GraphEdge[]) {
     })
     .setDefaultEdgeLabel(() => ({}));
   nodes.forEach((node) => graph.setNode(node.ID, { width: 220, height: 80 }));
-  edges.forEach((edge, index) =>
-    graph.setEdge(edge.From, edge.To, {}, String(index)),
-  );
+  // Параллельные маршруты внутри цикла вызывают в Dagre ошибку пересечения
+  // прямоугольника. Для координат достаточно одной зависимости между узлами:
+  // обычный Graph объединяет связи, а React Flow ниже получает все оригиналы.
+  edges.forEach((edge) => graph.setEdge(edge.From, edge.To, {}));
   dagre.layout(graph);
   return new Map(
     nodes.map((node) => {
@@ -46,7 +50,8 @@ export function layout(nodes: GraphNode[], edges: GraphEdge[]) {
 type CubeNode = Node<{ label: string; state: string }, 'cube'>;
 function Cube({ data, selected }: NodeProps<CubeNode>) {
   return (
-    <div
+    <Card
+      view="outlined"
       className={`cube tone-${data.state} ${selected ? 'selected' : ''}`}
       title={data.label}
     >
@@ -54,10 +59,31 @@ function Cube({ data, selected }: NodeProps<CubeNode>) {
       <strong>{data.label}</strong>
       <small>{statusNames[data.state] || data.state}</small>
       <Handle type="source" position={Position.Right} />
-    </div>
+    </Card>
   );
 }
 const nodeTypes = { cube: Cube };
+
+// Контролы Gravity работают внутри провайдера React Flow, сохраняя pan/zoom API.
+function GraphControls() {
+  const { zoomIn, zoomOut, fitView } = useReactFlow();
+  return (
+    <Panel position="bottom-left" className="graph-controls">
+      <Button aria-label="Приблизить" onClick={() => void zoomIn()}>
+        <Icon data={Plus} />
+      </Button>
+      <Button aria-label="Отдалить" onClick={() => void zoomOut()}>
+        <Icon data={Minus} />
+      </Button>
+      <Button
+        aria-label="Показать весь граф"
+        onClick={() => void fitView({ padding: 0.15, maxZoom: 1 })}
+      >
+        <Icon data={ArrowsExpand} />
+      </Button>
+    </Panel>
+  );
+}
 
 export function WorkflowGraph({
   runID,
@@ -112,6 +138,7 @@ function GraphView({
   initialVisit?: string;
   onSelectionChange?: (step: string, visit?: string) => void;
 }) {
+  const theme = useThemeValue();
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [choice, setChoice] = useState({
@@ -167,9 +194,9 @@ function GraphView({
       type: MarkerType.ArrowClosed,
       width: 22,
       height: 22,
-      color: '#999',
+      color: 'var(--g-color-line-generic-accent)',
     },
-    style: { stroke: '#999', strokeWidth: 1.5 },
+    style: { stroke: 'var(--g-color-line-generic-accent)', strokeWidth: 1.5 },
   }));
   const select = (step: string, visit = '') => {
     setMemoryOpen(false);
@@ -211,17 +238,17 @@ function GraphView({
               'controls.zoomOut.ariaLabel': 'Отдалить',
               'controls.fitView.ariaLabel': 'Показать весь граф',
             }}
-            colorMode="dark"
+            colorMode={theme === 'dark' ? 'dark' : 'light'}
             aria-label="Интерактивная схема workflow"
           >
             <Background gap={20} size={1} />
-            <Controls showInteractive={false} />
+            <GraphControls />
           </ReactFlow>
           <footer className="legend">
-            <span className="tone-succeeded">● Готово</span>
-            <span className="tone-running">● В работе</span>
-            <span className="tone-failed">● Ошибка</span>
-            <span className="muted">● Ожидание</span>
+            <Status state="succeeded" />
+            <Status state="running" />
+            <Status state="failed" />
+            <Status state="pending" />
           </footer>
         </div>
         <aside className="cube-details" aria-label="Информация о кубике">
@@ -229,18 +256,15 @@ function GraphView({
           <h2>{selected?.ID || 'Нет кубиков'}</h2>
           <Status state={execution?.State || 'pending'} />
           {executions.length > 1 && (
-            <select
+            <Choice
               aria-label="Посещение кубика"
               value={execution?.Key || ''}
-              onChange={(event) => select(selected!.ID, event.target.value)}
-            >
-              {executions.map((entry) => (
-                <option key={entry.Key} value={entry.Key}>
-                  Посещение {entry.Visit || 1} ·{' '}
-                  {statusNames[entry.State] || entry.State}
-                </option>
-              ))}
-            </select>
+              onUpdate={(value) => select(selected!.ID, value)}
+              options={executions.map((entry) => ({
+                value: entry.Key,
+                content: `Посещение ${entry.Visit || 1} · ${statusNames[entry.State] || entry.State}`,
+              }))}
+            />
           )}
           <h3>Результат работы</h3>
           {execution?.Result && (

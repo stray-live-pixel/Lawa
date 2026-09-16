@@ -1,23 +1,26 @@
-/* Единая нейтральная тема. Цвет обозначает состояние, а не фон приложения.
-   Компоненты используют эти токены; сторонние библиотеки переопределены ниже. */
-:root {
-  color-scheme: dark;
-  --bg: #080808;
-  --surface: #111;
-  --raised: #181818;
-  --hover: #242424;
-  --line: #292929;
-  --text: #f5f5f5;
-  --muted: #888;
-  --link: #58a6ff;
-  --red: #f85149;
-  --green: #3fb950;
-  font:
-    13px/1.5 Consolas,
-    'Courier New',
-    monospace;
+/* Палитра полностью следует Gravity ThemeProvider, включая порталы и граф.
+   Собственные правила отвечают за компоновку, но не рисуют библиотечные контролы. */
+.g-root {
+  --panel-toolbar-height: 44px;
+  --panel-inset: 12px;
+  --bg: var(--g-color-base-background);
+  --surface: var(--g-color-base-generic-ultralight);
+  --raised: var(--g-color-base-float);
+  --hover: var(--g-color-base-simple-hover);
+  --line: var(--g-color-line-generic);
+  --text: var(--g-color-text-primary);
+  --muted: var(--g-color-text-secondary);
+  --link: var(--g-color-text-info);
+  --red: var(--g-color-text-danger);
+  --green: var(--g-color-text-positive);
   color: var(--text);
   background: var(--bg);
+}
+.g-root_theme_light {
+  color-scheme: light;
+}
+.g-root_theme_dark {
+  color-scheme: dark;
 }
 * {
   box-sizing: border-box;
@@ -31,38 +34,6 @@ body,
 body {
   overflow: hidden;
 }
-button,
-input,
-select,
-textarea {
-  font: inherit;
-  color: inherit;
-}
-button,
-a,
-select {
-  -webkit-tap-highlight-color: transparent;
-}
-button {
-  cursor: pointer;
-}
-button:disabled,
-[aria-disabled='true'] {
-  opacity: 0.45;
-  cursor: default;
-}
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--link);
-  outline-offset: 2px;
-}
-a {
-  color: var(--link);
-  text-decoration: none;
-}
 h1 {
   font-size: 21px;
   margin: 0;
@@ -74,76 +45,26 @@ h2 {
   overflow-wrap: anywhere;
 }
 h3 {
-  font-size: 12px;
-  color: #aaa;
+  font-size: 13px;
+  color: var(--muted);
   margin: 24px 0 10px;
 }
 small,
 .muted {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: inherit;
-}
-input,
-select,
-textarea {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 8px;
-  min-width: 0;
-}
-textarea {
-  width: 100%;
-  height: 140px;
-  resize: vertical;
-  margin: 10px 0;
-  font-size: 11px;
-}
-select {
-  max-width: 100%;
-}
-.button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--raised);
-  padding: 7px 10px;
-  color: var(--text);
-  font-size: 12px;
-}
-.button:hover {
-  background: var(--hover);
-}
-a.button {
-  color: var(--link);
-}
-.danger {
-  color: var(--red);
-  border-color: #542822;
+  font: var(--g-text-code-1-font-weight) var(--g-text-code-1-font-size)/1.5
+    var(--g-font-family-monospace);
 }
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin: 18px 0;
-}
-.error {
-  background: #211010;
-  border: 1px solid #57302c;
-  color: #ffb4ae;
-  padding: 10px;
-  border-radius: 6px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 12px;
 }
 .loading,
 .empty {
@@ -157,68 +78,66 @@ a.button {
 }
 .app-header {
   flex: none;
-  height: 60px;
+  min-height: 48px;
   display: flex;
   align-items: center;
-  gap: 16px;
-  padding: 10px 24px;
+  gap: 12px;
+  padding: 6px var(--panel-inset);
   border-bottom: 1px solid var(--line);
-  background: #0d0d0d;
+  background: var(--bg);
 }
 .brand {
+  --g-button-padding: 0;
+  font-size: 20px;
+  font-weight: bold;
+}
+.brand .g-button__text {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 20px;
-  font-weight: bold;
-  color: var(--text);
 }
 .brand img {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--line);
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
 }
 .header-right {
   margin-left: auto;
+  min-width: 0;
 }
-.test-label {
-  font-size: 10px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 2px 6px;
-  color: var(--muted);
+.theme-picker {
+  flex: none;
+}
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 .dashboard {
   display: flex;
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  padding: 16px 22px 18px;
-  gap: 12px;
 }
+/* Одиночные разделители сохраняют плотную компоновку без вложенных рамок. */
 .filters {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
 }
 .filters nav {
   display: flex;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 3px;
   gap: 2px;
 }
-.filters nav a {
-  padding: 5px 9px;
-  color: var(--muted);
-  font-size: 11px;
+.filter-count {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
-.filters nav a.active {
-  color: var(--text);
-  background: var(--hover);
-  border-radius: 5px;
+.empty-search {
+  padding: 6px;
 }
 .pagination {
   margin-left: auto;
@@ -228,16 +147,11 @@ a.button {
   max-height: 100px;
   overflow: auto;
 }
-.problems p {
-  margin: 0 0 6px;
-}
 .inspector {
   display: flex;
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  border: 1px solid var(--line);
-  border-radius: 9px;
   overflow: hidden;
 }
 .inspector-body {
@@ -253,25 +167,24 @@ a.button {
   padding: 5px;
   border-bottom: 1px solid var(--line);
 }
-.breadcrumbs .button {
-  border: 0;
-  background: none;
-  font-size: 11px;
-}
 .tree {
+  --tree-toggle-size: 24px;
+  --tree-row-gap: 2px;
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--line);
   background: var(--surface);
 }
+/* Поиск и вкладки образуют одну горизонтальную полосу на desktop. */
 .search {
-  padding: 8px;
+  height: var(--panel-toolbar-height);
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
   border-bottom: 1px solid var(--line);
-}
-.search input {
-  width: 100%;
-  font-size: 11px;
 }
 .tree-scroll {
   padding: 6px;
@@ -283,65 +196,71 @@ a.button {
   margin: 0;
   padding: 0;
 }
+/* Дочерний кубик не имеет стрелки раскрытия. Его суммарный отступ равен
+   ширине стрелки родителя и зазору: 7px margin + 1px линия + 18px padding.
+   Формула работает на каждом уровне, не сдвигая кубик левее своей папки. */
 .tree .tree-children {
-  padding-left: 13px;
-  border-left: 1px solid #252525;
+  padding-left: calc(var(--tree-toggle-size) + var(--tree-row-gap) - 8px);
+  border-left: 1px solid var(--line);
   margin-left: 7px;
 }
 .tree-row {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--tree-row-gap);
   border-radius: 5px;
   min-height: 32px;
 }
-.selected {
-  background: var(--hover);
+.tree-row.selected,
+.tree-step.selected {
+  background: var(--g-color-base-selection);
 }
-.tree-row:hover,
-.tree-step:hover {
-  background: #1d1d1d;
+.tree-row:hover {
+  background: var(--hover);
 }
 .tree-select,
 .tree-step {
-  border: 0;
-  background: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  text-align: left;
-  padding: 5px 2px;
+  --g-button-padding: 4px;
   min-width: 0;
   width: 100%;
-  color: var(--text);
-  font-size: 11px;
 }
-.tree-select span,
-.tree-step span {
+.tree-select .g-button__text,
+.tree-step .g-button__text {
+  flex: 1;
+  min-width: 0;
+}
+/* minmax(0, 1fr) сжимает только имя, сохраняя координаты иконки и счётчика.
+   Все строки занимают одинаковую ширину, включая пустое место под pin. */
+.tree-entry {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  text-align: left;
+}
+.tree-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
 }
-.tree-select svg,
-.tree-step svg {
-  flex: none;
-}
-.tree-select small {
-  font-size: 9px;
-}
-.tree-step {
-  padding-left: 7px;
-  border-radius: 5px;
-}
-.icon-button {
+.tree-meta {
   display: flex;
   align-items: center;
-  justify-content: center;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  padding: 3px;
+  gap: 6px;
+}
+.tree-count {
+  min-width: 24px;
+  text-align: right;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.icon-button {
+  flex: none;
+}
+.tree-row > .icon-button {
+  width: var(--tree-toggle-size);
 }
 .rotate {
   transform: rotate(90deg);
@@ -354,45 +273,28 @@ a.button {
   opacity: 1;
 }
 .ticket {
-  color: #9bd0ff;
-  background: #101c28;
-  border: 1px solid #254767;
-  border-radius: 10px;
-  padding: 0 4px;
-  max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  max-width: 66px;
 }
 .inspector-details {
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: #0d0d0d;
+  background: var(--bg);
 }
 .run-tabs {
   display: flex;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   flex-direction: column;
 }
 .tabs {
-  display: flex;
-  gap: 8px;
-  padding: 10px;
-  border-bottom: 1px solid var(--line);
+  --g-tabs-item-height: var(--panel-toolbar-height);
+  height: var(--panel-toolbar-height);
+  align-items: stretch;
+  padding: 0 var(--panel-inset);
   flex: none;
-}
-.tabs button {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 10px;
-  font-size: 11px;
-}
-.tabs button[data-state='active'] {
-  background: var(--hover);
-  border-color: #666;
 }
 .graph-tab {
   display: flex;
@@ -401,33 +303,22 @@ a.button {
 }
 .info-tab {
   overflow: auto;
-  padding: 22px;
+  padding: 16px var(--panel-inset);
   flex: 1;
 }
-.graph-tab[data-state='inactive'],
-.info-tab[data-state='inactive'] {
+/* Нативный hidden обязан побеждать flex: неактивная панель недоступна и не
+   занимает места, а провайдер Gravity связывает её с вкладкой через ARIA. */
+.graph-tab[hidden],
+.info-tab[hidden] {
   display: none;
 }
 .run-info {
   max-width: 780px;
 }
 .facts {
-  font-size: 12px;
   margin: 20px 0;
-}
-.facts > div {
-  display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  gap: 12px;
-  margin: 8px 0;
-}
-.facts dt {
-  color: var(--muted);
-}
-.facts dd {
-  margin: 0;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 .tone-succeeded {
   color: var(--green);
@@ -447,28 +338,30 @@ a.button {
 .tone-interrupted {
   color: var(--muted);
 }
-.status {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  padding: 4px 10px;
-  font-size: 11px;
-  white-space: nowrap;
-}
 .workflow-graph {
-  padding: 12px;
   display: flex;
   flex: 1;
   min-height: 0;
   min-width: 0;
   flex-direction: column;
-  gap: 12px;
 }
 .graph-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  padding: 8px var(--panel-inset);
+  flex: none;
+}
+.graph-heading > div:first-child {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+}
+.graph-heading h1 {
+  font-size: 16px;
 }
 .graph-heading small {
   overflow-wrap: anywhere;
@@ -478,8 +371,6 @@ a.button {
   grid-template-columns: minmax(0, 1fr) 310px;
   flex: 1;
   min-height: 0;
-  border: 1px solid var(--line);
-  border-radius: 10px;
   overflow: hidden;
 }
 .graph-area {
@@ -487,43 +378,39 @@ a.button {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: #111;
+  background: var(--surface);
 }
 .legend {
   display: flex;
   flex-wrap: wrap;
   gap: 14px;
   border-top: 1px solid var(--line);
-  padding: 10px 14px;
-  font-size: 11px;
+  padding: 6px var(--panel-inset);
+  font-size: 12px;
   flex: none;
 }
 .cube-details {
-  padding: 18px;
+  padding: 16px var(--panel-inset);
   overflow: auto;
   min-width: 0;
   border-left: 1px solid var(--line);
 }
-.cube-details select {
-  width: 100%;
+.cube-details > .g-select {
+  display: block;
   margin-top: 12px;
-}
-.cube-details .button {
-  margin-top: 10px;
 }
 .cube {
   width: 220px;
   height: 80px;
-  border: 1px solid #3c3c3c;
-  border-radius: 9px;
-  background: var(--raised);
+  background: var(--bg);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
+  gap: 4px;
   padding: 12px 14px;
 }
 .cube strong {
+  flex-shrink: 0;
   font-size: 12px;
   color: var(--text);
   overflow: hidden;
@@ -534,34 +421,26 @@ a.button {
 }
 .cube small {
   color: inherit;
-  font-size: 10px;
+  font-size: 11px;
 }
 .cube.selected {
-  border: 2px solid #888;
-  background: #242424;
-  box-shadow: 0 0 0 3px #ffffff10;
+  background: var(--g-color-base-selection);
+  outline: 2px solid var(--g-color-line-brand);
+  outline-offset: 1px;
 }
 .cube.tone-running,
 .cube.tone-starting {
-  border-color: var(--link);
+  border-color: var(--g-color-line-info);
 }
 .cube.tone-failed {
-  border-color: var(--red);
+  border-color: var(--g-color-line-danger);
 }
 .cube.tone-skipped {
   border-style: dashed;
 }
-.result {
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #141414;
-  font-size: 12px;
-  line-height: 1.7;
-}
 .note {
-  color: #bbb;
-  font-size: 12px;
+  color: var(--muted);
+  font-size: 13px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -571,68 +450,57 @@ a.button {
 }
 .message {
   margin: 10px 0;
-  background: #151515;
+  background: var(--surface);
   border-radius: 7px;
   padding: 10px;
 }
-.message small {
-  font-size: 10px;
-}
 .message pre {
-  font-size: 12px;
   margin: 7px 0 0;
 }
 .standalone-graph {
   display: flex;
   flex: 1;
   min-height: 0;
-  padding: 10px;
 }
-/* React Flow отвечает за pan/zoom и доступность узлов; палитра общая с UI. */
+/* React Flow сохраняет раскладку/масштаб при смене темы: меняются только токены. */
 .react-flow {
-  --xy-background-color: #111;
-  --xy-edge-stroke: #666;
-  --xy-edge-label-color: #aaa;
-  --xy-edge-label-background-color: #111;
-  --xy-controls-button-background-color: #181818;
-  --xy-controls-button-background-color-hover: #242424;
-  --xy-controls-button-color: #ddd;
-  --xy-controls-button-border-color: #333;
+  --xy-background-color: var(--bg);
+  --xy-background-color-default: var(--bg);
+  --xy-background-pattern-dots-color-default: var(
+    --g-color-line-generic-accent
+  );
+  --xy-edge-stroke: var(--g-color-line-generic-accent);
+  --xy-edge-label-color: var(--muted);
+  --xy-edge-label-background-color: var(--bg);
 }
-.react-flow__handle {
-  width: 5px;
-  height: 5px;
-  background: #777;
-  border: 0;
+.graph-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg);
+  border-radius: 6px;
 }
 .react-flow__attribution {
   font-size: 8px;
-  background: #111 !important;
+  background: var(--bg) !important;
 }
 .react-flow__attribution a {
-  color: #777;
+  color: var(--muted);
 }
 .react-flow__edge-text {
   font-size: 10px;
 }
-.dialog-overlay {
-  position: fixed;
-  inset: 0;
-  background: #0009;
-  z-index: 40;
+/* Handles участвуют в геометрии рёбер, поэтому не заменяем их display:none. */
+.cube .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
 }
 .dialog-content {
-  position: fixed;
-  z-index: 41;
-  inset: 0 0 0 auto;
-  width: min(720px, 100vw);
-  background: #0d0d0d;
-  border-left: 1px solid #333;
-  box-shadow: -18px 0 50px #000b;
+  width: min(720px, calc(100vw - 24px));
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
-  padding: 18px;
-  outline: none;
+  padding: 20px;
 }
 .dialog-header {
   display: flex;
@@ -655,88 +523,6 @@ a.button {
 .schedule h3 {
   color: var(--text);
 }
-@media (max-width: 1000px) {
-  .inspector-body {
-    grid-template-columns: 230px minmax(0, 1fr);
-  }
-  .graph-workspace {
-    grid-template-columns: minmax(0, 1fr) 260px;
-  }
-  .cube-details {
-    padding: 12px;
-  }
-}
-@media (max-width: 760px) {
-  .dashboard {
-    padding: 10px;
-  }
-  .app-header {
-    padding: 10px;
-  }
-  .header-right {
-    font-size: 10px;
-    min-width: 0;
-  }
-  .header-right .button {
-    max-width: 55vw;
-    overflow: hidden;
-    white-space: nowrap;
-  }
-  .inspector-body {
-    grid-template-columns: 1fr;
-    grid-template-rows: 150px minmax(0, 1fr);
-  }
-  .tree {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .graph-workspace {
-    display: flex;
-    flex-direction: column;
-    overflow: auto;
-  }
-  .graph-area {
-    min-height: 320px;
-    flex: none;
-  }
-  .cube-details {
-    overflow: visible;
-    border-left: 0;
-    border-top: 1px solid var(--line);
-  }
-  .graph-heading {
-    align-items: flex-start;
-  }
-  .graph-heading h1 {
-    font-size: 16px;
-  }
-  .graph-heading .status {
-    font-size: 9px;
-  }
-  .facts > div {
-    grid-template-columns: 1fr;
-    gap: 2px;
-  }
-  .filters {
-    gap: 6px;
-  }
-  .filters nav a {
-    padding: 4px 6px;
-  }
-  .pagination {
-    margin: 0;
-  }
-  .test-label {
-    display: none;
-  }
-}
-
-/* Handles нужны React Flow для расчёта привязок; скрываем только их отрисовку,
-   сохраняя размеры и координаты. display:none ломает геометрию рёбер. */
-.cube .react-flow__handle {
-  opacity: 0;
-  pointer-events: none;
-}
 .markdown-document {
   min-width: 0;
 }
@@ -746,11 +532,12 @@ a.button {
 }
 .markdown pre {
   overflow: auto;
-  background: var(--raised);
+  background: var(--surface);
   padding: 12px;
   border-radius: 6px;
 }
 .markdown code {
+  font-family: var(--g-font-family-monospace);
   font-size: 0.95em;
 }
 .markdown table {
@@ -781,24 +568,69 @@ a.button {
 .continuation-tab {
   max-width: 1000px;
 }
-.markdown-document textarea {
-  width: 100%;
-  min-height: 160px;
+.markdown-document .g-text-area {
+  margin: 10px 0;
 }
-
-/* Экспорт занимает две компактные строки вверху sidebar, не высоту графа. */
 .image-export {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
   margin-bottom: 16px;
 }
-.image-export select {
+.image-export .g-select {
   grid-column: 1 / -1;
   min-width: 0;
 }
-.image-export .button {
-  padding: 6px;
-  font-size: 11px;
-  text-align: center;
+@media (max-width: 1000px) {
+  .inspector-body {
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
+  .graph-workspace {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+  .cube-details {
+    padding: 12px;
+  }
+}
+@media (max-width: 760px) {
+  .app-header {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 10px;
+  }
+  .header-right .g-button {
+    max-width: 45vw;
+  }
+  .inspector-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 150px minmax(0, 1fr);
+  }
+  .tree {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .graph-workspace {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+  .graph-area {
+    min-height: 320px;
+    flex: none;
+  }
+  .cube-details {
+    overflow: visible;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    flex: none;
+  }
+  .graph-heading {
+    align-items: flex-start;
+  }
+  .filters {
+    gap: 6px;
+  }
+  .pagination {
+    margin: 0;
+  }
 }

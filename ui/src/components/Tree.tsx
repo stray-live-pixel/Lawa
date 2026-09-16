@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Box, ChevronRight, Folder, Pin } from 'lucide-react';
+import { Cube as Box, ChevronRight, NodesRight, Pin } from '@gravity-ui/icons';
+import { Button, Icon, Label } from '@gravity-ui/uikit';
 import type { Run, Step } from '../types';
 
 export interface Selection {
@@ -43,15 +44,22 @@ export function RunTree({
       <div
         className={`tree-row ${selection?.runID === run.ID && !selection.stepKey ? 'selected' : ''}`}
       >
-        <button
+        <Button
+          view="flat"
+          size="s"
           className="icon-button"
           onClick={toggle}
           aria-label={`Развернуть ${run.Name}`}
           aria-expanded={shown}
         >
-          <ChevronRight size={14} className={shown ? 'rotate' : ''} />
-        </button>
-        <button
+          <Icon
+            data={ChevronRight}
+            size={14}
+            className={shown ? 'rotate' : ''}
+          />
+        </Button>
+        <Button
+          view="flat"
           className="tree-select"
           onClick={() => onSelect(run)}
           title={run.Name}
@@ -61,37 +69,53 @@ export function RunTree({
               : undefined
           }
         >
-          <Folder size={16} className={`tone-${run.State}`} />
-          <span>{run.Name}</span>
-          {run.TicketID && (
-            <small className="ticket" title={run.TicketTitle}>
-              {run.TicketID}
-            </small>
-          )}
-          <small>
-            {run.CompletedSteps}/{run.TotalSteps}
-          </small>
-        </button>
-        <button
+          {/* Единый контейнер не даёт Button вынести Icon в отдельный слот:
+              иконка, имя и счётчик используют одну сетку независимо от тикета. */}
+          <span className="tree-entry">
+            <Icon data={NodesRight} size={16} className={`tone-${run.State}`} />
+            <span className="tree-name">{run.Name}</span>
+            <span className="tree-meta">
+              {run.TicketID && (
+                <Label
+                  size="xs"
+                  theme="info"
+                  className="ticket"
+                  title={`${run.TicketID} · ${run.TicketTitle}`}
+                >
+                  {run.TicketID}
+                </Label>
+              )}
+              <small className="tree-count">
+                {run.CompletedSteps}/{run.TotalSteps}
+              </small>
+            </span>
+          </span>
+        </Button>
+        <Button
+          view="flat"
+          size="s"
           className="icon-button pin"
           onClick={() => onFocus(run.ID)}
           aria-label={`Сделать ${run.Name} корневой папкой`}
         >
-          <Pin size={13} />
-        </button>
+          <Icon data={Pin} size={13} />
+        </Button>
       </div>
       {shown && (
         <ul className="tree-children">
           {(run.Steps || []).map((step) => (
             <li key={step.Key}>
-              <button
+              <Button
+                view="flat"
                 className={`tree-step ${selection?.runID === run.ID && selection.stepKey === step.Key ? 'selected' : ''}`}
                 onClick={() => onSelect(run, step)}
                 title={step.ID}
               >
-                <Box size={15} className={`tone-${step.State}`} />
-                <span>{step.ID}</span>
-              </button>
+                <span className="tree-entry">
+                  <Icon data={Box} size={16} className={`tone-${step.State}`} />
+                  <span className="tree-name">{step.ID}</span>
+                </span>
+              </Button>
             </li>
           ))}
           {(run.Children || []).map((child) => (
