@@ -293,7 +293,7 @@ function GraphView({
         </div>
         <aside className="cube-details" aria-label="Информация о кубике">
           <div className="graph-heading">
-            <StatusIcon state={graph.State} />
+            <StatusIcon state={graph.State} entity="workflow" />
             <CopyIdentity
               text={graph.ID}
               label="Скопировать runId"
@@ -314,8 +314,30 @@ function GraphView({
           <div className="cube-details-content">
             {!preview && <ImageExport runID={graph.ID} />}
             <div className="cube-title-row">
-              <StatusIcon state={execution?.State || 'not_started'} />
-              <h2>{selected?.ID || 'Нет кубиков'}</h2>
+              <StatusIcon
+                state={execution?.State || 'not_started'}
+                entity="cube"
+              />
+              {selected && (
+                <CopyIdentity
+                  text={selected.ID}
+                  label="Скопировать Cube ID"
+                  success="Cube ID скопирован"
+                  tooltipPrefix="Cube ID: "
+                  infoIcon
+                />
+              )}
+              <h2>
+                {selected ? (
+                  <CopyIdentity
+                    text={selected.ID}
+                    label="Скопировать название кубика"
+                    success="Название кубика скопировано"
+                  />
+                ) : (
+                  'Нет кубиков'
+                )}
+              </h2>
             </div>
             {execution && (
               <p className="muted visit-summary">

@@ -907,24 +907,27 @@ pre {
 /* Шапка workflow имеет разделитель на всю ширину, а сведения о посещении
    выровнены по общей внутренней сетке и не наследуют отступы полноразмерных страниц. */
 .cube-details-content {
-  padding: 12px;
+  padding: 12px 10px 12px 8px;
 }
 .cube-title-row {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
 }
 .cube-title-row .status-icon {
   flex-shrink: 0;
 }
 .cube-title-row h2 {
   margin: 0;
-  font-size: 15px;
-  line-height: 20px;
+  font-size: 14px;
+  line-height: 16px;
   min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .visit-summary {
-  margin: 4px 0 10px 30px;
+  margin: 4px 0 10px 60px;
   font-size: 11px;
 }
 .cube-details-content > .g-select {

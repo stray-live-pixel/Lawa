@@ -16,12 +16,14 @@ export function CopyIdentity({
   success,
   prefix = '',
   infoIcon = false,
+  tooltipPrefix = 'Run ID = ',
 }: {
   text: string;
   label: string;
   success: string;
   prefix?: string;
   infoIcon?: boolean;
+  tooltipPrefix?: string;
 }) {
   const onCopy = (_: string, copied: boolean) => {
     toaster.remove('copy-workflow-identity');
@@ -34,7 +36,7 @@ export function CopyIdentity({
   };
   if (infoIcon) {
     return (
-      <Tooltip content={`Run ID = ${text}`}>
+      <Tooltip content={tooltipPrefix + text}>
         <span className="run-id-trigger">
           <ClipboardButton
             className="run-id-info"
