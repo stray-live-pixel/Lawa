@@ -44,7 +44,53 @@
 }
 .office-nameplate {
   position: absolute;
-  left: 50%;
-  bottom: -2%;
+  left: 60%;
+  top: 20%;
+}
+.office-nameplate-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.office-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+}
+.office-status-dot_idle {
+  background: var(--g-color-text-secondary);
+}
+.office-status-dot_working {
+  background: var(--g-color-text-info);
+}
+.office-status-dot_monitoring {
+  background: var(--g-color-text-positive);
+}
+/* Облачко привязано к голове, а не к экрану. Пустая live-region остаётся
+   смонтированной, чтобы скринридер объявлял новые реплики при смене состояния. */
+.office-speech {
+  position: absolute;
+  left: 42%;
+  bottom: 99%;
   transform: translateX(-50%);
+  width: max-content;
+  max-width: min(200px, 55vw);
+}
+.office-speech-bubble {
+  display: block;
+  position: relative;
+  padding: 10px 14px;
+  border-radius: var(--g-border-radius-l);
+  background: var(--g-color-base-float);
+  color: var(--g-color-text-primary);
+  box-shadow: 0 4px 16px var(--g-color-sfx-shadow);
+}
+.office-speech-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: calc(50% - 6px);
+  border: 6px solid transparent;
+  border-top-color: var(--g-color-base-float);
 }
