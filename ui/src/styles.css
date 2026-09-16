@@ -907,13 +907,13 @@ pre {
 /* Шапка workflow имеет разделитель на всю ширину, а сведения о посещении
    выровнены по общей внутренней сетке и не наследуют отступы полноразмерных страниц. */
 .cube-details-content {
-  padding: 12px 10px 12px 8px;
+  padding: 0 10px 12px 8px;
 }
 /* Шаг между центрами первых иконок workflow — 24px + 4px.
    Сдвигаем кубик на этот шаг, сохраняя разделитель на всю ширину панели. */
 .cube-title-row {
   margin: 0 -10px 10px -8px;
-  padding: 0 10px 8px 36px;
+  padding: 6px 10px 6px 36px;
   border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
