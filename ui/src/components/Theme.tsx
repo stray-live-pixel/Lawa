@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react';
-import { ThemeProvider, Select, Icon } from '@gravity-ui/uikit';
+import { ThemeProvider, DropdownMenu, Icon } from '@gravity-ui/uikit';
 import { Display, Sun, Moon } from '@gravity-ui/icons';
 
 export type ThemePreference = 'system' | 'light' | 'dark';
@@ -37,47 +37,28 @@ export function AppTheme({ children }: { children: ReactNode }) {
     </ThemeChoice.Provider>
   );
 }
-// Выбор доступен на dashboard и самостоятельной странице графа.
+// Иконка показывает текущий выбор; меню сохраняет явный системный режим.
 export function ThemePicker() {
   const { value, update } = useContext(ThemeChoice);
+  const choices = [
+    { value: 'system', label: 'Системная', icon: Display },
+    { value: 'light', label: 'Светлая', icon: Sun },
+    { value: 'dark', label: 'Тёмная', icon: Moon },
+  ] as const;
+  const current = choices.find((choice) => choice.value === value)!;
   return (
-    <Select
-      aria-label="Тема интерфейса"
-      className="theme-picker"
-      value={[value]}
-      onUpdate={([next]) => update(next as ThemePreference)}
-      options={[
-        {
-          value: 'system',
-          content: (
-            <span className="theme-option">
-              <Icon data={Display} />
-              Системная
-            </span>
-          ),
-          text: 'Системная',
-        },
-        {
-          value: 'light',
-          content: (
-            <span className="theme-option">
-              <Icon data={Sun} />
-              Светлая
-            </span>
-          ),
-          text: 'Светлая',
-        },
-        {
-          value: 'dark',
-          content: (
-            <span className="theme-option">
-              <Icon data={Moon} />
-              Тёмная
-            </span>
-          ),
-          text: 'Тёмная',
-        },
-      ]}
+    <DropdownMenu
+      icon={<Icon data={current.icon} />}
+      defaultSwitcherProps={{
+        'aria-label': 'Тема интерфейса',
+        title: `Тема: ${current.label}`,
+        view: 'flat',
+      }}
+      items={choices.map((choice) => ({
+        text: `${choice.label}${choice.value === value ? ' ✓' : ''}`,
+        iconStart: <Icon data={choice.icon} />,
+        action: () => update(choice.value),
+      }))}
     />
   );
 }

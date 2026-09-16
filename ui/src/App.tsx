@@ -18,13 +18,9 @@ import {
   Button as NavigationButton,
   Icon,
   Loader,
+  Tooltip,
 } from '@gravity-ui/uikit';
-import {
-  Magnifier,
-  ChevronRight,
-  ArrowLeft,
-  ArrowRight,
-} from '@gravity-ui/icons';
+import { Magnifier, Clock, ArrowLeft, ArrowRight } from '@gravity-ui/icons';
 import {
   DashboardFilters,
   filtersChanged,
@@ -100,25 +96,6 @@ function DashboardPage() {
   const scheduled = data?.Scheduled || [];
   return (
     <div className="app">
-      <header className="app-header">
-        <Link className="brand" to={preview ? '/preview' : '/'}>
-          <img src="/assets/lawa-logo.png" alt="" />
-          Lawa
-        </Link>
-        {preview && <Label size="xs">TEST DATA</Label>}
-        <div className="header-right">
-          {scheduled.length ? (
-            <Button onClick={() => setScheduleOpen(true)}>
-              {scheduled[0].WorkflowID}{' '}
-              <span className="muted">{scheduled[0].Remaining}</span>
-              <Icon data={ChevronRight} />
-            </Button>
-          ) : (
-            <span className="muted">Нет запланированных запусков</span>
-          )}
-        </div>
-        <ThemePicker />
-      </header>
       <main className="dashboard">
         <ErrorNotice error={error} />
         {!data ? (
@@ -127,46 +104,6 @@ function DashboardPage() {
           </p>
         ) : (
           <>
-            <div className="filters">
-              <DashboardFilters
-                data={data}
-                onChange={change}
-                onReset={() => setParams({ period: '24h' })}
-              />
-              {data.Pagination.Visible && (
-                <nav aria-label="Страницы" className="pagination">
-                  {data.Pagination.PreviousURL && (
-                    <NavigationButton
-                      view="flat"
-                      component={RouterLink}
-                      to={filterLink(data.Pagination.PreviousURL)}
-                    >
-                      <Icon data={ArrowLeft} /> Новее
-                    </NavigationButton>
-                  )}
-                  {(data.Pagination.Items || []).map((item) => (
-                    <NavigationButton
-                      view="flat"
-                      component={RouterLink}
-                      key={item.Label}
-                      selected={item.Current}
-                      to={filterLink(item.URL)}
-                    >
-                      {item.Label}
-                    </NavigationButton>
-                  ))}
-                  {data.Pagination.NextURL && (
-                    <NavigationButton
-                      view="flat"
-                      component={RouterLink}
-                      to={filterLink(data.Pagination.NextURL)}
-                    >
-                      Старее <Icon data={ArrowRight} />
-                    </NavigationButton>
-                  )}
-                </nav>
-              )}
-            </div>
             {!!data.Problems?.length && (
               <div className="problems">
                 {data.Problems.map((problem, index) => (
@@ -178,20 +115,38 @@ function DashboardPage() {
               </div>
             )}
             <div className="inspector">
-              {data.Filter.Focused && (
-                <nav className="breadcrumbs" aria-label="Закреплённая папка">
-                  {(data.Filter.FocusPath || []).map((part) => (
-                    <Button
-                      key={part.ID}
-                      onClick={() => change({ root: part.ID })}
-                    >
-                      {part.Name} /
-                    </Button>
-                  ))}
-                </nav>
-              )}
               <ResizableRunList>
                 <aside className="tree" aria-label="Дерево workflow и кубиков">
+                  <header className="app-header">
+                    <Link className="brand" to={preview ? '/preview' : '/'}>
+                      <img src="/assets/lawa-logo.png" alt="" />
+                      Lawa
+                    </Link>
+                    {preview && <Label size="xs">TEST DATA</Label>}
+                  </header>
+                  <div className="filters">
+                    <DashboardFilters
+                      data={data}
+                      onChange={change}
+                      onReset={() => setParams({ period: '24h' })}
+                    />
+                  </div>
+                  {data.Filter.Focused && (
+                    <nav
+                      className="breadcrumbs"
+                      aria-label="Закреплённая папка"
+                    >
+                      {(data.Filter.FocusPath || []).map((part) => (
+                        <Button
+                          key={part.ID}
+                          onClick={() => change({ root: part.ID })}
+                        >
+                          {part.Name} /
+                        </Button>
+                      ))}
+                    </nav>
+                  )}
+
                   <Search
                     key={data.Filter.Query}
                     value={data.Filter.Query}
@@ -241,6 +196,55 @@ function DashboardPage() {
                       </div>
                     )}
                   </div>
+                  <footer className="sidebar-footer">
+                    {data.Pagination.Visible && (
+                      <nav aria-label="Страницы" className="pagination">
+                        {data.Pagination.PreviousURL && (
+                          <NavigationButton
+                            view="flat"
+                            component={RouterLink}
+                            to={filterLink(data.Pagination.PreviousURL)}
+                          >
+                            <Icon data={ArrowLeft} /> Новее
+                          </NavigationButton>
+                        )}
+                        {(data.Pagination.Items || []).map((item) => (
+                          <NavigationButton
+                            view="flat"
+                            component={RouterLink}
+                            key={item.Label}
+                            selected={item.Current}
+                            to={filterLink(item.URL)}
+                          >
+                            {item.Label}
+                          </NavigationButton>
+                        ))}
+                        {data.Pagination.NextURL && (
+                          <NavigationButton
+                            view="flat"
+                            component={RouterLink}
+                            to={filterLink(data.Pagination.NextURL)}
+                          >
+                            Старее <Icon data={ArrowRight} />
+                          </NavigationButton>
+                        )}
+                      </nav>
+                    )}
+                    <div className="sidebar-tools">
+                      <ThemePicker />
+                      <Tooltip
+                        content={`Запланированные запуски: ${scheduled.length}`}
+                      >
+                        <Button
+                          view="flat"
+                          aria-label="Запланированные запуски"
+                          onClick={() => setScheduleOpen(true)}
+                        >
+                          <Icon data={Clock} />
+                        </Button>
+                      </Tooltip>
+                    </div>
+                  </footer>
                 </aside>
                 <section className="inspector-details">
                   {run ? (
@@ -380,6 +384,9 @@ function DashboardPage() {
         title="Расписание запусков"
       >
         <div className="schedule">
+          {!scheduled.length && (
+            <p className="muted">Нет запланированных запусков</p>
+          )}
           {scheduled.map((item) => (
             <article key={item.SeriesID}>
               <h3>{item.WorkflowID}</h3>

@@ -281,7 +281,18 @@ describe('Главная страница', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /Следующий run/ }));
+    // Управление остаётся внутри боковой панели после удаления общего header.
+    const sidebar = screen.getByRole('complementary', {
+      name: 'Дерево workflow и кубиков',
+    });
+    for (const name of ['Lawa', 'Тема интерфейса', 'Запланированные запуски']) {
+      expect(sidebar).toContainElement(
+        screen.getByRole('button', { name, exact: true }),
+      );
+    }
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Запланированные запуски' }),
+    );
     expect(
       await screen.findByRole('dialog', { name: 'Расписание запусков' }),
     ).toBeInTheDocument();

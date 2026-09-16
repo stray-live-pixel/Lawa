@@ -101,18 +101,7 @@ pre {
   height: 28px;
   border-radius: 8px;
 }
-.header-right {
-  margin-left: auto;
-  min-width: 0;
-}
-.theme-picker {
-  flex: none;
-}
-.theme-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
+
 .dashboard {
   display: flex;
   flex: 1;
@@ -128,10 +117,7 @@ pre {
   padding: 6px 12px;
   border-bottom: 1px solid var(--line);
 }
-.filters nav {
-  display: flex;
-  gap: 2px;
-}
+
 .filter-count {
   white-space: nowrap;
   font-variant-numeric: tabular-nums;
@@ -179,7 +165,7 @@ pre {
   border-right: 1px solid var(--line);
   background: var(--surface);
 }
-/* Поиск и вкладки образуют одну горизонтальную полосу на desktop. */
+/* Поиск остаётся над прокручиваемым деревом в боковой колонке. */
 .search {
   height: var(--panel-toolbar-height);
   flex: none;
@@ -382,15 +368,7 @@ pre {
   min-height: 0;
   background: var(--surface);
 }
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  border-top: 1px solid var(--line);
-  padding: 6px var(--panel-inset);
-  font-size: 12px;
-  flex: none;
-}
+
 .cube-details {
   padding: 16px var(--panel-inset);
   overflow: auto;
@@ -600,12 +578,9 @@ pre {
     gap: 6px;
     padding: 6px 10px;
   }
-  .header-right .g-button {
-    max-width: 45vw;
-  }
   .inspector-body {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 150px minmax(0, 1fr);
+    grid-template-rows: minmax(260px, 40%) minmax(0, 1fr);
   }
   .tree {
     border-right: 0;
@@ -705,4 +680,36 @@ pre {
   .run-list-resizer {
     display: none;
   }
+}
+
+/* Управление находится в боковой колонке; граф использует всю высоту окна.
+   Дерево прокручивается отдельно, пагинация и настройки остаются доступны. */
+.tree .app-header {
+  flex-wrap: wrap;
+}
+.tree .filters {
+  gap: 6px;
+}
+.tree .filters > .g-select {
+  width: 100%;
+  min-width: 0;
+}
+.sidebar-footer {
+  flex: none;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line);
+}
+.sidebar-footer .pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 0;
+}
+.sidebar-tools {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.tree-scroll {
+  min-height: 48px;
 }

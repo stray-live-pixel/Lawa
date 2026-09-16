@@ -308,12 +308,6 @@ function GraphView({
             <Background gap={20} size={1} />
             <GraphControls />
           </ReactFlow>
-          <footer className="legend">
-            <Status state="succeeded" />
-            <Status state="running" />
-            <Status state="failed" />
-            <Status state="pending" />
-          </footer>
         </div>
         <aside className="cube-details" aria-label="Информация о кубике">
           {!preview && <ImageExport runID={graph.ID} />}
