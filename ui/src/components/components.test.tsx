@@ -213,7 +213,7 @@ describe('Контекст и история', () => {
   it('не смешивает результаты повторных посещений и показывает незапущенный узел', async () => {
     render(<WorkflowGraph runID="run-a" preview={graph} />);
     expect(screen.getByText('Итог: проход 2')).toBeInTheDocument();
-    await choose('Посещение кубика', 'Посещение 1 · Готово');
+    fireEvent.click(screen.getByRole('button', { name: 'Посещение 1' }));
     expect(screen.getByText('Итог: проход 1')).toBeInTheDocument();
     expect(
       screen.queryByLabelText('Промпт продолжения'),
@@ -635,13 +635,17 @@ it('согласует состояние кубика и детали при sk
     '3',
   );
   expect(screen.getByText('Результат next')).toBeInTheDocument();
-  await choose('Посещение кубика', 'Посещение 2 · Пропущено');
+  fireEvent.click(screen.getByRole('button', { name: 'Посещение 2' }));
+  expect(screen.getByRole('button', { name: 'Посещение 2' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
   expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
     'data-state',
     'skipped',
   );
   expect(screen.getByText('Результат skip')).toBeInTheDocument();
-  await choose('Посещение кубика', 'Актуальное посещение');
+  fireEvent.click(screen.getByRole('button', { name: 'Посещение 3' }));
   expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
     'data-state',
     'running',

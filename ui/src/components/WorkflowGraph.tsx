@@ -27,7 +27,7 @@ import { usePoll } from '../hooks/api';
 import { MarkdownDocument, MemoryDialog } from './MarkdownDocument';
 import { Trace } from './Trace';
 import { ImageExport } from './ImageExport';
-import { Button, Choice, Dialog, ErrorNotice, statusNames } from './ui';
+import { Button, Dialog, ErrorNotice, statusNames } from './ui';
 
 // Совместимый экспорт координат для потребителей и регрессионных тестов.
 export function layout(nodes: GraphNode[], edges: GraphEdge[]) {
@@ -338,28 +338,34 @@ function GraphView({
                   'Нет кубиков'
                 )}
               </h2>
+              {executions.length > 1 && (
+                <nav className="visit-pagination" aria-label="Итерации кубика">
+                  {[...executions]
+                    .sort((a, b) => (a.Visit || 1) - (b.Visit || 1))
+                    .map((entry) => (
+                      <Button
+                        key={entry.Key}
+                        view="flat"
+                        size="s"
+                        selected={entry.Key === execution?.Key}
+                        aria-current={
+                          entry.Key === execution?.Key ? 'page' : undefined
+                        }
+                        aria-label={`Посещение ${entry.Visit || 1}`}
+                        title={`${statusNames[entry.State] || entry.State}${entry.Trigger ? ` · ${entry.Trigger}` : ''}`}
+                        onClick={() => select(selected!.ID, entry.Key)}
+                      >
+                        #{entry.Visit || 1}
+                      </Button>
+                    ))}
+                </nav>
+              )}
             </div>
             {execution && (
               <p className="muted visit-summary">
                 Посещение #{execution.Visit || 1}
                 {execution.Attempt ? ` · Попытка ${execution.Attempt}` : ''}
               </p>
-            )}
-            {executions.length > 0 && (
-              <Choice
-                aria-label="Посещение кубика"
-                value={current.visit || 'auto'}
-                onUpdate={(value) =>
-                  select(selected!.ID, value === 'auto' ? '' : value)
-                }
-                options={[
-                  { value: 'auto', content: 'Актуальное посещение' },
-                  ...executions.map((entry) => ({
-                    value: entry.Key,
-                    content: `Посещение ${entry.Visit || 1} · ${statusNames[entry.State] || entry.State}${entry.Trigger ? ` · ${entry.Trigger}` : ''}`,
-                  })),
-                ]}
-              />
             )}
             {execution?.Result && (
               <MarkdownDocument

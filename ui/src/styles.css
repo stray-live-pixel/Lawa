@@ -935,11 +935,6 @@ pre {
   margin: 4px 0 10px 88px;
   font-size: 11px;
 }
-.cube-details-content > .g-select {
-  display: block;
-  width: 100%;
-  margin-bottom: 16px;
-}
 .result-toolbar {
   display: flex;
   align-items: center;
@@ -975,4 +970,19 @@ pre {
 }
 .cube-details-content > .actions {
   margin: 12px 0 0;
+}
+
+/* Номера посещений остаются справа от названия; длинная история прокручивается
+   горизонтально, не расширяя панель и не вытесняя заголовок полностью. */
+.visit-pagination {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 50%;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.visit-pagination > .g-button {
+  flex-shrink: 0;
 }
