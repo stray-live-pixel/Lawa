@@ -18,8 +18,8 @@ import {
   type NodeProps,
   type Edge,
 } from '@xyflow/react';
-import { Card, Icon, useThemeValue } from '@gravity-ui/uikit';
-import { Plus, Minus, ArrowsExpand } from '@gravity-ui/icons';
+import { Card, Icon, Tooltip, useThemeValue } from '@gravity-ui/uikit';
+import { Plus, Minus, ArrowsExpand, FileText } from '@gravity-ui/icons';
 import { graphLayout, type RoutedEdge } from './graphLayout';
 import '@xyflow/react/dist/style.css';
 import type { Graph, GraphEdge, GraphNode } from '../types';
@@ -360,6 +360,19 @@ function GraphView({
                     ))}
                 </nav>
               )}
+              <Tooltip content="Сообщения и действия">
+                <span className="cube-messages-trigger">
+                  <Button
+                    view="flat"
+                    size="s"
+                    aria-label="Сообщения и действия"
+                    disabled={!execution?.TraceURL}
+                    onClick={() => setMessagesOpen(true)}
+                  >
+                    <Icon data={FileText} size={16} />
+                  </Button>
+                </span>
+              </Tooltip>
             </div>
             {execution?.Result && (
               <MarkdownDocument
@@ -400,19 +413,13 @@ function GraphView({
                 )}
               </dl>
             )}
-            <div className="actions">
-              {execution?.MemoryURL && (
+            {execution?.MemoryURL && (
+              <div className="actions">
                 <Button onClick={() => setMemoryOpen(true)}>
                   Память кубика
                 </Button>
-              )}
-              <Button
-                disabled={!execution?.TraceURL}
-                onClick={() => setMessagesOpen(true)}
-              >
-                Сообщения и действия
-              </Button>
-            </div>
+              </div>
+            )}
           </div>
           <MemoryDialog
             key={`memory/${execution?.Key}`}
