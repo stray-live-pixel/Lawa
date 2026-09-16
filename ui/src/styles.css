@@ -784,6 +784,7 @@ pre {
   display: flex;
   align-items: center;
   padding-left: 4px;
+  padding-right: 2px;
 }
 .tree .tree-branch-open {
   margin-block: 6px;
