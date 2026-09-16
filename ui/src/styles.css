@@ -165,11 +165,11 @@ pre {
 /* Поиск остаётся над прокручиваемым деревом в боковой колонке. */
 .search {
   border-bottom: 1px solid var(--line);
-  height: 38px;
+  height: 40px;
   flex: none;
   display: flex;
   align-items: center;
-  padding: 0 8px 2px;
+  padding: 0 8px 4px;
 }
 .tree-scroll {
   padding: 6px;
@@ -721,7 +721,7 @@ pre {
   gap: 4px;
   flex-wrap: nowrap;
   flex: none;
-  padding: 4px 8px 2px;
+  padding: 2px 8px 2px;
   border-bottom: 0;
 }
 .tree .filters > .g-select {
