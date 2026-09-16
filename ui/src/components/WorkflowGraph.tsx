@@ -328,7 +328,9 @@ function GraphView({
                 />
               )}
               <Tooltip
-                content={execution?.TraceURL ? 'Сообщения и действия' : 'Логов нет'}
+                content={
+                  execution?.TraceURL ? 'Сообщения и действия' : 'Логов нет'
+                }
               >
                 <span className="run-id-trigger">
                   <Button
