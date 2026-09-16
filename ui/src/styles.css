@@ -373,7 +373,7 @@ pre {
   border-bottom: 1px solid var(--line);
   flex: none;
 }
-.graph-heading > .g-label {
+.graph-heading > .status-icon {
   flex-shrink: 0;
 }
 .graph-identity {
@@ -397,12 +397,14 @@ pre {
   font-size: 9px;
   line-height: 11px;
   color: var(--muted);
+  opacity: 0.9;
 }
 /* Библиотечная кнопка сохраняет клавиатурный фокус и семантику действия,
    но выглядит как строка заголовка. Обрезается текст, не копируемое значение. */
 .copy-identity {
   --g-button-background-color: transparent;
   --g-button-background-color-hover: transparent;
+  --g-button-text-color: inherit;
   --g-button-text-color-hover: inherit;
   --g-button-padding: 0;
   --g-button-height: auto;
@@ -873,4 +875,15 @@ pre {
     display: inline;
     font-size: 10px;
   }
+}
+
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+.status-icon.tone-not_started {
+  color: var(--muted);
 }

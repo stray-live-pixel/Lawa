@@ -1,3 +1,4 @@
+import { StatusIcon } from './StatusIcon';
 import { CopyIdentity } from './CopyIdentity';
 import { ResizableRunList } from './ResizableRunList';
 import { useMemo, useState } from 'react';
@@ -26,7 +27,7 @@ import { usePoll } from '../hooks/api';
 import { MarkdownDocument, MemoryDialog } from './MarkdownDocument';
 import { Trace } from './Trace';
 import { ImageExport } from './ImageExport';
-import { Button, Choice, Dialog, ErrorNotice, Status, statusNames } from './ui';
+import { Button, Choice, Dialog, ErrorNotice, statusNames } from './ui';
 
 // Совместимый экспорт координат для потребителей и регрессионных тестов.
 export function layout(nodes: GraphNode[], edges: GraphEdge[]) {
@@ -292,8 +293,15 @@ function GraphView({
         </div>
         <aside className="cube-details" aria-label="Информация о кубике">
           <div className="graph-heading">
-            <Status state={graph.State} />
+            <StatusIcon state={graph.State} />
             <div className="graph-identity">
+              <div className="graph-run-id">
+                <CopyIdentity
+                  text={graph.ID}
+                  label="Скопировать runId"
+                  success="runId скопирован"
+                />
+              </div>
               <h1>
                 <CopyIdentity
                   text={graph.Name}
@@ -301,20 +309,12 @@ function GraphView({
                   success="Название workflow скопировано"
                 />
               </h1>
-              <div className="graph-run-id">
-                <CopyIdentity
-                  text={graph.ID}
-                  prefix="runId="
-                  label="Скопировать runId"
-                  success="runId скопирован"
-                />
-              </div>
             </div>
           </div>
 
           {!preview && <ImageExport runID={graph.ID} />}
           <h2>{selected?.ID || 'Нет кубиков'}</h2>
-          <Status state={execution?.State || 'not_started'} />
+          <StatusIcon state={execution?.State || 'not_started'} />
           {execution && (
             <p className="muted">Посещение #{execution.Visit || 1}</p>
           )}
