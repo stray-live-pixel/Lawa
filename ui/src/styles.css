@@ -369,7 +369,7 @@ pre {
   align-items: center;
   gap: 8px;
   padding: 6px calc(var(--panel-inset) - 2px) 6px calc(var(--panel-inset) - 4px);
-  margin-bottom: 12px;
+  margin-bottom: 0;
   border-bottom: 1px solid var(--line);
   flex: none;
 }
@@ -474,10 +474,6 @@ pre {
   overflow: auto;
   min-width: 0;
   border-left: 1px solid var(--line);
-}
-.cube-details > .g-select {
-  display: block;
-  margin-top: 12px;
 }
 .cube {
   width: 220px;
@@ -906,4 +902,69 @@ pre {
   margin: 2px 0 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+}
+
+/* Шапка workflow имеет разделитель на всю ширину, а сведения о посещении
+   выровнены по общей внутренней сетке и не наследуют отступы полноразмерных страниц. */
+.cube-details-content {
+  padding: 12px;
+}
+.cube-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.cube-title-row .status-icon {
+  flex-shrink: 0;
+}
+.cube-title-row h2 {
+  margin: 0;
+  font-size: 15px;
+  line-height: 20px;
+  min-width: 0;
+}
+.visit-summary {
+  margin: 4px 0 10px 30px;
+  font-size: 11px;
+}
+.cube-details-content > .g-select {
+  display: block;
+  width: 100%;
+  margin-bottom: 16px;
+}
+.result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.result-toolbar h3 {
+  margin: 0;
+  font-size: 12px;
+}
+.cube-details-content .markdown {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cube-details-content .markdown h1,
+.cube-details-content .markdown h2 {
+  font-size: 15px;
+  line-height: 1.4;
+  margin: 12px 0 6px;
+}
+.cube-details-content .markdown h3 {
+  font-size: 13px;
+  margin: 12px 0 6px;
+}
+.cube-details-content .markdown > :first-child {
+  margin-top: 0;
+}
+.cube-details-content .markdown p,
+.cube-details-content .markdown ul {
+  margin-top: 6px;
+  margin-bottom: 8px;
+}
+.cube-details-content > .actions {
+  margin: 12px 0 0;
 }

@@ -311,76 +311,86 @@ function GraphView({
             </div>
           </div>
 
-          {!preview && <ImageExport runID={graph.ID} />}
-          <h2>{selected?.ID || 'Нет кубиков'}</h2>
-          <StatusIcon state={execution?.State || 'not_started'} />
-          {execution && (
-            <p className="muted">
-              Посещение #{execution.Visit || 1}
-              {execution.Attempt ? ` · Попытка ${execution.Attempt}` : ''}
-            </p>
-          )}
-          {executions.length > 0 && (
-            <Choice
-              aria-label="Посещение кубика"
-              value={current.visit || 'auto'}
-              onUpdate={(value) =>
-                select(selected!.ID, value === 'auto' ? '' : value)
-              }
-              options={[
-                { value: 'auto', content: 'Актуальное посещение' },
-                ...executions.map((entry) => ({
-                  value: entry.Key,
-                  content: `Посещение ${entry.Visit || 1} · ${statusNames[entry.State] || entry.State}${entry.Trigger ? ` · ${entry.Trigger}` : ''}`,
-                })),
-              ]}
-            />
-          )}
-          <h3>Результат работы</h3>
-          {execution?.Result && (
-            <MarkdownDocument
-              text={execution.Result}
-              label="Результат работы"
-              copyLabel="Скопировать результат"
-            />
-          )}
-          <p className="note">
-            {execution?.Note || (!execution ? 'Кубик ещё не запускался.' : '')}
-          </p>
-          {/* Факты выбранного посещения не смешиваем со статическими маршрутами:
-              возможные маршруты доступны на диаграмме и во вкладке «Описание». */}
-          {(execution?.Decision || execution?.Trigger || graph.StopReason) && (
-            <dl className="visit-facts">
-              {execution?.Decision && (
-                <>
-                  <dt>Решение посещения</dt>
-                  <dd>{execution.Decision}</dd>
-                </>
-              )}
-              {execution?.Trigger && (
-                <>
-                  <dt>Причина перехода</dt>
-                  <dd>{execution.Trigger}</dd>
-                </>
-              )}
-              {graph.StopReason && (
-                <>
-                  <dt>Причина остановки workflow</dt>
-                  <dd>{graph.StopReason}</dd>
-                </>
-              )}
-            </dl>
-          )}
-          <div className="actions">
-            {execution?.MemoryURL && (
-              <Button onClick={() => setMemoryOpen(true)}>Память кубика</Button>
+          <div className="cube-details-content">
+            {!preview && <ImageExport runID={graph.ID} />}
+            <div className="cube-title-row">
+              <StatusIcon state={execution?.State || 'not_started'} />
+              <h2>{selected?.ID || 'Нет кубиков'}</h2>
+            </div>
+            {execution && (
+              <p className="muted visit-summary">
+                Посещение #{execution.Visit || 1}
+                {execution.Attempt ? ` · Попытка ${execution.Attempt}` : ''}
+              </p>
             )}
-            <Button
-              disabled={!execution?.TraceURL}
-              onClick={() => setMessagesOpen(true)}
-            >
-              Сообщения и действия
-            </Button>
+            {executions.length > 0 && (
+              <Choice
+                aria-label="Посещение кубика"
+                value={current.visit || 'auto'}
+                onUpdate={(value) =>
+                  select(selected!.ID, value === 'auto' ? '' : value)
+                }
+                options={[
+                  { value: 'auto', content: 'Актуальное посещение' },
+                  ...executions.map((entry) => ({
+                    value: entry.Key,
+                    content: `Посещение ${entry.Visit || 1} · ${statusNames[entry.State] || entry.State}${entry.Trigger ? ` · ${entry.Trigger}` : ''}`,
+                  })),
+                ]}
+              />
+            )}
+            {execution?.Result && (
+              <MarkdownDocument
+                text={execution.Result}
+                label="Результат работы"
+                copyLabel="Скопировать результат"
+                compact
+              />
+            )}
+            {(execution?.Note || !execution) && (
+              <p className="note">
+                {execution?.Note || 'Кубик ещё не запускался.'}
+              </p>
+            )}
+            {/* Факты выбранного посещения не смешиваем со статическими маршрутами:
+              возможные маршруты доступны на диаграмме и во вкладке «Описание». */}
+            {(execution?.Decision ||
+              execution?.Trigger ||
+              graph.StopReason) && (
+              <dl className="visit-facts">
+                {execution?.Decision && (
+                  <>
+                    <dt>Решение посещения</dt>
+                    <dd>{execution.Decision}</dd>
+                  </>
+                )}
+                {execution?.Trigger && (
+                  <>
+                    <dt>Причина перехода</dt>
+                    <dd>{execution.Trigger}</dd>
+                  </>
+                )}
+                {graph.StopReason && (
+                  <>
+                    <dt>Причина остановки workflow</dt>
+                    <dd>{graph.StopReason}</dd>
+                  </>
+                )}
+              </dl>
+            )}
+            <div className="actions">
+              {execution?.MemoryURL && (
+                <Button onClick={() => setMemoryOpen(true)}>
+                  Память кубика
+                </Button>
+              )}
+              <Button
+                disabled={!execution?.TraceURL}
+                onClick={() => setMessagesOpen(true)}
+              >
+                Сообщения и действия
+              </Button>
+            </div>
           </div>
           <MemoryDialog
             key={`memory/${execution?.Key}`}
