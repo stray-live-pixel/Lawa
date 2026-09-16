@@ -118,11 +118,34 @@ function DashboardPage() {
               <ResizableRunList>
                 <aside className="tree" aria-label="Дерево workflow и кубиков">
                   <header className="app-header">
-                    <Link className="brand" to={preview ? '/preview' : '/'}>
+                    <div className="brand">
                       <img src="/assets/lawa-logo.png" alt="" />
                       Lawa
-                    </Link>
+                    </div>
                     {preview && <Label size="xs">TEST DATA</Label>}
+                    <div className="header-tools">
+                      <ThemePicker />
+                      <Tooltip
+                        content={`Запланированные запуски: ${scheduled.length}`}
+                      >
+                        <Button
+                          view="flat"
+                          className="schedule-button"
+                          aria-label="Запланированные запуски"
+                          onClick={() => setScheduleOpen(true)}
+                        >
+                          <span className="schedule-icon">
+                            <Icon data={Clock} />
+                            {scheduled.length > 0 && (
+                              <span
+                                className="schedule-dot"
+                                aria-hidden="true"
+                              />
+                            )}
+                          </span>
+                        </Button>
+                      </Tooltip>
+                    </div>
                   </header>
                   {data.Filter.Focused && (
                     <nav
@@ -230,20 +253,6 @@ function DashboardPage() {
                         )}
                       </nav>
                     )}
-                    <div className="sidebar-tools">
-                      <ThemePicker />
-                      <Tooltip
-                        content={`Запланированные запуски: ${scheduled.length}`}
-                      >
-                        <Button
-                          view="flat"
-                          aria-label="Запланированные запуски"
-                          onClick={() => setScheduleOpen(true)}
-                        >
-                          <Icon data={Clock} />
-                        </Button>
-                      </Tooltip>
-                    </div>
                   </footer>
                 </aside>
                 <section className="inspector-details">

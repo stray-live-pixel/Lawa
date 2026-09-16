@@ -285,7 +285,7 @@ describe('Главная страница', () => {
     const sidebar = screen.getByRole('complementary', {
       name: 'Дерево workflow и кубиков',
     });
-    for (const name of ['Lawa', 'Тема интерфейса', 'Запланированные запуски']) {
+    for (const name of ['Тема интерфейса', 'Запланированные запуски']) {
       expect(sidebar).toContainElement(screen.getByRole('button', { name }));
     }
     fireEvent.click(

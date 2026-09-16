@@ -1,5 +1,5 @@
 import { Button, Icon, Select, Tooltip } from '@gravity-ui/uikit';
-import { ArrowRotateLeft } from '@gravity-ui/icons';
+import { BroomMotion } from '@gravity-ui/icons';
 import type { Dashboard } from '../types';
 
 const statuses = [
@@ -92,7 +92,7 @@ export function DashboardFilters({
       {filtersChanged(data) && (
         <Tooltip content="Сбросить фильтры, поиск и выбранную папку">
           <Button view="flat" aria-label="Сбросить фильтры" onClick={onReset}>
-            <Icon data={ArrowRotateLeft} />
+            <Icon data={BroomMotion} />
           </Button>
         </Tooltip>
       )}
