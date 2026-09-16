@@ -63,6 +63,8 @@ type scheduledRun struct {
 // runNode — готовая к JSON структура одного workflow и его потомков. Все URL
 // строит сервер из проверенных ID, поэтому template.URL не содержит сырого ввода.
 type runNode struct {
+	// PreviewGraph сохраняет полную схему при фильтрации дерева; live API её не дублирует.
+	PreviewGraph                               *graphView `json:",omitempty"`
 	ID, ParentID, Name, State, Tone, Updated   string
 	TicketID, TicketTitle                      string
 	StopReason, StopVisit, StopLimit           string
@@ -1090,7 +1092,7 @@ func previewPage(params viewParams, now time.Time) page {
 	maintenance.Open = false
 	failed := run("preview-failed", "failed-nightly-cleanup", "failed", 4*time.Hour, step("cleanup", "failed", true))
 	succeeded := run("preview-succeeded", "previous-release", "succeeded", 48*time.Hour, step("publish", "succeeded", true))
-	roots := []*runNode{release, maintenance, failed, succeeded}
+	roots := append(migrationPreviewRoots(now), release, maintenance, failed, succeeded)
 	for _, root := range roots {
 		finalizeTree(root)
 	}

@@ -30,6 +30,7 @@ export interface Step {
   Active: boolean;
 }
 export interface Run {
+  PreviewGraph?: Graph;
   ID: string;
   ParentID: string;
   Name: string;
