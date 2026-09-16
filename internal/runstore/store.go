@@ -59,11 +59,15 @@ var ErrHistoricalAppNative = errors.New("исторический app-native run
 // получает новый ID. CWD должен указывать на существующую папку. Проверка
 // подключения — вне пакета.
 type Input struct {
-	WorkflowJSON   []byte
-	Task, Comment  string
-	CWD            string
-	ParentRunID    string
-	ChildRequestID string
+	Order bool // Новый заказ создаёт одного Босса; последующие сообщения не создают run.
+	// AssignedWorkflowJSON — необязательный раскрытый процесс, переданный Боссу.
+	// Публикуется вместе с заказом до первого turn; источник позднее не читается.
+	AssignedWorkflowJSON []byte
+	WorkflowJSON         []byte
+	Task, Comment        string
+	CWD                  string
+	ParentRunID          string
+	ChildRequestID       string
 }
 
 // Metadata — версия формата и постоянные связи запуска. ParentRunID появился в
@@ -74,6 +78,7 @@ type Input struct {
 // указывает на последний разрешённый visit, а trigger/iteration описывают
 // следующую активацию N+1, которую planner намеренно не материализовал.
 type Metadata struct {
+	Order              *Order        `json:"order,omitempty"`
 	Version            int           `json:"version"`
 	RunID              string        `json:"runId"`
 	ParentRunID        string        `json:"parentRunId,omitempty"`
@@ -142,6 +147,11 @@ func Create(root string, in Input) (Snapshot, error) {
 // create принимает синхронизацию каталогов явно, чтобы тесты могли воспроизвести
 // отказ диска без глобальных подмен, влияющих на параллельные вызовы Create.
 func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot, err error) {
+	if len(in.AssignedWorkflowJSON) != 0 {
+		if _, err = workflow.Decode(bytes.NewReader(in.AssignedWorkflowJSON)); err != nil {
+			return Snapshot{}, fmt.Errorf("workflow заказа: %w", err)
+		}
+	}
 	w, err := workflow.Decode(bytes.NewReader(in.WorkflowJSON))
 	if err != nil {
 		return Snapshot{}, err
@@ -176,6 +186,9 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 	}
 	s := Snapshot{Workflow: w, WorkflowJSON: append([]byte(nil), in.WorkflowJSON...), Task: formattedTask(in.Task, in.Comment)}
 	s.Meta = Metadata{Version: 3, RunID: newID(), ParentRunID: in.ParentRunID, ChildRequestID: in.ChildRequestID, CWD: cwd}
+	if in.Order {
+		s.Meta.Order = &Order{}
+	}
 	if agentGraph {
 		s.Meta.Version, s.Meta.RunState = 4, RunRunning
 		for _, stepID := range w.Start {
@@ -215,6 +228,9 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 		return Snapshot{}, err
 	}
 	files := map[string][]byte{"workflow.json": in.WorkflowJSON, "task.md": []byte(s.Task), "meta.json.tmp": meta}
+	if len(in.AssignedWorkflowJSON) != 0 {
+		files[AssignedWorkflowFilename] = in.AssignedWorkflowJSON
+	}
 	for _, memoryID := range s.memoryIDs() {
 		files[filepath.Join("memory", memoryID+".md")] = nil
 	}
@@ -559,6 +575,9 @@ func validateMetadataShape(data []byte, metadata Metadata) error {
 // Starting без ID оставляем как неопределённый результат создания,
 // а не превращаем в новый Pending.
 func (s Snapshot) validate(runID string) error {
+	if err := s.validateOrder(); err != nil {
+		return err
+	}
 	m := s.Meta
 	if m.Version == 4 {
 		return s.validateAgentGraph(runID)
@@ -621,6 +640,9 @@ func (s Snapshot) validate(runID string) error {
 // В legacy файл принадлежит логическому шагу, а в v4 — отдельному посещению.
 func (s Snapshot) memoryIDs() []string {
 	ids := make([]string, 0, len(s.Meta.Steps)+len(s.Meta.Visits))
+	for id := range s.Workflow.Characters {
+		ids = append(ids, "character-"+id)
+	}
 	for _, step := range s.Meta.Steps {
 		ids = append(ids, step.ThreadID)
 	}

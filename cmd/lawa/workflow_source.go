@@ -17,16 +17,19 @@ func loadWorkflowSource(path string) ([]byte, workflow.Workflow, error) {
 	}
 	// CLI сохраняет обычную семантику локальных путей, включая абсолютные
 	// симлинки. Ограниченные os.Root нужны только дочерним запросам агента.
-	read := func(name string) ([]byte, error) {
-		file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
-		if err != nil {
-			return nil, err
-		}
-		return readOpenedRegularFile(file)
-	}
-	data, err := read(absolute)
+	data, err := readWorkflowFile(absolute)
 	if err != nil {
 		return nil, workflow.Workflow{}, err
 	}
-	return workflow.ResolveSource(data, absolute, read)
+	return workflow.ResolveSource(data, absolute, readWorkflowFile)
+}
+
+// readWorkflowFile исключает зависание на FIFO и чтение устройств как JSON
+// либо Markdown. Одинаково используется фиксированным запуском и заказом Боссу.
+func readWorkflowFile(name string) ([]byte, error) {
+	file, err := os.OpenFile(name, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if err != nil {
+		return nil, err
+	}
+	return readOpenedRegularFile(file)
 }

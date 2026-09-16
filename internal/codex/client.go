@@ -251,9 +251,9 @@ func Run(ctx context.Context, command Command) (result Result, err error) {
 
 // Continue открывает сохранённый чат и запускает в нём ровно один новый turn.
 // В отличие от Run функция никогда не создаёт новый thread и не меняет его имя.
-// Вызывающий код обязан предварительно проверить, что последний turn действительно
-// interrupted: сама команда не принимает решение о допустимости автоматического
-// продолжения и не повторяет неоднозначный turn/start.
+// Вызывающий код обязан проверить terminal-состояние: interrupted для resume,
+// либо завершённый ответ для явной новой реплики Чела. Сама функция не принимает
+// решение о допустимости продолжения и не повторяет неоднозначный turn/start.
 func Continue(ctx context.Context, threadID string, command Command) (result Result, err error) {
 	if err = ctx.Err(); err != nil {
 		return result, err

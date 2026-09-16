@@ -313,6 +313,9 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 	// сессии и только затем закроет независимый read-only процесс. Если известных
 	// чатов ещё нет, процесс не запускается вовсе.
 	defer func() { err = errors.Join(err, observer.Close()) }()
+	if err = reconcileOrderMessage(run, initial, observer); err != nil {
+		return outcome, err
+	}
 	// Буфер равен числу шагов: после остановки наблюдения каждый уже запущенный
 	// turn сможет завершить свою горутину, даже если получатель больше не читает.
 	results := make(chan launchResult, len(initial.Meta.Steps))
