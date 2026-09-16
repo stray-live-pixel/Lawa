@@ -273,24 +273,24 @@ pre {
   opacity: 1;
 }
 /* Тикет важнее имени: занимает естественную ширину до 80% строки.
-   Длинный ID переносится целиком; сокращается только имя workflow. */
+   При нехватке места сокращается и тикет, но строка никогда не переносится. */
 .tree-entry:has(.ticket) {
   grid-template-columns: 16px minmax(0, 1fr) fit-content(80%);
 }
 .tree-meta.has-ticket {
   max-width: 100%;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
 }
 .ticket {
   max-width: 100%;
-  height: auto;
-  min-height: 20px;
+  min-width: 0;
+  height: 20px;
 }
 .ticket .g-label__content {
-  white-space: normal;
-  overflow-wrap: anywhere;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .inspector-details {
   min-height: 0;
@@ -715,7 +715,7 @@ pre {
    Дерево прокручивается отдельно, пагинация и настройки остаются доступны. */
 .tree .app-header {
   border-bottom: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 .tree .filters {
   gap: 4px;
@@ -794,4 +794,23 @@ pre {
 }
 .tree-step {
   height: 26px;
+}
+
+/* Реагируем на ширину самой панели, в том числе при перетаскивании границы. */
+.tree {
+  container-type: inline-size;
+  container-name: sidebar;
+}
+.test-label-short {
+  display: none;
+}
+@container sidebar (max-width: 300px) {
+  .brand-name,
+  .test-label-full {
+    display: none;
+  }
+  .test-label-short {
+    display: inline;
+    font-size: 10px;
+  }
 }

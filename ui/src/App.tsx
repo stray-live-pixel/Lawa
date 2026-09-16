@@ -120,9 +120,14 @@ function DashboardPage() {
                   <header className="app-header">
                     <div className="brand">
                       <img src="/assets/lawa-logo.png" alt="" />
-                      Lawa
+                      <span className="brand-name">Lawa</span>
                     </div>
-                    {preview && <Label size="xs">TEST DATA</Label>}
+                    {preview && (
+                      <Label size="xs" title="TEST DATA">
+                        <span className="test-label-full">TEST DATA</span>
+                        <span className="test-label-short">TEST</span>
+                      </Label>
+                    )}
                     <div className="header-tools">
                       <ThemePicker />
                       <Tooltip
