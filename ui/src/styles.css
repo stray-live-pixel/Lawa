@@ -1,6 +1,8 @@
 /* Палитра полностью следует Gravity ThemeProvider, включая порталы и граф.
    Собственные правила отвечают за компоновку, но не рисуют библиотечные контролы. */
 .g-root {
+  --panel-toolbar-height: 44px;
+  --panel-inset: 12px;
   --bg: var(--g-color-base-background);
   --surface: var(--g-color-base-generic-ultralight);
   --raised: var(--g-color-base-float);
@@ -80,11 +82,12 @@ pre {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 6px 14px;
+  padding: 6px var(--panel-inset);
   border-bottom: 1px solid var(--line);
   background: var(--bg);
 }
 .brand {
+  --g-button-padding: 0;
   font-size: 20px;
   font-weight: bold;
 }
@@ -165,8 +168,13 @@ pre {
   border-right: 1px solid var(--line);
   background: var(--surface);
 }
+/* Поиск и вкладки образуют одну горизонтальную полосу на desktop. */
 .search {
-  padding: 8px;
+  height: var(--panel-toolbar-height);
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding: 0 8px;
   border-bottom: 1px solid var(--line);
 }
 .tree-scroll {
@@ -200,31 +208,41 @@ pre {
 }
 .tree-select,
 .tree-step {
+  --g-button-padding: 4px;
   min-width: 0;
   width: 100%;
 }
 .tree-select .g-button__text,
 .tree-step .g-button__text {
-  display: flex;
+  flex: 1;
+  min-width: 0;
+}
+/* minmax(0, 1fr) сжимает только имя, сохраняя координаты иконки и счётчика.
+   Все строки занимают одинаковую ширину, включая пустое место под pin. */
+.tree-entry {
+  display: grid;
+  grid-template-columns: 16px minmax(0, 1fr) auto;
   align-items: center;
   gap: 6px;
+  width: 100%;
   text-align: left;
-  flex: 1;
-  margin: 0 4px;
 }
-.tree-select .g-button__text > span,
-.tree-step .g-button__text > span {
+.tree-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  flex: 1;
 }
-.tree-select svg,
-.tree-step svg {
-  flex: none;
+.tree-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
-.tree-select small {
+.tree-count {
+  min-width: 24px;
+  text-align: right;
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
 }
 .icon-button {
   flex: none;
@@ -240,7 +258,7 @@ pre {
   opacity: 1;
 }
 .ticket {
-  max-width: 80px;
+  max-width: 66px;
 }
 .inspector-details {
   min-height: 0;
@@ -257,7 +275,10 @@ pre {
   flex-direction: column;
 }
 .tabs {
-  padding: 0 12px;
+  --g-tabs-item-height: var(--panel-toolbar-height);
+  height: var(--panel-toolbar-height);
+  align-items: stretch;
+  padding: 0 var(--panel-inset);
   flex: none;
 }
 .graph-tab {
@@ -267,7 +288,7 @@ pre {
 }
 .info-tab {
   overflow: auto;
-  padding: 22px;
+  padding: 16px var(--panel-inset);
   flex: 1;
 }
 /* Нативный hidden обязан побеждать flex: неактивная панель недоступна и не
@@ -314,7 +335,7 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 8px 14px;
+  padding: 8px var(--panel-inset);
   flex: none;
 }
 .graph-heading > div:first-child {
@@ -349,12 +370,12 @@ pre {
   flex-wrap: wrap;
   gap: 14px;
   border-top: 1px solid var(--line);
-  padding: 6px 14px;
+  padding: 6px var(--panel-inset);
   font-size: 12px;
   flex: none;
 }
 .cube-details {
-  padding: 18px;
+  padding: 16px var(--panel-inset);
   overflow: auto;
   min-width: 0;
   border-left: 1px solid var(--line);

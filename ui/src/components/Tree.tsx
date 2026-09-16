@@ -46,6 +46,7 @@ export function RunTree({
       >
         <Button
           view="flat"
+          size="s"
           className="icon-button"
           onClick={toggle}
           aria-label={`Развернуть ${run.Name}`}
@@ -68,24 +69,31 @@ export function RunTree({
               : undefined
           }
         >
-          <Icon data={Folder} size={16} className={`tone-${run.State}`} />
-          <span>{run.Name}</span>
-          {run.TicketID && (
-            <Label
-              size="xs"
-              theme="info"
-              className="ticket"
-              title={run.TicketTitle}
-            >
-              {run.TicketID}
-            </Label>
-          )}
-          <small>
-            {run.CompletedSteps}/{run.TotalSteps}
-          </small>
+          {/* Единый контейнер не даёт Button вынести Icon в отдельный слот:
+              иконка, имя и счётчик используют одну сетку независимо от тикета. */}
+          <span className="tree-entry">
+            <Icon data={Folder} size={16} className={`tone-${run.State}`} />
+            <span className="tree-name">{run.Name}</span>
+            <span className="tree-meta">
+              {run.TicketID && (
+                <Label
+                  size="xs"
+                  theme="info"
+                  className="ticket"
+                  title={`${run.TicketID} · ${run.TicketTitle}`}
+                >
+                  {run.TicketID}
+                </Label>
+              )}
+              <small className="tree-count">
+                {run.CompletedSteps}/{run.TotalSteps}
+              </small>
+            </span>
+          </span>
         </Button>
         <Button
           view="flat"
+          size="s"
           className="icon-button pin"
           onClick={() => onFocus(run.ID)}
           aria-label={`Сделать ${run.Name} корневой папкой`}
@@ -103,8 +111,10 @@ export function RunTree({
                 onClick={() => onSelect(run, step)}
                 title={step.ID}
               >
-                <Icon data={Box} size={15} className={`tone-${step.State}`} />
-                <span>{step.ID}</span>
+                <span className="tree-entry">
+                  <Icon data={Box} size={16} className={`tone-${step.State}`} />
+                  <span className="tree-name">{step.ID}</span>
+                </span>
               </Button>
             </li>
           ))}
