@@ -451,7 +451,7 @@ pre {
 }
 
 .cube-details {
-  padding: 16px var(--panel-inset);
+  padding: 0 0 16px;
   overflow: auto;
   min-width: 0;
   border-left: 1px solid var(--line);
@@ -645,9 +645,6 @@ pre {
 @media (max-width: 1000px) {
   .inspector-body {
     grid-template-columns: var(--run-list-size) minmax(0, 1fr);
-  }
-  .cube-details {
-    padding: 12px;
   }
 }
 @media (max-width: 760px) {
