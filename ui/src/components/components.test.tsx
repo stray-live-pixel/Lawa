@@ -1,3 +1,4 @@
+import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 import { WorkflowSource } from './WorkflowSource';
 import {
   act,
@@ -213,7 +214,7 @@ describe('Контекст и история', () => {
   it('не смешивает результаты повторных посещений и показывает незапущенный узел', async () => {
     render(<WorkflowGraph runID="run-a" preview={graph} />);
     expect(screen.getByText('Итог: проход 2')).toBeInTheDocument();
-    await choose('Посещение кубика', 'Посещение 1 · Готово');
+    fireEvent.click(screen.getByRole('button', { name: 'Посещение 1' }));
     expect(screen.getByText('Итог: проход 1')).toBeInTheDocument();
     expect(
       screen.queryByLabelText('Промпт продолжения'),
@@ -635,15 +636,51 @@ it('согласует состояние кубика и детали при sk
     '3',
   );
   expect(screen.getByText('Результат next')).toBeInTheDocument();
-  await choose('Посещение кубика', 'Посещение 2 · Пропущено');
+  fireEvent.click(screen.getByRole('button', { name: 'Посещение 2' }));
+  expect(screen.getByRole('button', { name: 'Посещение 2' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
   expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
     'data-state',
     'skipped',
   );
   expect(screen.getByText('Результат skip')).toBeInTheDocument();
-  await choose('Посещение кубика', 'Актуальное посещение');
+  fireEvent.click(screen.getByRole('button', { name: 'Посещение 3' }));
   expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
     'data-state',
     'running',
   );
+});
+
+// Успех копирования результата не вставляет строку и не сдвигает Markdown.
+it('показывает тост вместо строки при копировании результата кубика', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  });
+  const add = vi.spyOn(toaster, 'add').mockImplementation(() => {});
+  render(
+    <MarkdownDocument
+      text="Полный результат"
+      label="Результат работы"
+      copyLabel="Скопировать результат"
+      compact
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Скопировать результат' }),
+  );
+  await waitFor(() =>
+    expect(add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Результат работы кубика скопирован',
+        theme: 'success',
+      }),
+    ),
+  );
+  expect(writeText).toHaveBeenCalledWith('Полный результат');
+  expect(screen.queryByText('Скопировано.')).not.toBeInTheDocument();
+  add.mockRestore();
 });

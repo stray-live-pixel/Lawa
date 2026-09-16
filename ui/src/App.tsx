@@ -1,3 +1,4 @@
+import { SidebarToggle } from './components/SidebarToggle';
 import { ResizableRunList } from './components/ResizableRunList';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import {
@@ -264,18 +265,19 @@ function DashboardPage() {
                   {run ? (
                     <div className="run-tabs">
                       <TabProvider value={tab} onUpdate={setTab}>
-                        <TabList
-                          contentOverflow="scroll"
-                          className="tabs"
-                          aria-label="Вид workflow"
-                        >
-                          <Tab value="graph">Граф</Tab>
-                          <Tab value="info">Информация</Tab>
-                          <Tab value="source">JSON и Markdown</Tab>
-                          <Tab value="continue">
-                            Продолжить в новом чате Codex
-                          </Tab>
-                        </TabList>
+                        <div className="run-tabs-toolbar">
+                          <SidebarToggle />
+                          <TabList
+                            contentOverflow="scroll"
+                            className="tabs"
+                            aria-label="Вид workflow"
+                          >
+                            <Tab value="graph">Диаграмма</Tab>
+                            <Tab value="info">Информация</Tab>
+                            <Tab value="source">Описание</Tab>
+                            <Tab value="continue">Чат Codex</Tab>
+                          </TabList>
+                        </div>
                         <TabPanel
                           className="info-tab"
                           value="source"
@@ -494,8 +496,8 @@ function GraphPage() {
               className="tabs"
               aria-label="Вид workflow"
             >
-              <Tab value="graph">Граф</Tab>
-              <Tab value="continue">Продолжить в новом чате Codex</Tab>
+              <Tab value="graph">Диаграмма</Tab>
+              <Tab value="continue">Чат Codex</Tab>
             </TabList>
             <TabPanel
               className="graph-tab"

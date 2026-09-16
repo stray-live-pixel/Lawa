@@ -1,6 +1,8 @@
+import { toaster } from '@gravity-ui/uikit/toaster-singleton';
+import { Copy } from '@gravity-ui/icons';
 import { useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
-import { TextArea, Link } from '@gravity-ui/uikit';
+import { TextArea, Link, Icon } from '@gravity-ui/uikit';
 import remarkGfm from 'remark-gfm';
 import { Button, Dialog, ErrorNotice } from './ui';
 import { usePoll } from '../hooks/api';
@@ -12,10 +14,12 @@ export function MarkdownDocument({
   text,
   label,
   copyLabel = 'Скопировать Markdown',
+  compact = false,
 }: {
   text: string;
   label: string;
   copyLabel?: string;
+  compact?: boolean;
 }) {
   const [copyState, setCopyState] = useState('');
   const [manual, setManual] = useState(false);
@@ -33,7 +37,20 @@ export function MarkdownDocument({
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
-      setCopyState('Скопировано.');
+      if (compact) {
+        // Успех не меняет высоту панели и положение результата.
+        setCopyState('');
+        setManual(false);
+        toaster.remove('copy-cube-result');
+        toaster.add({
+          name: 'copy-cube-result',
+          title: 'Результат работы кубика скопирован',
+          theme: 'success',
+          autoHiding: 2500,
+        });
+      } else {
+        setCopyState('Скопировано.');
+      }
     } catch {
       setManual(true);
       setCopyState('Скопируйте выделенную разметку: Ctrl+C или ⌘C.');
@@ -41,9 +58,25 @@ export function MarkdownDocument({
   };
   return (
     <section className="markdown-document" aria-label={label}>
-      <Button onClick={() => void copy()} disabled={!text}>
-        {copyLabel}
-      </Button>
+      {compact ? (
+        <div className="result-toolbar">
+          <h3>{label}</h3>
+          <Button
+            view="flat"
+            size="s"
+            aria-label={copyLabel}
+            title={copyLabel}
+            onClick={() => void copy()}
+            disabled={!text}
+          >
+            <Icon data={Copy} size={14} />
+          </Button>
+        </div>
+      ) : (
+        <Button onClick={() => void copy()} disabled={!text}>
+          {copyLabel}
+        </Button>
+      )}
       {copyState && (
         <p role="status" className="muted">
           {copyState}

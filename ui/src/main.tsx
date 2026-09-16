@@ -1,3 +1,5 @@
+import { ToasterProvider, ToasterComponent } from '@gravity-ui/uikit';
+import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
@@ -12,7 +14,10 @@ createRoot(document.getElementById('root')!).render(
   <StrictMode>
     <BrowserRouter>
       <AppTheme>
-        <App />
+        <ToasterProvider toaster={toaster}>
+          <App />
+          <ToasterComponent />
+        </ToasterProvider>
       </AppTheme>
     </BrowserRouter>
   </StrictMode>,

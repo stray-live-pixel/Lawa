@@ -140,7 +140,7 @@ pre {
 .inspector-body {
   display: grid;
   position: relative;
-  --run-list-size: clamp(220px, var(--run-list-width, 285px), 45%);
+  --run-list-size: clamp(2%, var(--panel-width, 25%), 98%);
   grid-template-columns: var(--run-list-size) minmax(0, 1fr);
   flex: 1;
   min-height: 0;
@@ -161,6 +161,7 @@ pre {
   flex-direction: column;
   border-right: 1px solid var(--line);
   background: var(--bg);
+  overflow: hidden;
 }
 /* Поиск остаётся над прокручиваемым деревом в боковой колонке. */
 .search {
@@ -307,8 +308,9 @@ pre {
   flex-direction: column;
 }
 .tabs {
-  --g-tabs-item-height: var(--panel-toolbar-height);
-  height: var(--panel-toolbar-height);
+  --g-tabs-item-gap: 22px;
+  --g-tabs-item-height: 32px;
+  height: 32px;
   align-items: stretch;
   padding: 0 var(--panel-inset);
   flex: none;
@@ -365,27 +367,96 @@ pre {
 .graph-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
-  padding: 8px var(--panel-inset);
+  gap: 8px;
+  padding: 6px calc(var(--panel-inset) - 2px) 6px calc(var(--panel-inset) - 4px);
+  margin-bottom: 0;
+  border-bottom: 1px solid var(--line);
   flex: none;
 }
-.graph-heading > div:first-child {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 2px 12px;
+.graph-heading > .status-icon {
+  flex-shrink: 0;
+}
+.graph-identity {
   min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
 }
 .graph-heading h1 {
-  font-size: 16px;
+  font-size: 14px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-.graph-heading small {
-  overflow-wrap: anywhere;
+/* У пары иконок меньший промежуток; отступ до названия остаётся прежним. */
+.run-id-trigger {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: -4px;
+}
+.run-id-info {
+  --g-button-background-color: transparent;
+  --g-button-background-color-hover: transparent;
+  --g-button-text-color-hover: var(--muted);
+  flex-shrink: 0;
+  color: var(--muted);
+}
+/* Библиотечная кнопка сохраняет клавиатурный фокус и семантику действия,
+   но выглядит как строка заголовка. Обрезается текст, не копируемое значение. */
+.copy-identity {
+  --g-button-background-color: transparent;
+  --g-button-background-color-hover: transparent;
+  --g-button-text-color: inherit;
+  --g-button-text-color-hover: inherit;
+  --g-button-padding: 0;
+  --g-button-height: auto;
+  max-width: 100%;
+  min-width: 0;
+  font: inherit;
+  color: inherit;
+  vertical-align: top;
+}
+/* Убираем hover/press-анимацию Gravity, оставляя focus-visible для клавиатуры. */
+.copy-identity,
+.copy-identity:active,
+.copy-identity::before,
+.copy-identity::after,
+.copy-identity:active::after,
+.run-id-info,
+.run-id-info:active,
+.run-id-info::before,
+.run-id-info::after,
+.run-id-info:active::after {
+  transition: none;
+  transform: none;
+}
+.copy-identity .g-button__text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin: 0;
+}
+.run-tabs-toolbar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding-left: calc(var(--panel-inset) - 2px);
+  border-bottom: 1px solid var(--line);
+}
+/* Общая граница toolbar проходит и под кнопкой, и под вкладками.
+   Внутреннюю линию Gravity отключаем, чтобы не было двойной ступеньки. */
+.run-tabs-toolbar > .tabs {
+  --g-tabs-border-width: 0px;
+  flex: 1;
+  min-width: 0;
 }
 .graph-workspace {
+  position: relative;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 310px;
+  grid-template-columns: minmax(0, 1fr) clamp(2%, var(--panel-width, 25%), 98%);
   flex: 1;
   min-height: 0;
   overflow: hidden;
@@ -399,14 +470,10 @@ pre {
 }
 
 .cube-details {
-  padding: 16px var(--panel-inset);
+  padding: 0 0 16px;
   overflow: auto;
   min-width: 0;
   border-left: 1px solid var(--line);
-}
-.cube-details > .g-select {
-  display: block;
-  margin-top: 12px;
 }
 .cube {
   width: 220px;
@@ -594,12 +661,6 @@ pre {
   .inspector-body {
     grid-template-columns: var(--run-list-size) minmax(0, 1fr);
   }
-  .graph-workspace {
-    grid-template-columns: minmax(0, 1fr) 260px;
-  }
-  .cube-details {
-    padding: 12px;
-  }
 }
 @media (max-width: 760px) {
   .app-header {
@@ -670,14 +731,16 @@ pre {
   pointer-events: none;
 }
 
-/* Крупная схема может занять окно без перехода со страницы и потери выбора. */
-.workflow-graph-expanded {
-  position: fixed;
-  inset: 8px;
-  z-index: 100;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+/* Разворачивание меняет обычную сетку страницы, без overlay и перемещения
+   графа: выбор кубика, масштаб и ширина правой панели сохраняются.
+   Кнопка остаётся доступной над любой вкладкой для возврата меню. */
+.inspector-body:has(.sidebar-toggle[aria-pressed='true']) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.inspector-body:has(.sidebar-toggle[aria-pressed='true']) > .tree,
+.inspector-body:has(.sidebar-toggle[aria-pressed='true']) > .run-list-resizer {
+  display: none;
 }
 .workflow-source {
   padding: 12px;
@@ -699,6 +762,10 @@ pre {
   cursor: col-resize;
   touch-action: none;
   z-index: 5;
+}
+.details-resizer {
+  left: auto;
+  right: calc(var(--panel-width, 25%) - 4px);
 }
 .run-list-resizer:hover,
 .run-list-resizer:focus-visible {
@@ -813,4 +880,105 @@ pre {
     display: inline;
     font-size: 10px;
   }
+}
+
+.status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+}
+.status-icon.tone-not_started {
+  color: var(--muted);
+}
+
+.visit-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.visit-facts dd {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Шапка workflow имеет разделитель на всю ширину, а сведения о посещении
+   выровнены по общей внутренней сетке и не наследуют отступы полноразмерных страниц. */
+.cube-details-content {
+  padding: 0 10px 12px 8px;
+}
+/* Шаг между центрами первых иконок workflow — 24px + 4px.
+   Сдвигаем кубик на этот шаг, сохраняя разделитель на всю ширину панели. */
+.cube-title-row {
+  margin: 0 -10px 10px -8px;
+  padding: 6px 10px 6px 36px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cube-title-row .status-icon {
+  flex-shrink: 0;
+}
+.cube-title-row h2 {
+  margin: 0;
+  font-size: 14px;
+  line-height: 16px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.result-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.result-toolbar h3 {
+  margin: 0;
+  font-size: 12px;
+}
+.cube-details-content .markdown {
+  font-size: 13px;
+  line-height: 1.5;
+}
+.cube-details-content .markdown h1,
+.cube-details-content .markdown h2 {
+  font-size: 15px;
+  line-height: 1.4;
+  margin: 12px 0 6px;
+}
+.cube-details-content .markdown h3 {
+  font-size: 13px;
+  margin: 12px 0 6px;
+}
+.cube-details-content .markdown > :first-child {
+  margin-top: 0;
+}
+.cube-details-content .markdown p,
+.cube-details-content .markdown ul {
+  margin-top: 6px;
+  margin-bottom: 8px;
+}
+.cube-details-content > .actions {
+  margin: 12px 0 0;
+}
+
+/* Номера посещений остаются справа от названия; длинная история прокручивается
+   горизонтально, не расширяя панель и не вытесняя заголовок полностью. */
+.visit-pagination {
+  display: flex;
+  gap: 2px;
+  margin-left: auto;
+  min-width: 0;
+  max-width: 50%;
+  flex-shrink: 0;
+  overflow-x: auto;
+}
+.visit-pagination > .g-button {
+  flex-shrink: 0;
 }
