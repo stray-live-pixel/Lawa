@@ -70,7 +70,7 @@ export function DashboardFilters({
     <>
       <Select
         aria-label="Статус workflow"
-        label="Статус:"
+
         value={[value]}
         options={options}
         onUpdate={([next]) => {
@@ -79,7 +79,7 @@ export function DashboardFilters({
       />
       <Select
         aria-label="Период"
-        label="Период:"
+
         value={[f.Period]}
         options={f.Periods.map((p) => ({ value: p.Value, content: p.Label }))}
         renderSelectedOption={(option) => (
@@ -96,13 +96,6 @@ export function DashboardFilters({
           </Button>
         </Tooltip>
       )}
-      <span
-        className="filter-count muted"
-        role="status"
-        title="Корневых workflow в текущем временном окне"
-      >
-        Найдено: {f.Matched ?? data.Roots?.length ?? 0}
-      </span>
     </>
   );
 }

@@ -286,9 +286,7 @@ describe('Главная страница', () => {
       name: 'Дерево workflow и кубиков',
     });
     for (const name of ['Lawa', 'Тема интерфейса', 'Запланированные запуски']) {
-      expect(sidebar).toContainElement(
-        screen.getByRole('button', { name, exact: true }),
-      );
+      expect(sidebar).toContainElement(screen.getByRole('button', { name }));
     }
     fireEvent.click(
       screen.getByRole('button', { name: 'Запланированные запуски' }),
@@ -499,7 +497,7 @@ it('компактный статус задаёт полную выборку, 
   expect(
     screen.queryByRole('button', { name: 'Сбросить фильтры' }),
   ).not.toBeInTheDocument();
-  expect(screen.getByRole('status')).toHaveTextContent('Найдено: 2');
+  expect(screen.queryByText(/Найдено:/)).not.toBeInTheDocument();
   await choose('Статус workflow', 'С ошибками');
   expect(onChange).toHaveBeenLastCalledWith({ view: 'all', states: 'failed' });
   await choose('Статус workflow', 'Завершённые');

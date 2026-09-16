@@ -40,13 +40,13 @@ export function RunTree({
     }
   };
   return (
-    <li>
+    <li className={`tree-branch ${shown ? 'tree-branch-open' : ''}`}>
       <div
         className={`tree-row ${selection?.runID === run.ID && !selection.stepKey ? 'selected' : ''}`}
       >
         <Button
           view="flat"
-          size="s"
+          size="m"
           className="icon-button"
           onClick={toggle}
           aria-label={`Развернуть ${run.Name}`}
@@ -74,7 +74,7 @@ export function RunTree({
           <span className="tree-entry">
             <Icon data={NodesRight} size={16} className={`tone-${run.State}`} />
             <span className="tree-name">{run.Name}</span>
-            <span className="tree-meta">
+            <span className={`tree-meta ${run.TicketID ? 'has-ticket' : ''}`}>
               {run.TicketID && (
                 <Label
                   size="xs"
@@ -93,7 +93,7 @@ export function RunTree({
         </Button>
         <Button
           view="flat"
-          size="s"
+          size="m"
           className="icon-button pin"
           onClick={() => onFocus(run.ID)}
           aria-label={`Сделать ${run.Name} корневой папкой`}
@@ -107,6 +107,7 @@ export function RunTree({
             <li key={step.Key}>
               <Button
                 view="flat"
+                size="s"
                 className={`tree-step ${selection?.runID === run.ID && selection.stepKey === step.Key ? 'selected' : ''}`}
                 onClick={() => onSelect(run, step)}
                 title={step.ID}

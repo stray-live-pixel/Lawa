@@ -124,13 +124,6 @@ function DashboardPage() {
                     </Link>
                     {preview && <Label size="xs">TEST DATA</Label>}
                   </header>
-                  <div className="filters">
-                    <DashboardFilters
-                      data={data}
-                      onChange={change}
-                      onReset={() => setParams({ period: '24h' })}
-                    />
-                  </div>
                   {data.Filter.Focused && (
                     <nav
                       className="breadcrumbs"
@@ -152,6 +145,13 @@ function DashboardPage() {
                     value={data.Filter.Query}
                     onChange={(value) => change({ q: value })}
                   />
+                  <div className="filters">
+                    <DashboardFilters
+                      data={data}
+                      onChange={change}
+                      onReset={() => setParams({ period: '24h' })}
+                    />
+                  </div>
                   <div className="tree-scroll">
                     {data.Filter.Focused && (
                       <Button
@@ -430,9 +430,13 @@ function Search({
     >
       <TextInput
         type="search"
-        startContent={<Icon data={Magnifier} />}
+        startContent={
+          <span className="search-icon">
+            <Icon data={Magnifier} size={16} />
+          </span>
+        }
         controlProps={{ 'aria-label': 'Поиск', maxLength: 300 }}
-        placeholder="Поиск по workflow, кубикам и тикетам…"
+        placeholder="Поиск…"
         value={text}
         onChange={(event) => setText(event.target.value)}
       />
