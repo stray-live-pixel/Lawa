@@ -308,6 +308,7 @@ pre {
   flex-direction: column;
 }
 .tabs {
+  --g-tabs-item-gap: 22px;
   --g-tabs-item-height: 32px;
   height: 32px;
   align-items: stretch;
@@ -423,7 +424,7 @@ pre {
   display: flex;
   align-items: center;
   flex: none;
-  padding-left: var(--panel-inset);
+  padding-left: calc(var(--panel-inset) - 2px);
   border-bottom: 1px solid var(--line);
 }
 /* Общая граница toolbar проходит и под кнопкой, и под вкладками.

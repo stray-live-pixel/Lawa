@@ -272,12 +272,10 @@ function DashboardPage() {
                             className="tabs"
                             aria-label="Вид workflow"
                           >
-                            <Tab value="graph">Граф</Tab>
+                            <Tab value="graph">Диаграмма</Tab>
                             <Tab value="info">Информация</Tab>
-                            <Tab value="source">JSON и Markdown</Tab>
-                            <Tab value="continue">
-                              Продолжить в новом чате Codex
-                            </Tab>
+                            <Tab value="source">Описание</Tab>
+                            <Tab value="continue">Чат Codex</Tab>
                           </TabList>
                         </div>
                         <TabPanel
@@ -498,8 +496,8 @@ function GraphPage() {
               className="tabs"
               aria-label="Вид workflow"
             >
-              <Tab value="graph">Граф</Tab>
-              <Tab value="continue">Продолжить в новом чате Codex</Tab>
+              <Tab value="graph">Диаграмма</Tab>
+              <Tab value="continue">Чат Codex</Tab>
             </TabList>
             <TabPanel
               className="graph-tab"
