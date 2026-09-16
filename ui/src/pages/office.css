@@ -1,355 +1,50 @@
-/* Палитра сцены самостоятельна и не меняет тему старого dashboard.
-   Прокрутка принадлежит странице: общий body приложения имеет overflow: hidden. */
+/* Общая тема Lawa управляет фоном и контролами. Здесь только компоновка сцены. */
 .office {
-  height: 100dvh;
-  overflow: auto;
-  color-scheme: light;
-  background: #f4f1eb;
-  color: #45483d;
-  font-family: 'Inter', 'Arial', sans-serif;
-  padding: 0 4.5%;
-}
-.office button {
-  font: inherit;
-  cursor: pointer;
-}
-.office button:focus-visible {
-  outline: 3px solid #658252;
-  outline-offset: 6px;
-}
-.office-header {
-  height: 88px;
+  height: 100%;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #deddd3;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
 }
-.office-brand {
+.office-toolbar {
   display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 23px;
-  font-weight: 650;
-  letter-spacing: -1px;
+  justify-content: flex-end;
+  flex: none;
+  min-height: var(--panel-toolbar-height);
+  padding: 6px var(--panel-inset);
 }
-.office-brand-mark {
+.office-space {
   display: grid;
   place-items: center;
-  width: 31px;
-  height: 34px;
-  border-radius: 11px 11px 11px 4px;
-  background: #68785c;
-  color: #f8f5ee;
-  font-family: Georgia, serif;
-  font-style: italic;
-  font-size: 29px;
-}
-.office-brand-divider {
-  color: #b4b6a9;
-  font-weight: 300;
-  padding: 0 4px;
-}
-.office-brand-section {
-  font-size: 16px;
-  font-weight: 400;
-  letter-spacing: 0;
-}
-.office-preview {
-  font-size: 11px;
-  letter-spacing: 0.02em;
-  border: 1px solid #d7d9ca;
-  padding: 8px 12px;
-  border-radius: 20px;
-  color: #72786a;
-}
-.office-intro {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  gap: 24px;
-  padding: 43px 0 24px;
-}
-.office-eyebrow {
-  margin: 0 0 13px;
-  font-size: 10px;
-  letter-spacing: 0.17em;
-  color: #7a806e;
-  font-weight: 600;
-}
-.office h1 {
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: clamp(26px, 2.5vw, 39px);
-  font-weight: 400;
-  letter-spacing: -0.035em;
-  line-height: 1.2;
-}
-.office-subtitle {
-  margin: 12px 0 0;
-  color: #848577;
-  font-size: 13px;
-  line-height: 1.6;
-}
-.office-room-number {
-  color: #69735b;
-  font-size: 22px;
-  white-space: nowrap;
-}
-.office-room-number span {
-  font-size: 9px;
-  color: #8d8f81;
-  letter-spacing: 0.09em;
-  padding-left: 8px;
-}
-.office-layout {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 250px;
-  gap: 30px;
-  align-items: center;
-  max-width: 1600px;
-  margin: 0 auto;
-}
-.office-room {
-  min-width: 0;
+  flex: 1;
+  min-height: 0;
+  padding: var(--panel-inset);
 }
 .office-scene {
   position: relative;
-  isolation: isolate;
+  width: min(100%, 1100px, calc((100dvh - 80px) * 1.5));
 }
 .office-room-image {
   display: block;
   width: 100%;
   height: auto;
-  mix-blend-mode: multiply;
 }
-/* Проценты относятся к полному кадру комнаты, включая поля. Прозрачный sprite
-   содержит стол и кресло: ему не нужна CSS-имитация перспективы или canvas. */
+/* Единая система координат сохраняет персонажа в центре пола на любом экране. */
 .office-boss {
   position: absolute;
-  left: 47%;
-  top: 36%;
-  width: 31%;
-  padding: 0;
-  border: 0;
-  background: none;
-  border-radius: 35%;
-  transition: filter 0.2s ease;
+  left: 50%;
+  top: 38%;
+  width: 28%;
+  transform: translateX(-50%);
 }
 .office-boss > img {
   display: block;
   width: 100%;
   height: auto;
 }
-.office-boss:hover,
-.office-boss[aria-expanded='true'] {
-  filter: drop-shadow(0 3px 5px #6f79592b);
-}
 .office-nameplate {
   position: absolute;
   left: 50%;
-  bottom: -3%;
+  bottom: -2%;
   transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 7px 12px;
-  border: 1px solid #d8d8cb;
-  border-radius: 20px;
-  background: #fffdf5f5;
-  color: #515a45;
-  font-size: 12px;
-  box-shadow: 0 3px 12px #47493410;
-  white-space: nowrap;
-}
-.office-nameplate > span:first-child {
-  width: 6px;
-  height: 6px;
-  background: #93a47b;
-  border-radius: 50%;
-}
-.office-nameplate > span:last-child {
-  color: #909780;
-}
-.office-scene-hint {
-  text-align: center;
-  font-size: 11px;
-  color: #888b7c;
-  margin: 12px 0 25px;
-}
-.office-scene-hint span {
-  margin-right: 6px;
-}
-.office-sidebar {
-  padding-bottom: 30px;
-}
-.office-sidebar-heading {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: #777c6c;
-  padding: 0 2px 17px;
-}
-.office-sidebar-heading span:last-child {
-  color: #929681;
-}
-.office-person-card {
-  border: 1px solid #dfdfd2;
-  border-radius: 20px;
-  padding: 22px;
-  background: #faf8f1c9;
-}
-.office-person-portrait {
-  width: 78px;
-  height: 78px;
-  border-radius: 50%;
-  background: #e7e8db;
-  overflow: hidden;
-  margin-bottom: 23px;
-}
-.office-person-portrait img {
-  width: 165%;
-  max-width: none;
-  transform: translate(-16%, -2%);
-}
-.office-person-role {
-  font-size: 8px;
-  letter-spacing: 0.13em;
-  color: #8c907e;
-}
-.office h2 {
-  margin: 8px 0 5px;
-  font-family: Georgia, 'Times New Roman', serif;
-  font-size: 29px;
-  font-weight: 400;
-}
-.office-person-subtitle {
-  margin: 0;
-  font-size: 11px;
-  color: #8a8c7e;
-}
-.office-person-summary,
-.office-person-story {
-  font-size: 12px;
-  line-height: 1.8;
-  color: #737a66;
-  margin: 20px 0 0;
-}
-.office-person-story > p {
-  margin: 0;
-}
-.office-person-purpose {
-  border-top: 1px solid #e4e4d7;
-  margin-top: 18px;
-  padding-top: 18px;
-}
-.office-person-purpose > span {
-  font-size: 10px;
-  color: #545e46;
-}
-.office-person-purpose p {
-  margin: 5px 0 0;
-}
-.office .office-person-action {
-  display: flex;
-  justify-content: space-between;
-  width: 100%;
-  border: 0;
-  border-top: 1px solid #dfdfd2;
-  background: none;
-  color: #59674c;
-  padding: 17px 0 0;
-  margin-top: 20px;
-  font-size: 11px;
-  text-align: left;
-}
-.office-person-action:hover {
-  color: #344329;
-}
-.office-sidebar-note {
-  color: #8d907f;
-  font-size: 11px;
-  line-height: 1.8;
-  margin: 18px 10px 0;
-}
-.office-footer {
-  border-top: 1px solid #deddd3;
-  padding: 20px 0;
-  display: flex;
-  justify-content: space-between;
-  gap: 18px;
-  font-size: 10px;
-  color: #929582;
-}
-.office-footer span:last-child {
-  letter-spacing: 0.12em;
-  font-size: 9px;
-}
-@media (min-width: 1600px) {
-  .office {
-    padding-inline: max(4.5%, calc((100vw - 1600px) / 2));
-  }
-}
-@media (max-width: 900px) {
-  .office-layout {
-    grid-template-columns: minmax(0, 1fr) 210px;
-    gap: 10px;
-  }
-  .office-person-card {
-    padding: 18px;
-  }
-  .office-room-number {
-    display: none;
-  }
-}
-@media (max-width: 640px) {
-  .office {
-    padding-inline: 20px;
-  }
-  .office-header {
-    height: 70px;
-  }
-  .office-brand {
-    font-size: 20px;
-    gap: 8px;
-  }
-  .office-brand-section {
-    font-size: 14px;
-  }
-  .office-preview {
-    font-size: 9px;
-    padding: 6px 9px;
-  }
-  .office-intro {
-    padding: 30px 0 18px;
-  }
-  .office-layout {
-    display: block;
-  }
-  .office-scene {
-    margin-inline: -20px;
-  }
-  .office-nameplate {
-    font-size: 10px;
-    padding: 5px 8px;
-  }
-  .office-sidebar {
-    max-width: 420px;
-    margin: 20px auto 0;
-  }
-  .office-person-portrait {
-    float: right;
-    margin: 0 0 14px 15px;
-  }
-  .office-person-summary,
-  .office-person-story {
-    clear: both;
-  }
-  .office-footer {
-    align-items: baseline;
-    font-size: 9px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .office-boss {
-    transition: none;
-  }
 }

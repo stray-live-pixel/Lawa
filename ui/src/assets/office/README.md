@@ -1,6 +1,7 @@
 # Изображения офиса
 
-`room.png` — пустая комната; `boss.png` — персонаж со столом и прозрачным фоном.
+`room.png` — исходная комната; `room-transparent.png` — её вариант для общей
+светлой и тёмной темы Lawa; `boss.png` — персонаж со столом и прозрачным фоном.
 Созданы встроенным image_gen для страницы `/office`. Изображения независимы:
 положение Босса задаёт HTML/CSS, а не перерисовка комнаты. Это визуальный прототип,
 не отображение реального состояния агентов. Исходные PNG входят в сборку Vite.
@@ -12,3 +13,7 @@ Use case: stylized-concept. Asset: landscape illustration for an HTML isometric 
 ## Промпт Босса
 
 Use case: stylized-concept. Asset: isolated transparent PNG sprite to place into an isometric HTML office scene. A single experienced friendly senior programmer in his forties, short salt-and-pepper hair, neat short beard and small round glasses, wearing a muted sage-green sweater, beige trousers and neutral sneakers. Handmade plasticine clay miniature with rounded shapes, tactile matte surface and subtle fingerprint texture, sophisticated cozy stop-motion aesthetic. He is seated on a simple cream office chair at a small light oak desk, thoughtfully working on an open silver Apple MacBook. Include the entire man, chair, desk, slim desk legs, and MacBook as ONE compact coherent object group; a small cream coffee mug on the desk. Orthographic isometric three-quarter view from above, see face and laptop lid, front of desk facing lower-right. Soft upper-left daylight matching a pastel beige office. Entire group uncropped centered with small transparent margins, square composition. Genuine transparent alpha background, no backdrop, no room, no platform, no floor tile, no lettering, no watermark. Only a subtle contact shadow, not an opaque ground.
+
+## Промпт прозрачного фона комнаты
+
+Use case: background-extraction. Edit the provided office room image ONLY by removing the off-white external background around the miniature room and its floor plinth. Output a genuine transparent alpha PNG. Preserve exactly the room, walls, floor, sofa, plants, furniture, materials, colors, lighting, perspective and object positions. Preserve the original landscape 1536x1024 canvas, scale and framing; do not crop or zoom. Keep soft contact shadow with transparency rather than a solid background. The rectangular area outside the room must be transparent, not white, not black, not a checkerboard. Do not add people, text or objects. This will be displayed on both dark and light UI backgrounds.
