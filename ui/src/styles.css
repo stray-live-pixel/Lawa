@@ -161,6 +161,8 @@ pre {
   border-bottom: 1px solid var(--line);
 }
 .tree {
+  --tree-toggle-size: 24px;
+  --tree-row-gap: 2px;
   min-height: 0;
   min-width: 0;
   display: flex;
@@ -187,15 +189,18 @@ pre {
   margin: 0;
   padding: 0;
 }
+/* Дочерний кубик не имеет стрелки раскрытия. Его суммарный отступ равен
+   ширине стрелки родителя и зазору: 7px margin + 1px линия + 18px padding.
+   Формула работает на каждом уровне, не сдвигая кубик левее своей папки. */
 .tree .tree-children {
-  padding-left: 13px;
+  padding-left: calc(var(--tree-toggle-size) + var(--tree-row-gap) - 8px);
   border-left: 1px solid var(--line);
   margin-left: 7px;
 }
 .tree-row {
   display: flex;
   align-items: center;
-  gap: 2px;
+  gap: var(--tree-row-gap);
   border-radius: 5px;
   min-height: 32px;
 }
@@ -246,6 +251,9 @@ pre {
 }
 .icon-button {
   flex: none;
+}
+.tree-row > .icon-button {
+  width: var(--tree-toggle-size);
 }
 .rotate {
   transform: rotate(90deg);
