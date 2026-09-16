@@ -673,3 +673,13 @@ pre {
   border: 1px solid var(--line);
   border-radius: 8px;
 }
+.workflow-source {
+  padding: 12px;
+  overflow: auto;
+}
+.workflow-source > .actions {
+  margin-bottom: 12px;
+}
+.workflow-source textarea {
+  font-family: monospace;
+}

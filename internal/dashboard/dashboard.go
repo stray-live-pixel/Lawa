@@ -100,6 +100,7 @@ func Handler(root string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", serveUI)
 	mux.HandleFunc("GET /api/dashboard", h.live)
+	mux.HandleFunc("GET /api/source/{run}", h.workflowSource)
 	mux.HandleFunc("GET /ui/", serveUIAssets)
 	mux.HandleFunc("GET /preview", serveUI)
 	mux.HandleFunc("GET /api/preview", h.preview)

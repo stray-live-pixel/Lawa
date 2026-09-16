@@ -41,6 +41,7 @@ import { Button, Dialog, ErrorNotice } from './components/ui';
 import { findRun, RunTree, type Selection } from './components/Tree';
 import { ContinuationPanel } from './components/Continuation';
 import { RunInfo } from './components/RunInfo';
+import { WorkflowSource } from './components/WorkflowSource';
 import { previewGraph } from './components/previewGraph';
 
 // Граф загружается отдельным модулем: фильтры и список доступны до загрузки layout.
@@ -251,10 +252,24 @@ function DashboardPage() {
                         >
                           <Tab value="graph">Граф</Tab>
                           <Tab value="info">Информация</Tab>
+                          <Tab value="source">JSON и Markdown</Tab>
                           <Tab value="continue">
                             Продолжить в новом чате Codex
                           </Tab>
                         </TabList>
+                        <TabPanel
+                          className="info-tab"
+                          value="source"
+                          hidden={tab !== 'source'}
+                        >
+                          {tab === 'source' && (
+                            <WorkflowSource
+                              key={run.ID}
+                              runID={run.ID}
+                              preview={preview ? previewGraph(run) : undefined}
+                            />
+                          )}
+                        </TabPanel>
                         <TabPanel
                           className="graph-tab"
                           value="graph"

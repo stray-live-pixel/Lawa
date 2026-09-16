@@ -1,3 +1,4 @@
+import { WorkflowSource } from './WorkflowSource';
 import {
   act,
   fireEvent,
@@ -550,4 +551,31 @@ it('раскладывает цикл с параллельными маршру
     expect(Number.isFinite(point.y)).toBe(true);
   }
   expect(edges).toEqual(original);
+});
+
+// Вкладка показывает сохранённый JSON, затем тот же текст инструкции в двух
+// представлениях. Открытие не обращается к путям исходных файлов пользователя.
+it('показывает JSON и сохранённый Markdown запуска', async () => {
+  const fetcher = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      JSON: { id: 'saved' },
+      Note: 'Сохранённый снимок',
+      Documents: [{ Name: 'Инструкция · a', Content: '# Saved heading' }],
+    }),
+  });
+  vi.stubGlobal('fetch', fetcher);
+  render(<WorkflowSource runID="saved-run" />);
+  expect(await screen.findByLabelText('JSON workflow')).toHaveValue(
+    JSON.stringify({ id: 'saved' }, null, 2),
+  );
+  expect(fetcher.mock.calls[0][0]).toBe('/api/source/saved-run');
+  await choose('Файл workflow', 'Инструкция · a');
+  expect(
+    screen.getByRole('heading', { name: 'Saved heading' }),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Исходный текст' }));
+  expect(screen.getByLabelText('Исходный Markdown')).toHaveValue(
+    '# Saved heading',
+  );
 });
