@@ -1,12 +1,14 @@
 import {
   act,
   fireEvent,
-  render,
+  render as baseRender,
   screen,
   waitFor,
   cleanup,
 } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { ThemeProvider } from '@gravity-ui/uikit';
+import type { ReactNode } from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import type { Dashboard, Graph, Run } from '../types';
 import { usePoll } from '../hooks/api';
@@ -19,6 +21,20 @@ import App from '../App';
 import { ImageExport } from './ImageExport';
 import { RunTree } from './Tree';
 import { Dialog } from './ui';
+
+// Те же провайдеры, что и в приложении: тестируем реальные popup/диалоги UIKit.
+const render = (node: ReactNode) =>
+  baseRender(node, {
+    wrapper: ({ children }) => (
+      <ThemeProvider theme="dark" lang="ru">
+        {children}
+      </ThemeProvider>
+    ),
+  });
+async function choose(label: string, option: string) {
+  fireEvent.click(screen.getByRole('combobox', { name: label }));
+  fireEvent.click(await screen.findByRole('option', { name: option }));
+}
 
 // Проверяем нашу обработку выбора и данных, а DOM/геометрию React Flow — живым
 // браузером. Заглушка сохраняет контракт клика по узлу, не вычисляя layout за нас.
@@ -34,7 +50,8 @@ vi.mock('@xyflow/react', () => ({
     </div>
   ),
   Background: () => null,
-  Controls: () => null,
+  Panel: () => null,
+  useReactFlow: () => ({ zoomIn() {}, zoomOut() {}, fitView() {} }),
   Handle: () => null,
   Position: { Left: 'left', Right: 'right' },
   MarkerType: { ArrowClosed: 'arrowclosed' },
@@ -131,9 +148,7 @@ describe('Контекст и история', () => {
       configurable: true,
     });
     render(<Continuation cube="cube context" workflow="workflow context" />);
-    fireEvent.change(screen.getByLabelText('Контекст продолжения'), {
-      target: { value: 'workflow' },
-    });
+    await choose('Контекст продолжения', 'Весь workflow');
     fireEvent.click(screen.getByRole('button', { name: 'Скопировать промпт' }));
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith('workflow context'),
@@ -191,9 +206,7 @@ describe('Контекст и история', () => {
   it('не смешивает результаты повторных посещений и показывает незапущенный узел', async () => {
     render(<WorkflowGraph runID="run-a" preview={graph} />);
     expect(screen.getByText('Итог: проход 2')).toBeInTheDocument();
-    fireEvent.change(screen.getByLabelText('Посещение кубика'), {
-      target: { value: 'visit-1' },
-    });
+    await choose('Посещение кубика', 'Посещение 1 · Готово');
     expect(screen.getByText('Итог: проход 1')).toBeInTheDocument();
     expect(
       screen.queryByLabelText('Промпт продолжения'),
@@ -249,10 +262,7 @@ describe('Главная страница', () => {
       </MemoryRouter>,
     );
     await screen.findByRole('tab', { name: 'Информация' });
-    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Информация' }), {
-      button: 0,
-      ctrlKey: false,
-    });
+    fireEvent.click(screen.getByRole('tab', { name: 'Информация' }));
     fireEvent.click(
       await screen.findByRole('button', { name: 'Остановить и удалить' }),
     );
@@ -401,8 +411,8 @@ it('вкладка продолжения получает точное выбр
   expect(screen.getByLabelText('Промпт продолжения')).toHaveTextContent(
     'context visit-1',
   );
-  expect(screen.getByLabelText('Посещение для продолжения')).toHaveValue(
-    'visit-1',
+  expect(screen.getByLabelText('Посещение для продолжения')).toHaveTextContent(
+    'Посещение 1',
   );
 });
 
@@ -424,23 +434,21 @@ it('сообщения загружаются только после откры
 });
 
 // Экспорт выполняется по клику и сохраняет выбранную тему при polling.
-it('PNG использует тёмную тему по умолчанию и сохраняет выбор при обновлении', () => {
+it('PNG начинает с темы UI и сохраняет ручной выбор при обновлении', async () => {
   const fetcher = vi.fn();
   vi.stubGlobal('fetch', fetcher);
   const view = render(<ImageExport runID="run-a" />);
-  expect(screen.getByRole('link', { name: 'Показать PNG ↗' })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: 'Показать PNG' })).toHaveAttribute(
     'href',
     '/graph-image/run-a?theme=dark',
   );
-  fireEvent.change(screen.getByLabelText('Тема картинки'), {
-    target: { value: 'light' },
-  });
+  await choose('Тема картинки', 'Светлая');
   view.rerender(<ImageExport runID="run-a" />);
-  expect(screen.getByRole('link', { name: 'Показать PNG ↗' })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: 'Показать PNG' })).toHaveAttribute(
     'href',
     '/graph-image/run-a?theme=light',
   );
-  expect(screen.getByRole('link', { name: 'Скачать PNG ↓' })).toHaveAttribute(
+  expect(screen.getByRole('link', { name: 'Скачать PNG' })).toHaveAttribute(
     'href',
     '/graph-image/run-a?theme=light&download=1',
   );

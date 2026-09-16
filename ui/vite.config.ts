@@ -22,6 +22,8 @@ export default defineConfig({
   },
   test: {
     environment: 'jsdom',
+    // UIKit импортирует CSS из ESM: Vite должен обработать его и в тестах.
+    server: { deps: { inline: ['@gravity-ui/uikit'] } },
     setupFiles: ['./src/test-setup.ts'],
     css: true,
   },

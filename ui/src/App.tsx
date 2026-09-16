@@ -1,16 +1,39 @@
 import { lazy, Suspense, useEffect, useState } from 'react';
 import {
-  Link,
+  Link as RouterLink,
   Route,
   Routes,
   useLocation,
   useParams,
   useSearchParams,
 } from 'react-router-dom';
-import * as Tabs from '@radix-ui/react-tabs';
+import {
+  TabProvider,
+  TabList,
+  Tab,
+  TabPanel,
+  TextInput,
+  Label,
+  Button as NavigationButton,
+  Icon,
+  Loader,
+} from '@gravity-ui/uikit';
+import {
+  Magnifier,
+  ChevronRight,
+  ArrowLeft,
+  ArrowRight,
+} from '@gravity-ui/icons';
+import { ThemePicker } from './components/Theme';
+import type { LinkProps } from 'react-router-dom';
+
+// RouterLink сохраняет SPA-навигацию и историю, Gravity задаёт стиль ссылок.
+function Link(props: LinkProps) {
+  return <NavigationButton view="flat" component={RouterLink} {...props} />;
+}
 import type { Dashboard, Run, Step } from './types';
 import { usePoll } from './hooks/api';
-import { Button, Dialog, ErrorNotice } from './components/ui';
+import { Button, Choice, Dialog, ErrorNotice } from './components/ui';
 import { findRun, RunTree, type Selection } from './components/Tree';
 import { ContinuationPanel } from './components/Continuation';
 import { RunInfo } from './components/RunInfo';
@@ -76,17 +99,19 @@ function DashboardPage() {
           <img src="/assets/lawa-logo.png" alt="" />
           Lawa
         </Link>
-        {preview && <span className="test-label">TEST DATA</span>}
+        {preview && <Label size="xs">TEST DATA</Label>}
         <div className="header-right">
           {scheduled.length ? (
             <Button onClick={() => setScheduleOpen(true)}>
               {scheduled[0].WorkflowID}{' '}
-              <span className="muted">{scheduled[0].Remaining}</span> ›
+              <span className="muted">{scheduled[0].Remaining}</span>
+              <Icon data={ChevronRight} />
             </Button>
           ) : (
             <span className="muted">Нет запланированных запусков</span>
           )}
         </div>
+        <ThemePicker />
       </header>
       <main className="dashboard">
         <ErrorNotice error={error} />
@@ -98,18 +123,22 @@ function DashboardPage() {
           <>
             <div className="filters">
               <nav aria-label="Какие workflow показывать">
-                <Link
-                  className={data.Filter.ActiveOnly ? 'active' : ''}
+                <NavigationButton
+                  view="flat"
+                  component={RouterLink}
+                  selected={data.Filter.ActiveOnly}
                   to={filterLink(data.Filter.ActiveURL)}
                 >
                   Активные
-                </Link>
-                <Link
-                  className={!data.Filter.ActiveOnly ? 'active' : ''}
+                </NavigationButton>
+                <NavigationButton
+                  view="flat"
+                  component={RouterLink}
+                  selected={!data.Filter.ActiveOnly}
                   to={filterLink(data.Filter.AllURL)}
                 >
                   Все
-                </Link>
+                </NavigationButton>
               </nav>
               <nav aria-label="Какие состояния показывать">
                 {[
@@ -125,49 +154,63 @@ function DashboardPage() {
                     data.Filter.FailedOnly,
                   ],
                 ].map(([url, label, active]) => (
-                  <Link
-                    className={active ? 'active' : ''}
+                  <NavigationButton
+                    view="flat"
+                    component={RouterLink}
+                    selected={Boolean(active)}
                     key={String(label)}
                     to={filterLink(String(url))}
                   >
                     {label}
-                  </Link>
+                  </NavigationButton>
                 ))}
               </nav>
-              <select
+              <Choice
                 aria-label="Период"
                 value={data.Filter.Period}
-                onChange={(event) => change({ period: event.target.value })}
+                onUpdate={(period) => change({ period })}
+                options={data.Filter.Periods.map((period) => ({
+                  value: period.Value,
+                  content: period.Label,
+                }))}
+              />
+              <NavigationButton
+                view="flat"
+                component={RouterLink}
+                to={`${location.pathname}?period=24h`}
               >
-                {data.Filter.Periods.map((period) => (
-                  <option key={period.Value} value={period.Value}>
-                    {period.Label}
-                  </option>
-                ))}
-              </select>
-              <Link className="button" to={`${location.pathname}?period=24h`}>
                 Сбросить
-              </Link>
+              </NavigationButton>
               {data.Pagination.Visible && (
                 <nav aria-label="Страницы" className="pagination">
                   {data.Pagination.PreviousURL && (
-                    <Link to={filterLink(data.Pagination.PreviousURL)}>
-                      ← Новее
-                    </Link>
+                    <NavigationButton
+                      view="flat"
+                      component={RouterLink}
+                      to={filterLink(data.Pagination.PreviousURL)}
+                    >
+                      <Icon data={ArrowLeft} /> Новее
+                    </NavigationButton>
                   )}
                   {(data.Pagination.Items || []).map((item) => (
-                    <Link
+                    <NavigationButton
+                      view="flat"
+                      component={RouterLink}
                       key={item.Label}
-                      className={item.Current ? 'active' : ''}
+                      selected={item.Current}
                       to={filterLink(item.URL)}
                     >
                       {item.Label}
-                    </Link>
+                    </NavigationButton>
                   ))}
                   {data.Pagination.NextURL && (
-                    <Link to={filterLink(data.Pagination.NextURL)}>
-                      Старее →
-                    </Link>
+                    <NavigationButton
+                      view="flat"
+                      component={RouterLink}
+                      to={filterLink(data.Pagination.NextURL)}
+                    >
+                      Старее <Icon data={ArrowRight} />
+                    </NavigationButton>
                   )}
                 </nav>
               )}
@@ -175,9 +218,10 @@ function DashboardPage() {
             {!!data.Problems?.length && (
               <div className="problems">
                 {data.Problems.map((problem, index) => (
-                  <p className="error" key={`${problem.Name}/${index}`}>
-                    <strong>{problem.Name}</strong> — {problem.Message}
-                  </p>
+                  <ErrorNotice
+                    key={`${problem.Name}/${index}`}
+                    error={`${problem.Name} — ${problem.Message}`}
+                  />
                 ))}
               </div>
             )}
@@ -238,75 +282,113 @@ function DashboardPage() {
                 </aside>
                 <section className="inspector-details">
                   {run ? (
-                    <Tabs.Root
-                      className="run-tabs"
-                      value={tab}
-                      onValueChange={setTab}
-                    >
-                      <Tabs.List className="tabs" aria-label="Вид workflow">
-                        <Tabs.Trigger value="graph">Граф</Tabs.Trigger>
-                        <Tabs.Trigger value="info">Информация</Tabs.Trigger>
-                        <Tabs.Trigger value="continue">
-                          Продолжить в новом чате Codex
-                        </Tabs.Trigger>
-                      </Tabs.List>
-                      <Tabs.Content className="graph-tab" value="graph">
-                        <Suspense
-                          fallback={<p className="loading">Загрузка графа…</p>}
+                    <div className="run-tabs">
+                      <TabProvider value={tab} onUpdate={setTab}>
+                        <TabList
+                          contentOverflow="scroll"
+                          className="tabs"
+                          aria-label="Вид workflow"
                         >
-                          <WorkflowGraph
-                            key={run.ID}
-                            runID={run.ID}
-                            stepID={
-                              graphChoice?.runID === run.ID
-                                ? graphChoice.step
-                                : step?.StepID
-                            }
-                            visitID={
-                              graphChoice?.runID === run.ID
-                                ? graphChoice.visit
-                                : step?.VisitID
-                            }
-                            onSelectionChange={(step, visit) =>
-                              setGraphChoice({ runID: run.ID, step, visit })
-                            }
-                            preview={preview ? previewGraph(run) : undefined}
-                          />
-                        </Suspense>
-                      </Tabs.Content>
-                      <Tabs.Content className="info-tab" value="continue">
-                        <ContinuationPanel
-                          key={run.ID}
-                          runID={run.ID}
-                          stepID={
-                            graphChoice?.runID === run.ID
-                              ? graphChoice.step
-                              : step?.StepID
-                          }
-                          visitID={
-                            graphChoice?.runID === run.ID
-                              ? graphChoice.visit
-                              : step?.VisitID
-                          }
-                          preview={preview ? previewGraph(run) : undefined}
-                          onSelectionChange={(step, visit) =>
-                            setGraphChoice({ runID: run.ID, step, visit })
-                          }
-                        />
-                      </Tabs.Content>
-                      <Tabs.Content className="info-tab" value="info">
-                        <RunInfo
-                          key={`${run.ID}/${step?.Key}`}
-                          run={run}
-                          step={step}
-                          preview={preview}
-                          onDeleted={() => {
-                            setSelection(undefined);
-                            setRevision((value) => value + 1);
-                          }}
-                        />
-                      </Tabs.Content>
-                    </Tabs.Root>
+                          <Tab value="graph">Граф</Tab>
+                          <Tab value="info">Информация</Tab>
+                          <Tab value="continue">
+                            Продолжить в новом чате Codex
+                          </Tab>
+                        </TabList>
+                        <TabPanel
+                          className="graph-tab"
+                          value="graph"
+                          hidden={tab !== 'graph'}
+                        >
+                          {tab === 'graph' && (
+                            <>
+                              <Suspense
+                                fallback={
+                                  <div className="loading">
+                                    <Loader size="m" />
+                                  </div>
+                                }
+                              >
+                                <WorkflowGraph
+                                  key={run.ID}
+                                  runID={run.ID}
+                                  stepID={
+                                    graphChoice?.runID === run.ID
+                                      ? graphChoice.step
+                                      : step?.StepID
+                                  }
+                                  visitID={
+                                    graphChoice?.runID === run.ID
+                                      ? graphChoice.visit
+                                      : step?.VisitID
+                                  }
+                                  onSelectionChange={(step, visit) =>
+                                    setGraphChoice({
+                                      runID: run.ID,
+                                      step,
+                                      visit,
+                                    })
+                                  }
+                                  preview={
+                                    preview ? previewGraph(run) : undefined
+                                  }
+                                />
+                              </Suspense>
+                            </>
+                          )}
+                        </TabPanel>
+                        <TabPanel
+                          className="info-tab"
+                          value="continue"
+                          hidden={tab !== 'continue'}
+                        >
+                          {tab === 'continue' && (
+                            <>
+                              <ContinuationPanel
+                                key={run.ID}
+                                runID={run.ID}
+                                stepID={
+                                  graphChoice?.runID === run.ID
+                                    ? graphChoice.step
+                                    : step?.StepID
+                                }
+                                visitID={
+                                  graphChoice?.runID === run.ID
+                                    ? graphChoice.visit
+                                    : step?.VisitID
+                                }
+                                preview={
+                                  preview ? previewGraph(run) : undefined
+                                }
+                                onSelectionChange={(step, visit) =>
+                                  setGraphChoice({ runID: run.ID, step, visit })
+                                }
+                              />
+                            </>
+                          )}
+                        </TabPanel>
+                        <TabPanel
+                          className="info-tab"
+                          value="info"
+                          hidden={tab !== 'info'}
+                        >
+                          {tab === 'info' && (
+                            <>
+                              <RunInfo
+                                key={`${run.ID}/${step?.Key}`}
+                                run={run}
+                                step={step}
+                                preview={preview}
+                                onDeleted={() => {
+                                  setSelection(undefined);
+                                  setRevision((value) => value + 1);
+                                }}
+                              />
+                            </>
+                          )}
+                        </TabPanel>
+                      </TabProvider>
+                    </div>
                   ) : (
                     <p className="empty">{data.EmptyMessage}</p>
                   )}
@@ -363,11 +445,11 @@ function Search({
         onChange(text);
       }}
     >
-      <input
+      <TextInput
         type="search"
-        aria-label="Поиск"
+        startContent={<Icon data={Magnifier} />}
+        controlProps={{ 'aria-label': 'Поиск', maxLength: 300 }}
         placeholder="Поиск по workflow, кубикам и тикетам…"
-        maxLength={300}
         value={text}
         onChange={(event) => setText(event.target.value)}
       />
@@ -375,6 +457,7 @@ function Search({
   );
 }
 function GraphPage() {
+  const [tab, setTab] = useState('graph');
   const { run = '' } = useParams();
   const [params, setParams] = useSearchParams();
   const select = (step: string, visit?: string) => {
@@ -397,25 +480,48 @@ function GraphPage() {
           <img src="/assets/lawa-logo.png" alt="" />
           Lawa
         </Link>
-        <Link to="/">← Все запуски</Link>
+        <Link to="/">Все запуски</Link>
+        <div className="header-right">
+          <ThemePicker />
+        </div>
       </header>
       <main className="standalone-graph">
-        <Tabs.Root className="run-tabs" defaultValue="graph">
-          <Tabs.List className="tabs" aria-label="Вид workflow">
-            <Tabs.Trigger value="graph">Граф</Tabs.Trigger>
-            <Tabs.Trigger value="continue">
-              Продолжить в новом чате Codex
-            </Tabs.Trigger>
-          </Tabs.List>
-          <Tabs.Content className="graph-tab" value="graph">
-            <Suspense fallback={<p>Загрузка графа…</p>}>
-              <WorkflowGraph key={run} {...props} />
-            </Suspense>
-          </Tabs.Content>
-          <Tabs.Content className="info-tab" value="continue">
-            <ContinuationPanel key={run} {...props} />
-          </Tabs.Content>
-        </Tabs.Root>
+        <div className="run-tabs">
+          <TabProvider value={tab} onUpdate={setTab}>
+            <TabList
+              contentOverflow="scroll"
+              className="tabs"
+              aria-label="Вид workflow"
+            >
+              <Tab value="graph">Граф</Tab>
+              <Tab value="continue">Продолжить в новом чате Codex</Tab>
+            </TabList>
+            <TabPanel
+              className="graph-tab"
+              value="graph"
+              hidden={tab !== 'graph'}
+            >
+              {tab === 'graph' && (
+                <>
+                  <Suspense fallback={<p>Загрузка графа…</p>}>
+                    <WorkflowGraph key={run} {...props} />
+                  </Suspense>
+                </>
+              )}
+            </TabPanel>
+            <TabPanel
+              className="info-tab"
+              value="continue"
+              hidden={tab !== 'continue'}
+            >
+              {tab === 'continue' && (
+                <>
+                  <ContinuationPanel key={run} {...props} />
+                </>
+              )}
+            </TabPanel>
+          </TabProvider>
+        </div>
       </main>
     </div>
   );

@@ -1,23 +1,24 @@
-/* Единая нейтральная тема. Цвет обозначает состояние, а не фон приложения.
-   Компоненты используют эти токены; сторонние библиотеки переопределены ниже. */
-:root {
-  color-scheme: dark;
-  --bg: #080808;
-  --surface: #111;
-  --raised: #181818;
-  --hover: #242424;
-  --line: #292929;
-  --text: #f5f5f5;
-  --muted: #888;
-  --link: #58a6ff;
-  --red: #f85149;
-  --green: #3fb950;
-  font:
-    13px/1.5 Consolas,
-    'Courier New',
-    monospace;
+/* Палитра полностью следует Gravity ThemeProvider, включая порталы и граф.
+   Собственные правила отвечают за компоновку, но не рисуют библиотечные контролы. */
+.g-root {
+  --bg: var(--g-color-base-background);
+  --surface: var(--g-color-base-generic-ultralight);
+  --raised: var(--g-color-base-float);
+  --hover: var(--g-color-base-simple-hover);
+  --line: var(--g-color-line-generic);
+  --text: var(--g-color-text-primary);
+  --muted: var(--g-color-text-secondary);
+  --link: var(--g-color-text-info);
+  --red: var(--g-color-text-danger);
+  --green: var(--g-color-text-positive);
   color: var(--text);
   background: var(--bg);
+}
+.g-root_theme_light {
+  color-scheme: light;
+}
+.g-root_theme_dark {
+  color-scheme: dark;
 }
 * {
   box-sizing: border-box;
@@ -31,38 +32,6 @@ body,
 body {
   overflow: hidden;
 }
-button,
-input,
-select,
-textarea {
-  font: inherit;
-  color: inherit;
-}
-button,
-a,
-select {
-  -webkit-tap-highlight-color: transparent;
-}
-button {
-  cursor: pointer;
-}
-button:disabled,
-[aria-disabled='true'] {
-  opacity: 0.45;
-  cursor: default;
-}
-button:focus-visible,
-a:focus-visible,
-input:focus-visible,
-select:focus-visible,
-textarea:focus-visible {
-  outline: 2px solid var(--link);
-  outline-offset: 2px;
-}
-a {
-  color: var(--link);
-  text-decoration: none;
-}
 h1 {
   font-size: 21px;
   margin: 0;
@@ -74,76 +43,26 @@ h2 {
   overflow-wrap: anywhere;
 }
 h3 {
-  font-size: 12px;
-  color: #aaa;
+  font-size: 13px;
+  color: var(--muted);
   margin: 24px 0 10px;
 }
 small,
 .muted {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 12px;
 }
 pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
-  font: inherit;
-}
-input,
-select,
-textarea {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 8px;
-  min-width: 0;
-}
-textarea {
-  width: 100%;
-  height: 140px;
-  resize: vertical;
-  margin: 10px 0;
-  font-size: 11px;
-}
-select {
-  max-width: 100%;
-}
-.button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--raised);
-  padding: 7px 10px;
-  color: var(--text);
-  font-size: 12px;
-}
-.button:hover {
-  background: var(--hover);
-}
-a.button {
-  color: var(--link);
-}
-.danger {
-  color: var(--red);
-  border-color: #542822;
+  font: var(--g-text-code-1-font-weight) var(--g-text-code-1-font-size)/1.5
+    var(--g-font-family-monospace);
 }
 .actions {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   margin: 18px 0;
-}
-.error {
-  background: #211010;
-  border: 1px solid #57302c;
-  color: #ffb4ae;
-  padding: 10px;
-  border-radius: 6px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  font-size: 12px;
 }
 .loading,
 .empty {
@@ -157,21 +76,22 @@ a.button {
 }
 .app-header {
   flex: none;
-  height: 46px;
+  min-height: 48px;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   padding: 6px 14px;
   border-bottom: 1px solid var(--line);
-  background: #0d0d0d;
+  background: var(--bg);
 }
 .brand {
+  font-size: 20px;
+  font-weight: bold;
+}
+.brand .g-button__text {
   display: flex;
   align-items: center;
   gap: 10px;
-  font-size: 20px;
-  font-weight: bold;
-  color: var(--text);
 }
 .brand img {
   width: 28px;
@@ -180,24 +100,23 @@ a.button {
 }
 .header-right {
   margin-left: auto;
+  min-width: 0;
 }
-.test-label {
-  font-size: 10px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  padding: 2px 6px;
-  color: var(--muted);
+.theme-picker {
+  flex: none;
+}
+.theme-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 .dashboard {
   display: flex;
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  padding: 0;
-  gap: 0;
 }
-/* Отступы принадлежат панелям управления: полотно занимает всю рабочую область.
-   Области отделяются одной линией, без вложенных рамок и внешних полей. */
+/* Одиночные разделители сохраняют плотную компоновку без вложенных рамок. */
 .filters {
   display: flex;
   flex-wrap: wrap;
@@ -210,26 +129,6 @@ a.button {
   display: flex;
   gap: 2px;
 }
-.filters nav a {
-  padding: 5px 9px;
-  color: var(--muted);
-  font-size: 11px;
-}
-.filters nav a.active {
-  color: var(--text);
-  background: var(--hover);
-  border-radius: 5px;
-}
-.filters > .button {
-  border-color: transparent;
-  background: none;
-}
-.filters > .button:hover {
-  background: var(--hover);
-}
-.filters select {
-  padding: 5px 8px;
-}
 .pagination {
   margin-left: auto;
 }
@@ -237,9 +136,6 @@ a.button {
   flex: none;
   max-height: 100px;
   overflow: auto;
-}
-.problems p {
-  margin: 0 0 6px;
 }
 .inspector {
   display: flex;
@@ -261,13 +157,9 @@ a.button {
   padding: 5px;
   border-bottom: 1px solid var(--line);
 }
-.breadcrumbs .button {
-  border: 0;
-  background: none;
-  font-size: 11px;
-}
 .tree {
   min-height: 0;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--line);
@@ -276,10 +168,6 @@ a.button {
 .search {
   padding: 8px;
   border-bottom: 1px solid var(--line);
-}
-.search input {
-  width: 100%;
-  font-size: 11px;
 }
 .tree-scroll {
   padding: 6px;
@@ -293,7 +181,7 @@ a.button {
 }
 .tree .tree-children {
   padding-left: 13px;
-  border-left: 1px solid #252525;
+  border-left: 1px solid var(--line);
   margin-left: 7px;
 }
 .tree-row {
@@ -303,29 +191,29 @@ a.button {
   border-radius: 5px;
   min-height: 32px;
 }
-.selected {
-  background: var(--hover);
+.tree-row.selected,
+.tree-step.selected {
+  background: var(--g-color-base-selection);
 }
-.tree-row:hover,
-.tree-step:hover {
-  background: #1d1d1d;
+.tree-row:hover {
+  background: var(--hover);
 }
 .tree-select,
 .tree-step {
-  border: 0;
-  background: none;
+  min-width: 0;
+  width: 100%;
+}
+.tree-select .g-button__text,
+.tree-step .g-button__text {
   display: flex;
   align-items: center;
   gap: 6px;
   text-align: left;
-  padding: 5px 2px;
-  min-width: 0;
-  width: 100%;
-  color: var(--text);
-  font-size: 11px;
+  flex: 1;
+  margin: 0 4px;
 }
-.tree-select span,
-.tree-step span {
+.tree-select .g-button__text > span,
+.tree-step .g-button__text > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -336,20 +224,10 @@ a.button {
   flex: none;
 }
 .tree-select small {
-  font-size: 9px;
-}
-.tree-step {
-  padding-left: 7px;
-  border-radius: 5px;
+  font-size: 10px;
 }
 .icon-button {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  padding: 3px;
+  flex: none;
 }
 .rotate {
   transform: rotate(90deg);
@@ -362,57 +240,25 @@ a.button {
   opacity: 1;
 }
 .ticket {
-  color: #9bd0ff;
-  background: #101c28;
-  border: 1px solid #254767;
-  border-radius: 10px;
-  padding: 0 4px;
   max-width: 80px;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .inspector-details {
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
-  background: #0d0d0d;
+  background: var(--bg);
 }
 .run-tabs {
   display: flex;
   flex: 1;
   min-height: 0;
+  min-width: 0;
   flex-direction: column;
 }
 .tabs {
-  display: flex;
-  gap: 8px;
   padding: 0 12px;
-  overflow-x: auto;
-  border-bottom: 1px solid var(--line);
   flex: none;
-}
-.tabs button {
-  background: none;
-  border: 0;
-  border-bottom: 2px solid transparent;
-  border-radius: 0;
-  padding: 10px 8px;
-  color: var(--muted);
-  white-space: nowrap;
-  font-size: 11px;
-}
-.tabs button:hover {
-  color: var(--text);
-  background: var(--raised);
-}
-.tabs button[data-state='active'] {
-  color: var(--text);
-  border-bottom-color: var(--link);
-}
-/* Внутренний outline остаётся видимым в горизонтально прокручиваемых вкладках. */
-.tabs button:focus-visible {
-  outline-offset: -3px;
 }
 .graph-tab {
   display: flex;
@@ -424,30 +270,19 @@ a.button {
   padding: 22px;
   flex: 1;
 }
-.graph-tab[data-state='inactive'],
-.info-tab[data-state='inactive'] {
+/* Нативный hidden обязан побеждать flex: неактивная панель недоступна и не
+   занимает места, а провайдер Gravity связывает её с вкладкой через ARIA. */
+.graph-tab[hidden],
+.info-tab[hidden] {
   display: none;
 }
 .run-info {
   max-width: 780px;
 }
 .facts {
-  font-size: 12px;
   margin: 20px 0;
-}
-.facts > div {
-  display: grid;
-  grid-template-columns: 160px minmax(0, 1fr);
-  gap: 12px;
-  margin: 8px 0;
-}
-.facts dt {
-  color: var(--muted);
-}
-.facts dd {
-  margin: 0;
-  white-space: pre-wrap;
   overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 .tone-succeeded {
   color: var(--green);
@@ -467,16 +302,7 @@ a.button {
 .tone-interrupted {
   color: var(--muted);
 }
-.status {
-  display: inline-flex;
-  border: 1px solid var(--line);
-  border-radius: 20px;
-  padding: 4px 10px;
-  font-size: 11px;
-  white-space: nowrap;
-}
 .workflow-graph {
-  padding: 0;
   display: flex;
   flex: 1;
   min-height: 0;
@@ -491,7 +317,7 @@ a.button {
   padding: 8px 14px;
   flex: none;
 }
-.graph-heading > div {
+.graph-heading > div:first-child {
   display: flex;
   align-items: baseline;
   flex-wrap: wrap;
@@ -500,10 +326,6 @@ a.button {
 }
 .graph-heading h1 {
   font-size: 16px;
-}
-.graph-heading .status {
-  border: 0;
-  padding: 0;
 }
 .graph-heading small {
   overflow-wrap: anywhere;
@@ -520,7 +342,7 @@ a.button {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background: #111;
+  background: var(--surface);
 }
 .legend {
   display: flex;
@@ -528,7 +350,7 @@ a.button {
   gap: 14px;
   border-top: 1px solid var(--line);
   padding: 6px 14px;
-  font-size: 11px;
+  font-size: 12px;
   flex: none;
 }
 .cube-details {
@@ -537,26 +359,22 @@ a.button {
   min-width: 0;
   border-left: 1px solid var(--line);
 }
-.cube-details select {
-  width: 100%;
+.cube-details > .g-select {
+  display: block;
   margin-top: 12px;
-}
-.cube-details .button {
-  margin-top: 10px;
 }
 .cube {
   width: 220px;
   height: 80px;
-  border: 1px solid #3c3c3c;
-  border-radius: 9px;
-  background: var(--raised);
+  background: var(--bg);
   display: flex;
   flex-direction: column;
   justify-content: center;
-  gap: 8px;
+  gap: 4px;
   padding: 12px 14px;
 }
 .cube strong {
+  flex-shrink: 0;
   font-size: 12px;
   color: var(--text);
   overflow: hidden;
@@ -567,34 +385,26 @@ a.button {
 }
 .cube small {
   color: inherit;
-  font-size: 10px;
+  font-size: 11px;
 }
 .cube.selected {
-  border: 2px solid #888;
-  background: #242424;
-  box-shadow: 0 0 0 3px #ffffff10;
+  background: var(--g-color-base-selection);
+  outline: 2px solid var(--g-color-line-brand);
+  outline-offset: 1px;
 }
 .cube.tone-running,
 .cube.tone-starting {
-  border-color: var(--link);
+  border-color: var(--g-color-line-info);
 }
 .cube.tone-failed {
-  border-color: var(--red);
+  border-color: var(--g-color-line-danger);
 }
 .cube.tone-skipped {
   border-style: dashed;
 }
-.result {
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: #141414;
-  font-size: 12px;
-  line-height: 1.7;
-}
 .note {
-  color: #bbb;
-  font-size: 12px;
+  color: var(--muted);
+  font-size: 13px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -604,15 +414,11 @@ a.button {
 }
 .message {
   margin: 10px 0;
-  background: #151515;
+  background: var(--surface);
   border-radius: 7px;
   padding: 10px;
 }
-.message small {
-  font-size: 10px;
-}
 .message pre {
-  font-size: 12px;
   margin: 7px 0 0;
 }
 .standalone-graph {
@@ -620,51 +426,45 @@ a.button {
   flex: 1;
   min-height: 0;
 }
-/* React Flow отвечает за pan/zoom и доступность узлов; палитра общая с UI. */
+/* React Flow сохраняет раскладку/масштаб при смене темы: меняются только токены. */
 .react-flow {
-  --xy-background-color: #111;
-  --xy-edge-stroke: #666;
-  --xy-edge-label-color: #aaa;
-  --xy-edge-label-background-color: #111;
-  --xy-controls-button-background-color: #181818;
-  --xy-controls-button-background-color-hover: #242424;
-  --xy-controls-button-color: #ddd;
-  --xy-controls-button-border-color: #333;
+  --xy-background-color: var(--bg);
+  --xy-background-color-default: var(--bg);
+  --xy-background-pattern-dots-color-default: var(
+    --g-color-line-generic-accent
+  );
+  --xy-edge-stroke: var(--g-color-line-generic-accent);
+  --xy-edge-label-color: var(--muted);
+  --xy-edge-label-background-color: var(--bg);
 }
-.react-flow__handle {
-  width: 5px;
-  height: 5px;
-  background: #777;
-  border: 0;
+.graph-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg);
+  border-radius: 6px;
 }
 .react-flow__attribution {
   font-size: 8px;
-  background: #111 !important;
+  background: var(--bg) !important;
 }
 .react-flow__attribution a {
-  color: #777;
+  color: var(--muted);
 }
 .react-flow__edge-text {
   font-size: 10px;
 }
-.dialog-overlay {
-  position: fixed;
-  inset: 0;
-  background: #0009;
-  z-index: 40;
+/* Handles участвуют в геометрии рёбер, поэтому не заменяем их display:none. */
+.cube .react-flow__handle {
+  opacity: 0;
+  pointer-events: none;
 }
 .dialog-content {
-  position: fixed;
-  z-index: 41;
-  inset: 0 0 0 auto;
-  width: min(720px, 100vw);
-  background: #0d0d0d;
-  border-left: 1px solid #333;
-  box-shadow: -18px 0 50px #000b;
+  width: min(720px, calc(100vw - 24px));
+  max-height: calc(100dvh - 32px);
   display: flex;
   flex-direction: column;
-  padding: 18px;
-  outline: none;
+  padding: 20px;
 }
 .dialog-header {
   display: flex;
@@ -687,85 +487,6 @@ a.button {
 .schedule h3 {
   color: var(--text);
 }
-@media (max-width: 1000px) {
-  .inspector-body {
-    grid-template-columns: 230px minmax(0, 1fr);
-  }
-  .graph-workspace {
-    grid-template-columns: minmax(0, 1fr) 260px;
-  }
-  .cube-details {
-    padding: 12px;
-  }
-}
-@media (max-width: 760px) {
-  .app-header {
-    padding: 10px;
-  }
-  .header-right {
-    font-size: 10px;
-    min-width: 0;
-  }
-  .header-right .button {
-    max-width: 55vw;
-    overflow: hidden;
-    white-space: nowrap;
-  }
-  .inspector-body {
-    grid-template-columns: 1fr;
-    grid-template-rows: 150px minmax(0, 1fr);
-  }
-  .tree {
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .graph-workspace {
-    display: flex;
-    flex-direction: column;
-    overflow: auto;
-  }
-  .graph-area {
-    min-height: 320px;
-    flex: none;
-  }
-  .cube-details {
-    overflow: visible;
-    border-left: 0;
-    border-top: 1px solid var(--line);
-  }
-  .graph-heading {
-    align-items: flex-start;
-  }
-  .graph-heading h1 {
-    font-size: 16px;
-  }
-  .graph-heading .status {
-    font-size: 9px;
-  }
-  .facts > div {
-    grid-template-columns: 1fr;
-    gap: 2px;
-  }
-  .filters {
-    gap: 6px;
-  }
-  .filters nav a {
-    padding: 4px 6px;
-  }
-  .pagination {
-    margin: 0;
-  }
-  .test-label {
-    display: none;
-  }
-}
-
-/* Handles нужны React Flow для расчёта привязок; скрываем только их отрисовку,
-   сохраняя размеры и координаты. display:none ломает геометрию рёбер. */
-.cube .react-flow__handle {
-  opacity: 0;
-  pointer-events: none;
-}
 .markdown-document {
   min-width: 0;
 }
@@ -775,11 +496,12 @@ a.button {
 }
 .markdown pre {
   overflow: auto;
-  background: var(--raised);
+  background: var(--surface);
   padding: 12px;
   border-radius: 6px;
 }
 .markdown code {
+  font-family: var(--g-font-family-monospace);
   font-size: 0.95em;
 }
 .markdown table {
@@ -810,24 +532,69 @@ a.button {
 .continuation-tab {
   max-width: 1000px;
 }
-.markdown-document textarea {
-  width: 100%;
-  min-height: 160px;
+.markdown-document .g-text-area {
+  margin: 10px 0;
 }
-
-/* Экспорт занимает две компактные строки вверху sidebar, не высоту графа. */
 .image-export {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 6px;
   margin-bottom: 16px;
 }
-.image-export select {
+.image-export .g-select {
   grid-column: 1 / -1;
   min-width: 0;
 }
-.image-export .button {
-  padding: 6px;
-  font-size: 11px;
-  text-align: center;
+@media (max-width: 1000px) {
+  .inspector-body {
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
+  .graph-workspace {
+    grid-template-columns: minmax(0, 1fr) 260px;
+  }
+  .cube-details {
+    padding: 12px;
+  }
+}
+@media (max-width: 760px) {
+  .app-header {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 10px;
+  }
+  .header-right .g-button {
+    max-width: 45vw;
+  }
+  .inspector-body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: 150px minmax(0, 1fr);
+  }
+  .tree {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .graph-workspace {
+    display: flex;
+    flex-direction: column;
+    overflow: auto;
+  }
+  .graph-area {
+    min-height: 320px;
+    flex: none;
+  }
+  .cube-details {
+    overflow: visible;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    flex: none;
+  }
+  .graph-heading {
+    align-items: flex-start;
+  }
+  .filters {
+    gap: 6px;
+  }
+  .pagination {
+    margin: 0;
+  }
 }

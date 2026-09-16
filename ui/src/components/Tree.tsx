@@ -1,5 +1,6 @@
 import { useState } from 'react';
-import { Box, ChevronRight, Folder, Pin } from 'lucide-react';
+import { Cube as Box, ChevronRight, Folder, Pin } from '@gravity-ui/icons';
+import { Button, Icon, Label } from '@gravity-ui/uikit';
 import type { Run, Step } from '../types';
 
 export interface Selection {
@@ -43,15 +44,21 @@ export function RunTree({
       <div
         className={`tree-row ${selection?.runID === run.ID && !selection.stepKey ? 'selected' : ''}`}
       >
-        <button
+        <Button
+          view="flat"
           className="icon-button"
           onClick={toggle}
           aria-label={`Развернуть ${run.Name}`}
           aria-expanded={shown}
         >
-          <ChevronRight size={14} className={shown ? 'rotate' : ''} />
-        </button>
-        <button
+          <Icon
+            data={ChevronRight}
+            size={14}
+            className={shown ? 'rotate' : ''}
+          />
+        </Button>
+        <Button
+          view="flat"
           className="tree-select"
           onClick={() => onSelect(run)}
           title={run.Name}
@@ -61,37 +68,44 @@ export function RunTree({
               : undefined
           }
         >
-          <Folder size={16} className={`tone-${run.State}`} />
+          <Icon data={Folder} size={16} className={`tone-${run.State}`} />
           <span>{run.Name}</span>
           {run.TicketID && (
-            <small className="ticket" title={run.TicketTitle}>
+            <Label
+              size="xs"
+              theme="info"
+              className="ticket"
+              title={run.TicketTitle}
+            >
               {run.TicketID}
-            </small>
+            </Label>
           )}
           <small>
             {run.CompletedSteps}/{run.TotalSteps}
           </small>
-        </button>
-        <button
+        </Button>
+        <Button
+          view="flat"
           className="icon-button pin"
           onClick={() => onFocus(run.ID)}
           aria-label={`Сделать ${run.Name} корневой папкой`}
         >
-          <Pin size={13} />
-        </button>
+          <Icon data={Pin} size={13} />
+        </Button>
       </div>
       {shown && (
         <ul className="tree-children">
           {(run.Steps || []).map((step) => (
             <li key={step.Key}>
-              <button
+              <Button
+                view="flat"
                 className={`tree-step ${selection?.runID === run.ID && selection.stepKey === step.Key ? 'selected' : ''}`}
                 onClick={() => onSelect(run, step)}
                 title={step.ID}
               >
-                <Box size={15} className={`tone-${step.State}`} />
+                <Icon data={Box} size={15} className={`tone-${step.State}`} />
                 <span>{step.ID}</span>
-              </button>
+              </Button>
             </li>
           ))}
           {(run.Children || []).map((child) => (

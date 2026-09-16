@@ -1,20 +1,53 @@
+import { useId, type ReactNode } from 'react';
 import {
-  useId,
-  useRef,
-  type ButtonHTMLAttributes,
-  type ReactNode,
-} from 'react';
-import * as DialogPrimitive from '@radix-ui/react-dialog';
-import { X } from 'lucide-react';
+  Button as GravityButton,
+  Modal,
+  Icon,
+  Label,
+  Alert,
+  DefinitionList,
+  Select,
+  type ButtonProps,
+  type SelectOption,
+} from '@gravity-ui/uikit';
+import { Xmark } from '@gravity-ui/icons';
 
-// Небольшой слой компонентов изолирует приложение от конкретной библиотеки.
-// Тему меняют CSS-токены, а focus trap, Escape и возврат фокуса обеспечивает Radix.
-export function Button({
-  className = '',
-  ...props
-}: ButtonHTMLAttributes<HTMLButtonElement>) {
-  return <button type="button" className={`button ${className}`} {...props} />;
+// Общие элементы делегируют оформление и доступность Gravity UI. Обёртки
+// сохраняют только соглашения приложения: destructive-view и одиночный выбор.
+export function Button({ className = '', ...props }: ButtonProps) {
+  return (
+    <GravityButton
+      view={className.includes('danger') ? 'outlined-danger' : 'outlined'}
+      className={className}
+      {...props}
+    />
+  );
 }
+export function Choice({
+  value,
+  onUpdate,
+  options,
+  ...props
+}: {
+  value: string;
+  onUpdate: (value: string) => void;
+  options: SelectOption[];
+  'aria-label': string;
+  className?: string;
+}) {
+  return (
+    <Select
+      {...props}
+      value={value ? [value] : []}
+      options={options}
+      onUpdate={([next]) => {
+        if (next !== undefined) onUpdate(next);
+      }}
+    />
+  );
+}
+// Modal обеспечивает portal, focus trap, Escape и возврат фокуса инициатору.
+// Заголовок и описание явно связаны с диалогом для screen reader.
 export function Dialog({
   open,
   onOpenChange,
@@ -28,45 +61,33 @@ export function Dialog({
   description?: string;
   children: ReactNode;
 }) {
-  const descriptionID = useId();
-  // Один управляемый диалог открывается разными кнопками, без Radix Trigger.
-  // Сохраняем инициатор до auto-focus и возвращаем фокус, только если он ещё в DOM.
-  const initiator = useRef<HTMLElement | null>(null);
+  const titleID = useId(),
+    descriptionID = useId();
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="dialog-overlay" />
-        <DialogPrimitive.Content
-          className="dialog-content"
-          aria-describedby={description ? descriptionID : undefined}
-          onOpenAutoFocus={() => {
-            initiator.current =
-              document.activeElement instanceof HTMLElement
-                ? document.activeElement
-                : null;
-          }}
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            if (initiator.current?.isConnected) initiator.current.focus();
-          }}
+    <Modal
+      open={open}
+      onOpenChange={onOpenChange}
+      aria-labelledby={titleID}
+      aria-describedby={description ? descriptionID : undefined}
+      contentClassName="dialog-content"
+    >
+      <div className="dialog-header">
+        <h2 id={titleID}>{title}</h2>
+        <GravityButton
+          view="flat"
+          aria-label="Закрыть"
+          onClick={() => onOpenChange(false)}
         >
-          <div className="dialog-header">
-            <DialogPrimitive.Title>{title}</DialogPrimitive.Title>
-            <DialogPrimitive.Close asChild>
-              <Button aria-label="Закрыть">
-                <X size={18} />
-              </Button>
-            </DialogPrimitive.Close>
-          </div>
-          {description && (
-            <DialogPrimitive.Description id={descriptionID} className="muted">
-              {description}
-            </DialogPrimitive.Description>
-          )}
-          <div className="dialog-body">{children}</div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+          <Icon data={Xmark} size={18} />
+        </GravityButton>
+      </div>
+      {description && (
+        <p id={descriptionID} className="muted">
+          {description}
+        </p>
+      )}
+      <div className="dialog-body">{children}</div>
+    </Modal>
   );
 }
 export const statusNames: Record<string, string> = {
@@ -81,18 +102,27 @@ export const statusNames: Record<string, string> = {
   skipped: 'Пропущено',
   unknown: 'Неизвестно',
 };
+// Подпись состояния сохраняется независимо от цвета: тема не меняет смысл.
 export function Status({ state }: { state: string }) {
+  const theme =
+    state === 'succeeded'
+      ? 'success'
+      : ['running', 'starting', 'waiting_for_approval'].includes(state)
+        ? 'info'
+        : ['failed', 'cancelled'].includes(state)
+          ? 'danger'
+          : 'normal';
   return (
-    <span className={`status tone-${state}`}>
+    <Label theme={theme} size="s">
       {statusNames[state] || state}
-    </span>
+    </Label>
   );
 }
 export function ErrorNotice({ error }: { error?: string }) {
   return error ? (
-    <p className="error" role="alert">
-      {error}
-    </p>
+    <div role="alert">
+      <Alert theme="danger" message={error} />
+    </div>
   ) : null;
 }
 export function Facts({
@@ -101,15 +131,14 @@ export function Facts({
   items: [string, string | number | undefined][];
 }) {
   return (
-    <dl className="facts">
+    <DefinitionList className="facts" responsive>
       {items
         .filter(([, value]) => value !== '' && value !== undefined)
         .map(([label, value]) => (
-          <div key={label}>
-            <dt>{label}</dt>
-            <dd>{value}</dd>
-          </div>
+          <DefinitionList.Item key={label} name={label}>
+            {value}
+          </DefinitionList.Item>
         ))}
-    </dl>
+    </DefinitionList>
   );
 }

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import Markdown from 'react-markdown';
+import { TextArea, Link } from '@gravity-ui/uikit';
 import remarkGfm from 'remark-gfm';
 import { Button, Dialog, ErrorNotice } from './ui';
 import { usePoll } from '../hooks/api';
@@ -49,10 +50,10 @@ export function MarkdownDocument({
         </p>
       )}
       {manual && (
-        <textarea
-          ref={raw}
+        <TextArea
+          controlRef={raw}
           readOnly
-          aria-label={`Исходный Markdown: ${label}`}
+          controlProps={{ 'aria-label': `Исходный Markdown: ${label}` }}
           value={text}
         />
       )}
@@ -62,12 +63,17 @@ export function MarkdownDocument({
           skipHtml
           components={{
             a: ({ node: _node, ...props }) => (
-              <a {...props} target="_blank" rel="noopener noreferrer" />
+              <Link
+                {...props}
+                href={props.href || ''}
+                target="_blank"
+                rel="noopener noreferrer"
+              />
             ),
             img: ({ src, alt }) => (
-              <a href={src} target="_blank" rel="noopener noreferrer">
+              <Link href={src || ''} target="_blank" rel="noopener noreferrer">
                 {alt || 'Изображение'}
-              </a>
+              </Link>
             ),
           }}
         >

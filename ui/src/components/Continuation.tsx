@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { MarkdownDocument } from './MarkdownDocument';
 import type { Graph } from '../types';
 import { usePoll } from '../hooks/api';
-import { ErrorNotice } from './ui';
+import { Choice, ErrorNotice } from './ui';
 
 // Выбор из графа передаётся вкладке по step/visit. Самостоятельное открытие
 // вкладки позволяет выбрать любой кубик, в том числе ещё не запущенный.
@@ -37,29 +37,25 @@ export function ContinuationPanel({
       {graph ? (
         <>
           <div className="actions">
-            <select
+            <Choice
               aria-label="Кубик для продолжения"
               value={selected?.ID || ''}
-              onChange={(event) => onSelectionChange(event.target.value)}
-            >
-              {graph.Nodes?.map((node) => (
-                <option key={node.ID}>{node.ID}</option>
-              ))}
-            </select>
+              onUpdate={(value) => onSelectionChange(value)}
+              options={(graph.Nodes || []).map((node) => ({
+                value: node.ID,
+                content: node.ID,
+              }))}
+            />
             {executions.length > 1 && (
-              <select
+              <Choice
                 aria-label="Посещение для продолжения"
                 value={execution?.Key || ''}
-                onChange={(event) =>
-                  onSelectionChange(selected!.ID, event.target.value)
-                }
-              >
-                {executions.map((entry) => (
-                  <option key={entry.Key} value={entry.Key}>
-                    Посещение {entry.Visit || 1}
-                  </option>
-                ))}
-              </select>
+                onUpdate={(value) => onSelectionChange(selected!.ID, value)}
+                options={executions.map((entry) => ({
+                  value: entry.Key,
+                  content: `Посещение ${entry.Visit || 1}`,
+                }))}
+              />
             )}
           </div>
           <Continuation
@@ -83,14 +79,15 @@ export function Continuation({
   const [scope, setScope] = useState('cube');
   return (
     <section>
-      <select
+      <Choice
         aria-label="Контекст продолжения"
         value={scope}
-        onChange={(event) => setScope(event.target.value)}
-      >
-        <option value="cube">Этот кубик</option>
-        <option value="workflow">Весь workflow</option>
-      </select>
+        onUpdate={setScope}
+        options={[
+          { value: 'cube', content: 'Этот кубик' },
+          { value: 'workflow', content: 'Весь workflow' },
+        ]}
+      />
       <MarkdownDocument
         text={scope === 'workflow' ? workflow : cube}
         label="Промпт продолжения"
