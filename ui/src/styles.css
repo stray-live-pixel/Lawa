@@ -909,7 +909,12 @@ pre {
 .cube-details-content {
   padding: 12px 10px 12px 8px;
 }
+/* Шаг между центрами первых иконок workflow — 24px + 4px.
+   Сдвигаем кубик на этот шаг, сохраняя разделитель на всю ширину панели. */
 .cube-title-row {
+  margin: 0 -10px 10px -8px;
+  padding: 0 10px 8px 36px;
+  border-bottom: 1px solid var(--line);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -927,7 +932,7 @@ pre {
   white-space: nowrap;
 }
 .visit-summary {
-  margin: 4px 0 10px 60px;
+  margin: 4px 0 10px 88px;
   font-size: 11px;
 }
 .cube-details-content > .g-select {
