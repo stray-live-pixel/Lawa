@@ -34,7 +34,7 @@ export function CopyIdentity({
   };
   if (infoIcon) {
     return (
-      <Tooltip content={text}>
+      <Tooltip content={`run id: ${text}`}>
         <span className="run-id-trigger">
           <ClipboardButton
             className="run-id-info"
