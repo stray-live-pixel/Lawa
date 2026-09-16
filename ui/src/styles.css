@@ -931,10 +931,6 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.cube-messages-trigger {
-  display: inline-flex;
-  flex-shrink: 0;
-}
 .result-toolbar {
   display: flex;
   align-items: center;

@@ -330,15 +330,16 @@ function GraphView({
               <Tooltip
                 content={execution?.TraceURL ? 'Сообщения и действия' : 'Логов нет'}
               >
-                <span className="cube-messages-trigger">
+                <span className="run-id-trigger">
                   <Button
+                    className="run-id-info"
                     view="flat"
                     size="s"
                     aria-label="Сообщения и действия"
                     disabled={!execution?.TraceURL}
                     onClick={() => setMessagesOpen(true)}
                   >
-                    <Icon data={FileText} size={16} />
+                    <Icon data={FileText} size={18} />
                   </Button>
                 </span>
               </Tooltip>
