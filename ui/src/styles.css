@@ -426,7 +426,10 @@ pre {
   padding-left: var(--panel-inset);
   border-bottom: 1px solid var(--line);
 }
+/* Общая граница toolbar проходит и под кнопкой, и под вкладками.
+   Внутреннюю линию Gravity отключаем, чтобы не было двойной ступеньки. */
 .run-tabs-toolbar > .tabs {
+  --g-tabs-border-width: 0px;
   flex: 1;
   min-width: 0;
 }

@@ -6,7 +6,8 @@ import {
 } from '@gravity-ui/icons';
 
 // Кнопка принадлежит строке вкладок, поэтому не исчезает при смене вкладки.
-// aria-pressed одновременно описывает состояние для пользователя и CSS-сетки:
+// Gravity формирует aria-pressed из selected: этот атрибут связывает
+// доступное состояние кнопки и CSS-сетку (напрямую задавать его нельзя).
 // меню скрывается без размонтирования и сохраняет выбранную ширину.
 export function SidebarToggle() {
   const [expanded, setExpanded] = useState(false);
@@ -18,7 +19,7 @@ export function SidebarToggle() {
       size="s"
       aria-label={label}
       title={label}
-      aria-pressed={expanded}
+      selected={expanded}
       onClick={() => setExpanded(!expanded)}
     >
       <Icon data={expanded ? ChevronsCollapseUpRight : ChevronsExpandUpRight} />
