@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Cube as Box, ChevronRight, Folder, Pin } from '@gravity-ui/icons';
+import { Cube as Box, ChevronRight, NodesRight, Pin } from '@gravity-ui/icons';
 import { Button, Icon, Label } from '@gravity-ui/uikit';
 import type { Run, Step } from '../types';
 
@@ -72,7 +72,7 @@ export function RunTree({
           {/* Единый контейнер не даёт Button вынести Icon в отдельный слот:
               иконка, имя и счётчик используют одну сетку независимо от тикета. */}
           <span className="tree-entry">
-            <Icon data={Folder} size={16} className={`tone-${run.State}`} />
+            <Icon data={NodesRight} size={16} className={`tone-${run.State}`} />
             <span className="tree-name">{run.Name}</span>
             <span className="tree-meta">
               {run.TicketID && (
