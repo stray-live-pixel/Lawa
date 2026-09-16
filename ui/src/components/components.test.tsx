@@ -1,3 +1,4 @@
+import { WorkflowSource } from './WorkflowSource';
 import {
   act,
   fireEvent,
@@ -43,7 +44,12 @@ vi.mock('@xyflow/react', () => ({
   ReactFlow: ({ nodes, onNodeClick, children }: any) => (
     <div>
       {nodes.map((node: any) => (
-        <button key={node.id} onClick={() => onNodeClick(null, node)}>
+        <button
+          key={node.id}
+          data-state={node.data.state}
+          data-visit={node.data.visit}
+          onClick={() => onNodeClick(null, node)}
+        >
           {node.id}
         </button>
       ))}
@@ -550,4 +556,85 @@ it('раскладывает цикл с параллельными маршру
     expect(Number.isFinite(point.y)).toBe(true);
   }
   expect(edges).toEqual(original);
+});
+
+// Вкладка показывает сохранённый JSON, затем тот же текст инструкции в двух
+// представлениях. Открытие не обращается к путям исходных файлов пользователя.
+it('показывает JSON и сохранённый Markdown запуска', async () => {
+  const fetcher = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      JSON: { id: 'saved' },
+      Note: 'Сохранённый снимок',
+      Documents: [{ Name: 'Инструкция · a', Content: '# Saved heading' }],
+    }),
+  });
+  vi.stubGlobal('fetch', fetcher);
+  render(<WorkflowSource runID="saved-run" />);
+  expect(await screen.findByLabelText('JSON workflow')).toHaveValue(
+    JSON.stringify({ id: 'saved' }, null, 2),
+  );
+  expect(fetcher.mock.calls[0][0]).toBe('/api/source/saved-run');
+  await choose('Файл workflow', 'Инструкция · a');
+  expect(
+    screen.getByRole('heading', { name: 'Saved heading' }),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Исходный текст' }));
+  expect(screen.getByLabelText('Исходный Markdown')).toHaveValue(
+    '# Saved heading',
+  );
+});
+
+// Один и тот же выбранный visit определяет цвет узла и результат панели.
+// Polling новой партии обновляет auto, но не сбрасывает явный просмотр истории.
+it('согласует состояние кубика и детали при skipped и новой партии', async () => {
+  const base = graph.Executions![0];
+  const make = (Key: string, State: string, Visit: number) => ({
+    ...base,
+    Key,
+    StepID: 'loop',
+    State,
+    Visit,
+    Result: `Результат ${Key}`,
+    Trigger: '',
+  });
+  const value: Graph = {
+    ...graph,
+    Executions: [make('first', 'succeeded', 1), make('skip', 'skipped', 2)],
+  };
+  const { rerender } = render(<WorkflowGraph runID="run-a" preview={value} />);
+  expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
+    'data-state',
+    'succeeded',
+  );
+  expect(screen.getByText('Результат first')).toBeInTheDocument();
+  const next = {
+    ...value,
+    Executions: [...value.Executions!, make('next', 'running', 3)],
+  };
+  rerender(
+    <ThemeProvider theme="dark" lang="ru">
+      <WorkflowGraph runID="run-a" preview={next} />
+    </ThemeProvider>,
+  );
+  expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
+    'data-state',
+    'running',
+  );
+  expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
+    'data-visit',
+    '3',
+  );
+  expect(screen.getByText('Результат next')).toBeInTheDocument();
+  await choose('Посещение кубика', 'Посещение 2 · Пропущено');
+  expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
+    'data-state',
+    'skipped',
+  );
+  expect(screen.getByText('Результат skip')).toBeInTheDocument();
+  await choose('Посещение кубика', 'Актуальное посещение');
+  expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
+    'data-state',
+    'running',
+  );
 });

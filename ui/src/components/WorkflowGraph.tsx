@@ -1,5 +1,9 @@
 import { useMemo, useState } from 'react';
+import { displayVisit } from './displayVisit';
 import {
+  BaseEdge,
+  EdgeLabelRenderer,
+  type EdgeProps,
   Background,
   Panel,
   useReactFlow,
@@ -13,7 +17,7 @@ import {
 } from '@xyflow/react';
 import { Card, Icon, useThemeValue } from '@gravity-ui/uikit';
 import { Plus, Minus, ArrowsExpand } from '@gravity-ui/icons';
-import dagre from '@dagrejs/dagre';
+import { graphLayout, type RoutedEdge } from './graphLayout';
 import '@xyflow/react/dist/style.css';
 import type { Graph, GraphEdge, GraphNode } from '../types';
 import { usePoll } from '../hooks/api';
@@ -22,32 +26,56 @@ import { Trace } from './Trace';
 import { ImageExport } from './ImageExport';
 import { Button, Choice, Dialog, ErrorNotice, Status, statusNames } from './ui';
 
-// Dagre раскладывает зависимости, развилки и циклы. Только topology участвует
-// в раскладке: новые сообщения и состояния не меняют координаты или viewport.
+// Совместимый экспорт координат для потребителей и регрессионных тестов.
 export function layout(nodes: GraphNode[], edges: GraphEdge[]) {
-  const graph = new dagre.graphlib.Graph()
-    .setGraph({
-      rankdir: 'LR',
-      nodesep: 40,
-      ranksep: 75,
-      marginx: 25,
-      marginy: 25,
-    })
-    .setDefaultEdgeLabel(() => ({}));
-  nodes.forEach((node) => graph.setNode(node.ID, { width: 220, height: 80 }));
-  // Параллельные маршруты внутри цикла вызывают в Dagre ошибку пересечения
-  // прямоугольника. Для координат достаточно одной зависимости между узлами:
-  // обычный Graph объединяет связи, а React Flow ниже получает все оригиналы.
-  edges.forEach((edge) => graph.setEdge(edge.From, edge.To, {}));
-  dagre.layout(graph);
-  return new Map(
-    nodes.map((node) => {
-      const point = graph.node(node.ID);
-      return [node.ID, { x: point.x - 110, y: point.y - 40 }];
-    }),
+  return graphLayout(nodes, edges).positions;
+}
+// Рисуем рассчитанный маршрут целиком: smoothstep между двумя handles терял
+// обходы препятствий Dagre. Подписи получают место ещё на этапе раскладки.
+function RoutedConnection({ id, data, markerEnd }: EdgeProps) {
+  const route = data?.route as RoutedEdge;
+  if (!route) return null;
+  const path = route.points
+    .map((p, i) => `${i ? 'L' : 'M'} ${p.x},${p.y}`)
+    .join(' ');
+  return (
+    <>
+      <BaseEdge
+        id={id}
+        path={path}
+        markerEnd={markerEnd}
+        style={{
+          stroke: 'var(--g-color-text-secondary)',
+          strokeWidth: 1.5,
+          strokeDasharray: route.feedback ? '7 5' : undefined,
+        }}
+      />
+      {(route.labels.length > 0 || route.feedback) && (
+        <EdgeLabelRenderer>
+          <div
+            className="graph-edge-label"
+            style={{
+              transform: `translate(-50%, -50%) translate(${route.label.x}px,${route.label.y}px)`,
+            }}
+          >
+            {route.feedback ? '↩ Возврат' : ''}
+            {route.feedback && route.labels.length ? ' · ' : ''}
+            {route.labels.join(' · ')}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
   );
 }
-type CubeNode = Node<{ label: string; state: string }, 'cube'>;
+function WorkflowGroup({ data }: NodeProps) {
+  return (
+    <div className="workflow-group">
+      <span>{String(data.label)}</span>
+    </div>
+  );
+}
+const edgeTypes = { routed: RoutedConnection };
+type CubeNode = Node<{ label: string; state: string; visit?: number }, 'cube'>;
 function Cube({ data, selected }: NodeProps<CubeNode>) {
   return (
     <Card
@@ -55,14 +83,17 @@ function Cube({ data, selected }: NodeProps<CubeNode>) {
       className={`cube tone-${data.state} ${selected ? 'selected' : ''}`}
       title={data.label}
     >
-      <Handle type="target" position={Position.Left} />
+      <Handle type="target" position={Position.Top} />
       <strong>{data.label}</strong>
-      <small>{statusNames[data.state] || data.state}</small>
-      <Handle type="source" position={Position.Right} />
+      <small>
+        {statusNames[data.state] || data.state}
+        {data.visit ? ` · #${data.visit}` : ''}
+      </small>
+      <Handle type="source" position={Position.Bottom} />
     </Card>
   );
 }
-const nodeTypes = { cube: Cube };
+const nodeTypes = { cube: Cube, workflowGroup: WorkflowGroup };
 
 // Контролы Gravity работают внутри провайдера React Flow, сохраняя pan/zoom API.
 function GraphControls() {
@@ -139,6 +170,7 @@ function GraphView({
   onSelectionChange?: (step: string, visit?: string) => void;
 }) {
   const theme = useThemeValue();
+  const [expanded, setExpanded] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [choice, setChoice] = useState({
@@ -157,46 +189,62 @@ function GraphView({
   const executions = (graph.Executions || []).filter(
     (entry) => entry.StepID === selected?.ID,
   );
-  const execution =
-    executions.find((entry) => entry.Key === current.visit) ||
-    executions.at(-1);
+  const execution = displayVisit(executions, current.visit);
   const topology = JSON.stringify([
     (graph.Nodes || []).map((node) => node.ID),
     graph.Edges || [],
   ]);
-  const positions = useMemo(() => {
+  const geometry = useMemo(() => {
     const [ids, edges] = JSON.parse(topology) as [string[], GraphEdge[]];
-    return layout(
+    return graphLayout(
       ids.map((ID) => ({ ID, Prompt: '', Routes: [] })),
       edges,
     );
   }, [topology]);
-  const nodes: CubeNode[] = (graph.Nodes || []).map((node) => ({
-    id: node.ID,
-    type: 'cube',
-    position: positions.get(node.ID)!,
-    selected: selected?.ID === node.ID,
-    data: {
-      label: node.ID,
-      state:
-        (graph.Executions || [])
-          .filter((item) => item.StepID === node.ID)
-          .at(-1)?.State || 'pending',
-    },
+  const nodes: CubeNode[] = (graph.Nodes || []).map((node) => {
+    // Для выбранного кубика цвет, подпись и детали используют один visit.
+    // Остальные узлы автоматически показывают актуальную реальную работу.
+    const shown =
+      node.ID === selected?.ID
+        ? execution
+        : displayVisit(
+            (graph.Executions || []).filter((item) => item.StepID === node.ID),
+          );
+    return {
+      id: node.ID,
+      type: 'cube',
+      position: geometry.positions.get(node.ID)!,
+      selected: selected?.ID === node.ID,
+      data: {
+        label: node.ID,
+        state: shown?.State || 'not_started',
+        visit: shown ? shown.Visit || 1 : undefined,
+      },
+    };
+  });
+  const groups: Node[] = geometry.groups.map((group) => ({
+    id: group.id,
+    type: 'workflowGroup',
+    position: { x: group.x, y: group.y },
+    style: { width: group.width, height: group.height },
+    data: { label: group.label },
+    selectable: false,
+    draggable: false,
+    focusable: false,
+    zIndex: -1,
   }));
-  const edges: Edge[] = (graph.Edges || []).map((edge, index) => ({
+  const edges: Edge[] = geometry.edges.map((route, index) => ({
     id: String(index),
-    source: edge.From,
-    target: edge.To,
-    label: edge.Label,
-    type: 'smoothstep',
+    source: route.from,
+    target: route.to,
+    type: 'routed',
+    data: { route },
     markerEnd: {
       type: MarkerType.ArrowClosed,
-      width: 22,
-      height: 22,
-      color: 'var(--g-color-line-generic-accent)',
+      width: 18,
+      height: 18,
+      color: 'var(--g-color-text-secondary)',
     },
-    style: { stroke: 'var(--g-color-line-generic-accent)', strokeWidth: 1.5 },
   }));
   const select = (step: string, visit = '') => {
     setMemoryOpen(false);
@@ -205,28 +253,44 @@ function GraphView({
     onSelectionChange?.(step, visit);
   };
   return (
-    <section className="workflow-graph" aria-label="Граф workflow">
+    <section
+      className={`workflow-graph ${expanded ? 'workflow-graph-expanded' : ''}`}
+      aria-label="Граф workflow"
+    >
       <div className="graph-heading">
         <div>
           <h1>{graph.Name}</h1>
           <small>Run {graph.ID}</small>
         </div>
-        <Status state={graph.State} />
+        <div className="actions">
+          <Button
+            view="flat"
+            onClick={() => setExpanded(!expanded)}
+            aria-pressed={expanded}
+          >
+            <Icon data={ArrowsExpand} />
+            {expanded ? 'Свернуть' : 'Развернуть граф'}
+          </Button>
+          <Status state={graph.State} />
+        </div>
       </div>
       <ErrorNotice error={error} />
       <div className="graph-workspace">
         <div className="graph-area">
           <ReactFlow
-            nodes={nodes}
+            nodes={[...groups, ...nodes]}
             edges={edges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             nodesDraggable={false}
             nodesConnectable={false}
             minZoom={0.1}
             maxZoom={2}
             fitView
             fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
-            onNodeClick={(_, node) => select(node.id)}
+            onNodeClick={(_, node) => {
+              if (node.type === 'cube') select(node.id);
+            }}
             onNodesChange={(changes) => {
               const chosen = changes.find(
                 (change) => change.type === 'select' && change.selected,
@@ -254,16 +318,24 @@ function GraphView({
         <aside className="cube-details" aria-label="Информация о кубике">
           {!preview && <ImageExport runID={graph.ID} />}
           <h2>{selected?.ID || 'Нет кубиков'}</h2>
-          <Status state={execution?.State || 'pending'} />
-          {executions.length > 1 && (
+          <Status state={execution?.State || 'not_started'} />
+          {execution && (
+            <p className="muted">Посещение #{execution.Visit || 1}</p>
+          )}
+          {executions.length > 0 && (
             <Choice
               aria-label="Посещение кубика"
-              value={execution?.Key || ''}
-              onUpdate={(value) => select(selected!.ID, value)}
-              options={executions.map((entry) => ({
-                value: entry.Key,
-                content: `Посещение ${entry.Visit || 1} · ${statusNames[entry.State] || entry.State}`,
-              }))}
+              value={current.visit || 'auto'}
+              onUpdate={(value) =>
+                select(selected!.ID, value === 'auto' ? '' : value)
+              }
+              options={[
+                { value: 'auto', content: 'Актуальное посещение' },
+                ...executions.map((entry) => ({
+                  value: entry.Key,
+                  content: `Посещение ${entry.Visit || 1} · ${statusNames[entry.State] || entry.State}${entry.Trigger ? ` · ${entry.Trigger}` : ''}`,
+                })),
+              ]}
             />
           )}
           <h3>Результат работы</h3>

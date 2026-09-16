@@ -2,6 +2,8 @@ import type { Graph, Run } from '../types';
 
 // Макет не обращается к реальному runstore и не выдаёт пример за реальную историю.
 export function previewGraph(run: Run): Graph {
+  // Полная схема fixture независима от проекции дерева по статусам.
+  if (run.PreviewGraph) return run.PreviewGraph;
   return {
     ID: run.ID,
     Name: run.Name,

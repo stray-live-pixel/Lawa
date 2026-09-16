@@ -108,6 +108,8 @@ type Step struct {
 // Это не подтверждение текущего статуса чатов: перед исполнением нужна сверка
 // с Codex. Чтение снимка не резервирует запуск и не заменяет блокировку run.
 type Snapshot struct {
+	// WorkflowJSON — исходные байты сохранённого снимка, без повторной сериализации.
+	WorkflowJSON        []byte
 	Workflow            workflow.Workflow
 	Task                string
 	Meta                Metadata
@@ -172,7 +174,7 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 			return Snapshot{}, err
 		}
 	}
-	s := Snapshot{Workflow: w, Task: formattedTask(in.Task, in.Comment)}
+	s := Snapshot{Workflow: w, WorkflowJSON: append([]byte(nil), in.WorkflowJSON...), Task: formattedTask(in.Task, in.Comment)}
 	s.Meta = Metadata{Version: 3, RunID: newID(), ParentRunID: in.ParentRunID, ChildRequestID: in.ChildRequestID, CWD: cwd}
 	if agentGraph {
 		s.Meta.Version, s.Meta.RunState = 4, RunRunning
@@ -499,6 +501,7 @@ func loadSnapshot(dir *os.Root, runID string, rejectUnknownMembers bool) (Snapsh
 	if err != nil {
 		return Snapshot{}, err
 	}
+	s.WorkflowJSON = append([]byte(nil), data...)
 	if s.Workflow, err = workflow.Decode(bytes.NewReader(data)); err != nil {
 		return Snapshot{}, err
 	}

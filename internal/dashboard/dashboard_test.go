@@ -557,3 +557,41 @@ type testAddress string
 
 func (a testAddress) Network() string { return "test" }
 func (a testAddress) String() string  { return string(a) }
+
+// Полная схема preview не должна терять ожидающие кубики при фильтре working.
+// Эти данные автономны: даже несуществующий root не мешает открыть пример.
+func TestMigrationPreview(t *testing.T) {
+	h := Handler(filepath.Join(t.TempDir(), "missing"))
+	all := readDashboard(t, h, "/api/preview?period=24h&view=all")
+	count := 0
+	for _, root := range all.Roots {
+		if root.PreviewGraph == nil {
+			continue
+		}
+		count++
+		g := root.PreviewGraph
+		if len(g.Nodes) != 15 || len(g.Edges) != 30 {
+			t.Fatalf("неполная схема: %d/%d", len(g.Nodes), len(g.Edges))
+		}
+		if root.ID == "preview-migration-cycle" {
+			visits := 0
+			for _, entry := range g.Executions {
+				if entry.StepID == "page-plan" {
+					visits++
+				}
+			}
+			if visits != 2 {
+				t.Fatal("потеряна история цикла")
+			}
+		}
+	}
+	if count != 6 {
+		t.Fatalf("сценариев: %d", count)
+	}
+	working := readDashboard(t, h, "/api/preview?period=24h&view=all&states=working")
+	for _, root := range working.Roots {
+		if root.PreviewGraph != nil && len(root.PreviewGraph.Nodes) != 15 {
+			t.Fatal("фильтр обрезал граф")
+		}
+	}
+}

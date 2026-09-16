@@ -1,3 +1,4 @@
+import { ResizableRunList } from './components/ResizableRunList';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import {
   Link as RouterLink,
@@ -41,6 +42,7 @@ import { Button, Dialog, ErrorNotice } from './components/ui';
 import { findRun, RunTree, type Selection } from './components/Tree';
 import { ContinuationPanel } from './components/Continuation';
 import { RunInfo } from './components/RunInfo';
+import { WorkflowSource } from './components/WorkflowSource';
 import { previewGraph } from './components/previewGraph';
 
 // Граф загружается отдельным модулем: фильтры и список доступны до загрузки layout.
@@ -188,7 +190,7 @@ function DashboardPage() {
                   ))}
                 </nav>
               )}
-              <div className="inspector-body">
+              <ResizableRunList>
                 <aside className="tree" aria-label="Дерево workflow и кубиков">
                   <Search
                     key={data.Filter.Query}
@@ -251,10 +253,24 @@ function DashboardPage() {
                         >
                           <Tab value="graph">Граф</Tab>
                           <Tab value="info">Информация</Tab>
+                          <Tab value="source">JSON и Markdown</Tab>
                           <Tab value="continue">
                             Продолжить в новом чате Codex
                           </Tab>
                         </TabList>
+                        <TabPanel
+                          className="info-tab"
+                          value="source"
+                          hidden={tab !== 'source'}
+                        >
+                          {tab === 'source' && (
+                            <WorkflowSource
+                              key={run.ID}
+                              runID={run.ID}
+                              preview={preview ? previewGraph(run) : undefined}
+                            />
+                          )}
+                        </TabPanel>
                         <TabPanel
                           className="graph-tab"
                           value="graph"
@@ -353,7 +369,7 @@ function DashboardPage() {
                     <p className="empty">{data.EmptyMessage}</p>
                   )}
                 </section>
-              </div>
+              </ResizableRunList>
             </div>
           </>
         )}
