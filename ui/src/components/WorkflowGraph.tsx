@@ -17,13 +17,7 @@ import {
   type Edge,
 } from '@xyflow/react';
 import { Card, ClipboardButton, Icon, useThemeValue } from '@gravity-ui/uikit';
-import {
-  Plus,
-  Minus,
-  ArrowsExpand,
-  ChevronsExpandUpRight,
-  ChevronsCollapseUpRight,
-} from '@gravity-ui/icons';
+import { Plus, Minus, ArrowsExpand } from '@gravity-ui/icons';
 import { graphLayout, type RoutedEdge } from './graphLayout';
 import '@xyflow/react/dist/style.css';
 import type { Graph, GraphEdge, GraphNode } from '../types';
@@ -177,7 +171,6 @@ function GraphView({
   onSelectionChange?: (step: string, visit?: string) => void;
 }) {
   const theme = useThemeValue();
-  const [expanded, setExpanded] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [choice, setChoice] = useState({
@@ -260,19 +253,14 @@ function GraphView({
     onSelectionChange?.(step, visit);
   };
   return (
-    <section
-      className={`workflow-graph ${expanded ? 'workflow-graph-expanded' : ''}`}
-      aria-label="Граф workflow"
-    >
+    <section className="workflow-graph" aria-label="Граф workflow">
       <div className="graph-heading">
+        <Status state={graph.State} />
         <div className="graph-identity">
-          <div className="graph-title-row">
-            <Status state={graph.State} />
-            <h1>{graph.Name}</h1>
-          </div>
           <div className="graph-run-id">
-            <small>Run {graph.ID}</small>
+            <small>runId={graph.ID}</small>
             <ClipboardButton
+              className="run-id-copy"
               text={graph.ID}
               size="xs"
               view="flat"
@@ -281,18 +269,8 @@ function GraphView({
               tooltipSuccessText="ID скопирован"
             />
           </div>
+          <h1>{graph.Name}</h1>
         </div>
-        <Button
-          view="flat"
-          onClick={() => setExpanded(!expanded)}
-          aria-pressed={expanded}
-          aria-label={expanded ? 'Свернуть граф' : 'Развернуть граф'}
-          title={expanded ? 'Свернуть граф' : 'Развернуть граф'}
-        >
-          <Icon
-            data={expanded ? ChevronsCollapseUpRight : ChevronsExpandUpRight}
-          />
-        </Button>
       </div>
       <ErrorNotice error={error} />
       <ResizableRunList side="right">

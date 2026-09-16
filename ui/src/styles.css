@@ -308,8 +308,8 @@ pre {
   flex-direction: column;
 }
 .tabs {
-  --g-tabs-item-height: var(--panel-toolbar-height);
-  height: var(--panel-toolbar-height);
+  --g-tabs-item-height: 32px;
+  height: 32px;
   align-items: stretch;
   padding: 0 var(--panel-inset);
   flex: none;
@@ -366,26 +366,19 @@ pre {
 .graph-heading {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+  gap: 8px;
   padding: 6px var(--panel-inset);
   border-bottom: 1px solid var(--line);
   flex: none;
+}
+.graph-heading > .g-label {
+  flex-shrink: 0;
 }
 .graph-identity {
   min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-}
-.graph-title-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.graph-title-row > .g-label {
-  flex-shrink: 0;
+  gap: 0;
 }
 .graph-heading h1 {
   font-size: 14px;
@@ -394,12 +387,27 @@ pre {
 .graph-run-id {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
 }
 .graph-run-id small {
   font-size: 5px;
   line-height: 7px;
   overflow-wrap: anywhere;
+}
+/* Масштабируем всю библиотечную кнопку вдвое, включая иконку и её место. */
+.run-id-copy {
+  zoom: 0.5;
+}
+.run-tabs-toolbar {
+  display: flex;
+  align-items: center;
+  flex: none;
+  padding-left: var(--panel-inset);
+  border-bottom: 1px solid var(--line);
+}
+.run-tabs-toolbar > .tabs {
+  flex: 1;
+  min-width: 0;
 }
 .graph-workspace {
   position: relative;
@@ -688,14 +696,13 @@ pre {
 
 /* Разворачивание меняет обычную сетку страницы, без overlay и перемещения
    графа: выбор кубика, масштаб и ширина правой панели сохраняются.
-   Скрытая вкладка графа не должна прятать меню на остальных вкладках. */
-.inspector-body:has(.graph-tab:not([hidden]) .workflow-graph-expanded) {
+   Кнопка остаётся доступной над любой вкладкой для возврата меню. */
+.inspector-body:has(.sidebar-toggle[aria-pressed='true']) {
   grid-template-columns: minmax(0, 1fr);
   grid-template-rows: minmax(0, 1fr);
 }
-.inspector-body:has(.graph-tab:not([hidden]) .workflow-graph-expanded) > .tree,
-.inspector-body:has(.graph-tab:not([hidden]) .workflow-graph-expanded)
-  > .run-list-resizer {
+.inspector-body:has(.sidebar-toggle[aria-pressed='true']) > .tree,
+.inspector-body:has(.sidebar-toggle[aria-pressed='true']) > .run-list-resizer {
   display: none;
 }
 .workflow-source {
