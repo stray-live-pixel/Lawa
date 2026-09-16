@@ -15,8 +15,8 @@ import (
 //go:embed all:web
 var web embed.FS
 
-// serveUI возвращает одинаковую оболочку для главной, preview и прямой ссылки
-// графа. Путь выбирает React Router; неизвестные HTTP/API пути не становятся SPA.
+// serveUI возвращает оболочку dashboard, preview, офиса и графа. Путь выбирает
+// React Router; неизвестные HTTP/API пути не становятся SPA.
 func serveUI(w http.ResponseWriter, r *http.Request) {
 	data, err := web.ReadFile("web/index.html")
 	if err != nil {

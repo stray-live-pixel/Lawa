@@ -12,7 +12,7 @@ import (
 // все ресурсы index доступны, неизвестные API/файлы не маскируются SPA HTML.
 func TestStaticUI(t *testing.T) {
 	handler := Handler(t.TempDir())
-	for _, path := range []string{"/", "/preview", "/graph/test"} {
+	for _, path := range []string{"/", "/preview", "/office", "/graph/test"} {
 		recorder := httptest.NewRecorder()
 		handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 		body := recorder.Body.String()
