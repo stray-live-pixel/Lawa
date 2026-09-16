@@ -140,7 +140,7 @@ pre {
 .inspector-body {
   display: grid;
   position: relative;
-  --run-list-size: clamp(220px, var(--run-list-width, 285px), 45%);
+  --run-list-size: clamp(15%, var(--run-list-width, 25%), 45%);
   grid-template-columns: var(--run-list-size) minmax(0, 1fr);
   flex: 1;
   min-height: 0;

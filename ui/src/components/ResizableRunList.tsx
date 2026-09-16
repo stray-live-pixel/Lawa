@@ -1,21 +1,19 @@
 import { useState, type CSSProperties, type ReactNode } from 'react';
 
-const storageKey = 'lawa-run-list-width';
-// Пожелание пользователя хранится отдельно от CSS-ограничения: при уменьшении
-// окна граф сохраняет место, а при расширении возвращается выбранная ширина.
+const storageKey = 'lawa-run-list-width-percent';
+// Ширина хранится в процентах: при изменении окна пропорция сохраняется.
+// Старый ключ с пикселями не читаем, чтобы он не подменял новый default 25%.
 export function ResizableRunList({ children }: { children: ReactNode }) {
   const [width, setWidth] = useState(() => {
     try {
       const saved = Number(localStorage.getItem(storageKey));
-      return Number.isFinite(saved) && saved >= 220 && saved <= 800
-        ? saved
-        : 285;
+      return Number.isFinite(saved) && saved >= 15 && saved <= 45 ? saved : 25;
     } catch {
-      return 285;
+      return 25;
     }
   });
   const update = (value: number) => {
-    const next = Math.round(Math.max(220, Math.min(800, value)));
+    const next = Math.round(Math.max(15, Math.min(45, value)) * 10) / 10;
     setWidth(next);
     try {
       localStorage.setItem(storageKey, String(next));
@@ -26,7 +24,7 @@ export function ResizableRunList({ children }: { children: ReactNode }) {
   return (
     <div
       className="inspector-body"
-      style={{ '--run-list-width': `${width}px` } as CSSProperties}
+      style={{ '--run-list-width': `${width}%` } as CSSProperties}
     >
       {children}
       <div
@@ -34,22 +32,23 @@ export function ResizableRunList({ children }: { children: ReactNode }) {
         role="separator"
         aria-label="Ширина списка запусков"
         aria-orientation="vertical"
-        aria-valuemin={220}
-        aria-valuemax={800}
+        aria-valuemin={15}
+        aria-valuemax={45}
         aria-valuenow={width}
+        aria-valuetext={`${width}%`}
         tabIndex={0}
         title="Потяните для изменения ширины. Двойной клик — сброс."
-        onDoubleClick={() => update(285)}
+        onDoubleClick={() => update(25)}
         onKeyDown={(event) => {
           if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
             event.preventDefault();
-            update(width + (event.key === 'ArrowRight' ? 20 : -20));
+            update(width + (event.key === 'ArrowRight' ? 1 : -1));
           } else if (event.key === 'Home') {
             event.preventDefault();
-            update(220);
+            update(15);
           } else if (event.key === 'End') {
             event.preventDefault();
-            update(800);
+            update(45);
           }
         }}
         onPointerDown={(event) => {
@@ -62,7 +61,8 @@ export function ResizableRunList({ children }: { children: ReactNode }) {
           if (!event.currentTarget.hasPointerCapture(event.pointerId)) return;
           const box =
             event.currentTarget.parentElement!.getBoundingClientRect();
-          update(Math.min(event.clientX - box.left, box.width * 0.45));
+          if (box.width > 0)
+            update(((event.clientX - box.left) / box.width) * 100);
         }}
         onPointerUp={(event) => {
           if (event.currentTarget.hasPointerCapture(event.pointerId))
