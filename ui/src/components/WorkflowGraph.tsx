@@ -327,6 +327,21 @@ function GraphView({
                   infoIcon
                 />
               )}
+              <Tooltip
+                content={execution?.TraceURL ? 'Сообщения и действия' : 'Логов нет'}
+              >
+                <span className="cube-messages-trigger">
+                  <Button
+                    view="flat"
+                    size="s"
+                    aria-label="Сообщения и действия"
+                    disabled={!execution?.TraceURL}
+                    onClick={() => setMessagesOpen(true)}
+                  >
+                    <Icon data={FileText} size={16} />
+                  </Button>
+                </span>
+              </Tooltip>
               <h2>
                 {selected ? (
                   <CopyIdentity
@@ -360,21 +375,6 @@ function GraphView({
                     ))}
                 </nav>
               )}
-              <Tooltip
-                content={execution?.TraceURL ? 'Сообщения и действия' : 'Логов нет'}
-              >
-                <span className="cube-messages-trigger">
-                  <Button
-                    view="flat"
-                    size="s"
-                    aria-label="Сообщения и действия"
-                    disabled={!execution?.TraceURL}
-                    onClick={() => setMessagesOpen(true)}
-                  >
-                    <Icon data={FileText} size={16} />
-                  </Button>
-                </span>
-              </Tooltip>
             </div>
             {execution?.Result && (
               <MarkdownDocument
