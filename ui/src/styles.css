@@ -91,6 +91,7 @@ pre {
   font-size: 20px;
   font-weight: bold;
 }
+.brand,
 .brand .g-button__text {
   display: flex;
   align-items: center;
@@ -101,18 +102,7 @@ pre {
   height: 28px;
   border-radius: 8px;
 }
-.header-right {
-  margin-left: auto;
-  min-width: 0;
-}
-.theme-picker {
-  flex: none;
-}
-.theme-option {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-}
+
 .dashboard {
   display: flex;
   flex: 1;
@@ -128,14 +118,7 @@ pre {
   padding: 6px 12px;
   border-bottom: 1px solid var(--line);
 }
-.filters nav {
-  display: flex;
-  gap: 2px;
-}
-.filter-count {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
+
 .empty-search {
   padding: 6px;
 }
@@ -170,23 +153,23 @@ pre {
   border-bottom: 1px solid var(--line);
 }
 .tree {
-  --tree-toggle-size: 24px;
+  --tree-toggle-size: 28px;
   --tree-row-gap: 2px;
   min-height: 0;
   min-width: 0;
   display: flex;
   flex-direction: column;
   border-right: 1px solid var(--line);
-  background: var(--surface);
+  background: var(--bg);
 }
-/* Поиск и вкладки образуют одну горизонтальную полосу на desktop. */
+/* Поиск остаётся над прокручиваемым деревом в боковой колонке. */
 .search {
-  height: var(--panel-toolbar-height);
+  border-bottom: 1px solid var(--line);
+  height: 41px;
   flex: none;
   display: flex;
   align-items: center;
-  padding: 0 8px;
-  border-bottom: 1px solid var(--line);
+  padding: 0 8px 5px;
 }
 .tree-scroll {
   padding: 6px;
@@ -198,13 +181,16 @@ pre {
   margin: 0;
   padding: 0;
 }
-/* Дочерний кубик не имеет стрелки раскрытия. Его суммарный отступ равен
-   ширине стрелки родителя и зазору: 7px margin + 1px линия + 18px padding.
-   Формула работает на каждом уровне, не сдвигая кубик левее своей папки. */
+/* Центр линии совпадает с центром раскрытого шеврона: поле строки 2px
+   плюс половина кнопки. Компенсация padding сохраняет положение потомков. */
 .tree .tree-children {
-  padding-left: calc(var(--tree-toggle-size) + var(--tree-row-gap) - 8px);
+  --branch-line-offset: calc(2px + var(--tree-toggle-size) / 2 - 0.5px);
+  margin-left: var(--branch-line-offset);
   border-left: 1px solid var(--line);
-  margin-left: 7px;
+  padding-left: calc(
+    2px + var(--tree-toggle-size) + var(--tree-row-gap) -
+      var(--branch-line-offset) - 1px
+  );
 }
 .tree-row {
   display: flex;
@@ -212,6 +198,7 @@ pre {
   gap: var(--tree-row-gap);
   border-radius: 5px;
   min-height: 32px;
+  padding: 2px;
 }
 .tree-row.selected,
 .tree-step.selected {
@@ -225,6 +212,16 @@ pre {
   --g-button-padding: 4px;
   min-width: 0;
   width: 100%;
+}
+.tree-select {
+  height: auto;
+  min-height: 28px;
+}
+.tree-select .g-button__text {
+  display: flex;
+  align-items: center;
+  line-height: 20px;
+  padding-block: 4px;
 }
 .tree-select .g-button__text,
 .tree-step .g-button__text {
@@ -263,6 +260,7 @@ pre {
 }
 .tree-row > .icon-button {
   width: var(--tree-toggle-size);
+  height: 28px;
 }
 .rotate {
   transform: rotate(90deg);
@@ -274,8 +272,25 @@ pre {
 .pin:focus-visible {
   opacity: 1;
 }
+/* Тикет важнее имени: занимает естественную ширину до 80% строки.
+   При нехватке места сокращается и тикет, но строка никогда не переносится. */
+.tree-entry:has(.ticket) {
+  grid-template-columns: 16px minmax(0, 1fr) fit-content(80%);
+}
+.tree-meta.has-ticket {
+  max-width: 100%;
+  min-width: 0;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+}
 .ticket {
-  max-width: 66px;
+  max-width: 100%;
+  min-width: 0;
+  height: 20px;
+}
+.ticket .g-label__content {
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .inspector-details {
   min-height: 0;
@@ -382,15 +397,7 @@ pre {
   min-height: 0;
   background: var(--surface);
 }
-.legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 14px;
-  border-top: 1px solid var(--line);
-  padding: 6px var(--panel-inset);
-  font-size: 12px;
-  flex: none;
-}
+
 .cube-details {
   padding: 16px var(--panel-inset);
   overflow: auto;
@@ -600,12 +607,9 @@ pre {
     gap: 6px;
     padding: 6px 10px;
   }
-  .header-right .g-button {
-    max-width: 45vw;
-  }
   .inspector-body {
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 150px minmax(0, 1fr);
+    grid-template-rows: minmax(260px, 40%) minmax(0, 1fr);
   }
   .tree {
     border-right: 0;
@@ -704,5 +708,109 @@ pre {
 @media (max-width: 760px) {
   .run-list-resizer {
     display: none;
+  }
+}
+
+/* Управление находится в боковой колонке; граф использует всю высоту окна.
+   Дерево прокручивается отдельно, пагинация и настройки остаются доступны. */
+.tree .app-header {
+  border-bottom: 0;
+  flex-wrap: nowrap;
+}
+.tree .filters {
+  gap: 4px;
+  flex-wrap: nowrap;
+  flex: none;
+  padding: 1px 8px 2px;
+  border-bottom: 0;
+}
+.tree .filters > .g-select {
+  flex: 1;
+  width: 0;
+  min-width: 0;
+}
+.sidebar-footer {
+  flex: none;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line);
+}
+.sidebar-footer .pagination {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px;
+  margin: 0;
+}
+/* Настройки закреплены справа; точка означает наличие расписания, не ошибку. */
+.header-tools {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+.schedule-button {
+  --g-button-padding: 0;
+  width: 28px;
+  height: 28px;
+  flex: none;
+}
+.schedule-button .g-button__text {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.schedule-icon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 3px;
+}
+.schedule-dot {
+  position: absolute;
+  right: 0;
+  top: 0;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--g-color-base-danger-heavy);
+  pointer-events: none;
+}
+
+.tree-scroll {
+  min-height: 48px;
+}
+
+.search-icon {
+  display: flex;
+  align-items: center;
+  padding-left: 4px;
+  padding-right: 2px;
+}
+.tree .tree-branch-open {
+  margin-block: 6px;
+}
+.tree .tree-branch-open > .tree-children {
+  margin-block: 2px 6px;
+}
+.tree-step {
+  height: 26px;
+}
+
+/* Реагируем на ширину самой панели, в том числе при перетаскивании границы. */
+.tree {
+  container-type: inline-size;
+  container-name: sidebar;
+}
+.test-label-short {
+  display: none;
+}
+@container sidebar (max-width: 300px) {
+  .brand-name,
+  .test-label-full {
+    display: none;
+  }
+  .test-label-short {
+    display: inline;
+    font-size: 10px;
   }
 }

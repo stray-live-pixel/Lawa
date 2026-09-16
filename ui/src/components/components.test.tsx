@@ -281,7 +281,16 @@ describe('Главная страница', () => {
     await waitFor(() =>
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByRole('button', { name: /Следующий run/ }));
+    // Управление остаётся внутри боковой панели после удаления общего header.
+    const sidebar = screen.getByRole('complementary', {
+      name: 'Дерево workflow и кубиков',
+    });
+    for (const name of ['Тема интерфейса', 'Запланированные запуски']) {
+      expect(sidebar).toContainElement(screen.getByRole('button', { name }));
+    }
+    fireEvent.click(
+      screen.getByRole('button', { name: 'Запланированные запуски' }),
+    );
     expect(
       await screen.findByRole('dialog', { name: 'Расписание запусков' }),
     ).toBeInTheDocument();
@@ -488,7 +497,7 @@ it('компактный статус задаёт полную выборку, 
   expect(
     screen.queryByRole('button', { name: 'Сбросить фильтры' }),
   ).not.toBeInTheDocument();
-  expect(screen.getByRole('status')).toHaveTextContent('Найдено: 2');
+  expect(screen.queryByText(/Найдено:/)).not.toBeInTheDocument();
   await choose('Статус workflow', 'С ошибками');
   expect(onChange).toHaveBeenLastCalledWith({ view: 'all', states: 'failed' });
   await choose('Статус workflow', 'Завершённые');

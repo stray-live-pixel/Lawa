@@ -1,5 +1,5 @@
 import { Button, Icon, Select, Tooltip } from '@gravity-ui/uikit';
-import { ArrowRotateLeft } from '@gravity-ui/icons';
+import { FunnelXmark } from '@gravity-ui/icons';
 import type { Dashboard } from '../types';
 
 const statuses = [
@@ -70,7 +70,7 @@ export function DashboardFilters({
     <>
       <Select
         aria-label="Статус workflow"
-        label="Статус:"
+
         value={[value]}
         options={options}
         onUpdate={([next]) => {
@@ -79,7 +79,7 @@ export function DashboardFilters({
       />
       <Select
         aria-label="Период"
-        label="Период:"
+
         value={[f.Period]}
         options={f.Periods.map((p) => ({ value: p.Value, content: p.Label }))}
         renderSelectedOption={(option) => (
@@ -91,18 +91,15 @@ export function DashboardFilters({
       />
       {filtersChanged(data) && (
         <Tooltip content="Сбросить фильтры, поиск и выбранную папку">
-          <Button view="flat" aria-label="Сбросить фильтры" onClick={onReset}>
-            <Icon data={ArrowRotateLeft} />
+          <Button
+            view="outlined"
+            aria-label="Сбросить фильтры"
+            onClick={onReset}
+          >
+            <Icon data={FunnelXmark} />
           </Button>
         </Tooltip>
       )}
-      <span
-        className="filter-count muted"
-        role="status"
-        title="Корневых workflow в текущем временном окне"
-      >
-        Найдено: {f.Matched ?? data.Roots?.length ?? 0}
-      </span>
     </>
   );
 }

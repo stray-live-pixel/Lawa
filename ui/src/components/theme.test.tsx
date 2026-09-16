@@ -45,16 +45,16 @@ it('следует ОС по умолчанию, сохраняет явный �
     </AppTheme>,
   );
   expect(
-    screen.getByRole('combobox', { name: 'Тема интерфейса' }),
-  ).toHaveTextContent('Системная');
+    screen.getByRole('button', { name: 'Тема интерфейса' }),
+  ).toHaveAttribute('title', 'Тема: Системная');
   expect(document.body).toHaveClass('g-root_theme_light');
   act(() => {
     dark = true;
     listeners.forEach((listener) => listener({ matches: true }));
   });
   expect(document.body).toHaveClass('g-root_theme_dark');
-  fireEvent.click(screen.getByRole('combobox', { name: 'Тема интерфейса' }));
-  fireEvent.click(await screen.findByRole('option', { name: 'Светлая' }));
+  fireEvent.click(screen.getByRole('button', { name: 'Тема интерфейса' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Светлая' }));
   expect(localStorage.getItem('lawa-theme')).toBe('light');
   expect(document.body).toHaveClass('g-root_theme_light');
   act(() => {
@@ -68,10 +68,10 @@ it('следует ОС по умолчанию, сохраняет явный �
     </AppTheme>,
   );
   expect(
-    screen.getByRole('combobox', { name: 'Тема интерфейса' }),
-  ).toHaveTextContent('Светлая');
-  fireEvent.click(screen.getByRole('combobox', { name: 'Тема интерфейса' }));
-  fireEvent.click(await screen.findByRole('option', { name: 'Системная' }));
+    screen.getByRole('button', { name: 'Тема интерфейса' }),
+  ).toHaveAttribute('title', 'Тема: Светлая');
+  fireEvent.click(screen.getByRole('button', { name: 'Тема интерфейса' }));
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Системная' }));
   expect(document.body).toHaveClass('g-root_theme_dark');
 });
 it('недоступное или повреждённое хранилище не мешает системной теме', () => {
