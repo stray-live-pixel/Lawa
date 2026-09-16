@@ -896,3 +896,22 @@ pre {
 .status-icon.tone-not_started {
   color: var(--muted);
 }
+
+.visit-facts dt {
+  color: var(--muted);
+  font-size: 12px;
+  margin-top: 8px;
+}
+.visit-facts dd {
+  margin: 2px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.node-routes {
+  margin-top: 12px;
+}
+.node-routes ul {
+  margin: 8px 0;
+  padding-left: 20px;
+  overflow-wrap: anywhere;
+}

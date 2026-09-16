@@ -18,7 +18,7 @@ import {
   type NodeProps,
   type Edge,
 } from '@xyflow/react';
-import { Card, Icon, useThemeValue } from '@gravity-ui/uikit';
+import { Card, Disclosure, Icon, useThemeValue } from '@gravity-ui/uikit';
 import { Plus, Minus, ArrowsExpand } from '@gravity-ui/icons';
 import { graphLayout, type RoutedEdge } from './graphLayout';
 import '@xyflow/react/dist/style.css';
@@ -315,7 +315,10 @@ function GraphView({
           <h2>{selected?.ID || 'Нет кубиков'}</h2>
           <StatusIcon state={execution?.State || 'not_started'} />
           {execution && (
-            <p className="muted">Посещение #{execution.Visit || 1}</p>
+            <p className="muted">
+              Посещение #{execution.Visit || 1}
+              {execution.Attempt ? ` · Попытка ${execution.Attempt}` : ''}
+            </p>
           )}
           {executions.length > 0 && (
             <Choice
@@ -344,17 +347,46 @@ function GraphView({
           <p className="note">
             {execution?.Note || (!execution ? 'Кубик ещё не запускался.' : '')}
           </p>
-          <div className="muted facts-text">
-            {[
-              execution?.Decision,
-              execution?.Trigger,
-              execution?.Attempt ? `Попытка: ${execution.Attempt}` : '',
-              ...(selected?.Routes || []),
-              graph.StopReason,
-            ]
-              .filter(Boolean)
-              .join('\n')}
-          </div>
+          {/* Факты выбранного посещения не смешиваем со статическими маршрутами:
+              список Routes описывает возможности, а не выполненные переходы. */}
+          {(execution?.Decision || execution?.Trigger || graph.StopReason) && (
+            <dl className="visit-facts">
+              {execution?.Decision && (
+                <>
+                  <dt>Решение посещения</dt>
+                  <dd>{execution.Decision}</dd>
+                </>
+              )}
+              {execution?.Trigger && (
+                <>
+                  <dt>Причина перехода</dt>
+                  <dd>{execution.Trigger}</dd>
+                </>
+              )}
+              {graph.StopReason && (
+                <>
+                  <dt>Причина остановки workflow</dt>
+                  <dd>{graph.StopReason}</dd>
+                </>
+              )}
+            </dl>
+          )}
+          {!!selected?.Routes?.length && (
+            <Disclosure
+              key={selected.ID}
+              className="node-routes"
+              summary={`Возможные переходы · ${selected.Routes.length}`}
+            >
+              <p className="muted">
+                Маршруты из описания workflow, не история выполнения.
+              </p>
+              <ul>
+                {selected.Routes.map((route, index) => (
+                  <li key={index}>{route}</li>
+                ))}
+              </ul>
+            </Disclosure>
+          )}
           <div className="actions">
             {execution?.MemoryURL && (
               <Button onClick={() => setMemoryOpen(true)}>Память кубика</Button>
