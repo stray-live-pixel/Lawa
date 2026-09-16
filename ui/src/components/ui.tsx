@@ -91,6 +91,7 @@ export function Dialog({
   );
 }
 export const statusNames: Record<string, string> = {
+  not_started: 'Ещё не запускался',
   pending: 'Ожидает запуска',
   starting: 'Запускается',
   running: 'В работе',

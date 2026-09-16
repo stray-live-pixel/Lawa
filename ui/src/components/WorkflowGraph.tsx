@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { displayVisit } from './displayVisit';
 import {
   BaseEdge,
   EdgeLabelRenderer,
@@ -74,7 +75,7 @@ function WorkflowGroup({ data }: NodeProps) {
   );
 }
 const edgeTypes = { routed: RoutedConnection };
-type CubeNode = Node<{ label: string; state: string }, 'cube'>;
+type CubeNode = Node<{ label: string; state: string; visit?: number }, 'cube'>;
 function Cube({ data, selected }: NodeProps<CubeNode>) {
   return (
     <Card
@@ -84,7 +85,10 @@ function Cube({ data, selected }: NodeProps<CubeNode>) {
     >
       <Handle type="target" position={Position.Top} />
       <strong>{data.label}</strong>
-      <small>{statusNames[data.state] || data.state}</small>
+      <small>
+        {statusNames[data.state] || data.state}
+        {data.visit ? ` · #${data.visit}` : ''}
+      </small>
       <Handle type="source" position={Position.Bottom} />
     </Card>
   );
@@ -185,9 +189,7 @@ function GraphView({
   const executions = (graph.Executions || []).filter(
     (entry) => entry.StepID === selected?.ID,
   );
-  const execution =
-    executions.find((entry) => entry.Key === current.visit) ||
-    executions.at(-1);
+  const execution = displayVisit(executions, current.visit);
   const topology = JSON.stringify([
     (graph.Nodes || []).map((node) => node.ID),
     graph.Edges || [],
@@ -199,19 +201,27 @@ function GraphView({
       edges,
     );
   }, [topology]);
-  const nodes: CubeNode[] = (graph.Nodes || []).map((node) => ({
-    id: node.ID,
-    type: 'cube',
-    position: geometry.positions.get(node.ID)!,
-    selected: selected?.ID === node.ID,
-    data: {
-      label: node.ID,
-      state:
-        (graph.Executions || [])
-          .filter((item) => item.StepID === node.ID)
-          .at(-1)?.State || 'pending',
-    },
-  }));
+  const nodes: CubeNode[] = (graph.Nodes || []).map((node) => {
+    // Для выбранного кубика цвет, подпись и детали используют один visit.
+    // Остальные узлы автоматически показывают актуальную реальную работу.
+    const shown =
+      node.ID === selected?.ID
+        ? execution
+        : displayVisit(
+            (graph.Executions || []).filter((item) => item.StepID === node.ID),
+          );
+    return {
+      id: node.ID,
+      type: 'cube',
+      position: geometry.positions.get(node.ID)!,
+      selected: selected?.ID === node.ID,
+      data: {
+        label: node.ID,
+        state: shown?.State || 'not_started',
+        visit: shown ? shown.Visit || 1 : undefined,
+      },
+    };
+  });
   const groups: Node[] = geometry.groups.map((group) => ({
     id: group.id,
     type: 'workflowGroup',
@@ -308,16 +318,24 @@ function GraphView({
         <aside className="cube-details" aria-label="Информация о кубике">
           {!preview && <ImageExport runID={graph.ID} />}
           <h2>{selected?.ID || 'Нет кубиков'}</h2>
-          <Status state={execution?.State || 'pending'} />
-          {executions.length > 1 && (
+          <Status state={execution?.State || 'not_started'} />
+          {execution && (
+            <p className="muted">Посещение #{execution.Visit || 1}</p>
+          )}
+          {executions.length > 0 && (
             <Choice
               aria-label="Посещение кубика"
-              value={execution?.Key || ''}
-              onUpdate={(value) => select(selected!.ID, value)}
-              options={executions.map((entry) => ({
-                value: entry.Key,
-                content: `Посещение ${entry.Visit || 1} · ${statusNames[entry.State] || entry.State}`,
-              }))}
+              value={current.visit || 'auto'}
+              onUpdate={(value) =>
+                select(selected!.ID, value === 'auto' ? '' : value)
+              }
+              options={[
+                { value: 'auto', content: 'Актуальное посещение' },
+                ...executions.map((entry) => ({
+                  value: entry.Key,
+                  content: `Посещение ${entry.Visit || 1} · ${statusNames[entry.State] || entry.State}${entry.Trigger ? ` · ${entry.Trigger}` : ''}`,
+                })),
+              ]}
             />
           )}
           <h3>Результат работы</h3>
