@@ -368,7 +368,8 @@ pre {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-  padding: 8px var(--panel-inset);
+  padding: 6px var(--panel-inset);
+  border-bottom: 1px solid var(--line);
   flex: none;
 }
 .graph-heading > div:first-child {
@@ -379,7 +380,14 @@ pre {
   min-width: 0;
 }
 .graph-heading h1 {
-  font-size: 16px;
+  font-size: 14px;
+  line-height: 20px;
+}
+/* В заголовке действия образуют одну компактную строку: внешние отступы
+   общих блоков .actions здесь создавали лишнее пространство над графом. */
+.graph-heading > .actions {
+  align-items: center;
+  margin: 0;
 }
 .graph-heading small {
   overflow-wrap: anywhere;
