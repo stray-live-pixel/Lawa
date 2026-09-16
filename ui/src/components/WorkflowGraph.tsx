@@ -360,7 +360,9 @@ function GraphView({
                     ))}
                 </nav>
               )}
-              <Tooltip content="Сообщения и действия">
+              <Tooltip
+                content={execution?.TraceURL ? 'Сообщения и действия' : 'Логов нет'}
+              >
                 <span className="cube-messages-trigger">
                   <Button
                     view="flat"
