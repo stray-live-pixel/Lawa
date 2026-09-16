@@ -1,4 +1,10 @@
-import { Button, CopyToClipboard } from '@gravity-ui/uikit';
+import { CircleInfo } from '@gravity-ui/icons';
+import {
+  Button,
+  ClipboardButton,
+  CopyToClipboard,
+  Icon,
+} from '@gravity-ui/uikit';
 import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 
 // Копируем полное значение, даже когда CSS обрезает видимую строку.
@@ -8,25 +14,40 @@ export function CopyIdentity({
   label,
   success,
   prefix = '',
+  infoIcon = false,
 }: {
   text: string;
   label: string;
   success: string;
   prefix?: string;
+  infoIcon?: boolean;
 }) {
+  const onCopy = (_: string, copied: boolean) => {
+    toaster.remove('copy-workflow-identity');
+    toaster.add({
+      name: 'copy-workflow-identity',
+      title: copied ? success : 'Не удалось скопировать',
+      theme: copied ? 'success' : 'danger',
+      autoHiding: 2500,
+    });
+  };
+  if (infoIcon) {
+    return (
+      <ClipboardButton
+        className="run-id-info"
+        view="flat"
+        size="s"
+        text={text}
+        icon={<Icon data={CircleInfo} size={18} />}
+        aria-label={label}
+        tooltipInitialText={text}
+        tooltipSuccessText={text}
+        onCopy={onCopy}
+      />
+    );
+  }
   return (
-    <CopyToClipboard
-      text={text}
-      onCopy={(_, copied) => {
-        toaster.remove('copy-workflow-identity');
-        toaster.add({
-          name: 'copy-workflow-identity',
-          title: copied ? success : 'Не удалось скопировать',
-          theme: copied ? 'success' : 'danger',
-          autoHiding: 2500,
-        });
-      }}
-    >
+    <CopyToClipboard text={text} onCopy={onCopy}>
       <Button
         view="flat"
         className="copy-identity"

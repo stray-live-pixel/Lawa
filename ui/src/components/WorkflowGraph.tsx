@@ -294,14 +294,13 @@ function GraphView({
         <aside className="cube-details" aria-label="Информация о кубике">
           <div className="graph-heading">
             <StatusIcon state={graph.State} />
+            <CopyIdentity
+              text={graph.ID}
+              label="Скопировать runId"
+              success="runId скопирован"
+              infoIcon
+            />
             <div className="graph-identity">
-              <div className="graph-run-id">
-                <CopyIdentity
-                  text={graph.ID}
-                  label="Скопировать runId"
-                  success="runId скопирован"
-                />
-              </div>
               <h1>
                 <CopyIdentity
                   text={graph.Name}
