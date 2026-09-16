@@ -719,7 +719,8 @@ pre {
   gap: 4px;
   flex-wrap: nowrap;
   flex: none;
-  padding: 0 8px 6px;
+  padding: 6px 8px 2px;
+  border-bottom: 0;
 }
 .tree .filters > .g-select {
   flex: 1;

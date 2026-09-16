@@ -163,11 +163,6 @@ function DashboardPage() {
                     </nav>
                   )}
 
-                  <Search
-                    key={data.Filter.Query}
-                    value={data.Filter.Query}
-                    onChange={(value) => change({ q: value })}
-                  />
                   <div className="filters">
                     <DashboardFilters
                       data={data}
@@ -175,6 +170,11 @@ function DashboardPage() {
                       onReset={() => setParams({ period: '24h' })}
                     />
                   </div>
+                  <Search
+                    key={data.Filter.Query}
+                    value={data.Filter.Query}
+                    onChange={(value) => change({ q: value })}
+                  />
                   <div className="tree-scroll">
                     {data.Filter.Focused && (
                       <Button

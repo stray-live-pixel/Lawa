@@ -1,5 +1,5 @@
 import { Button, Icon, Select, Tooltip } from '@gravity-ui/uikit';
-import { BroomMotion } from '@gravity-ui/icons';
+import { FunnelXmark } from '@gravity-ui/icons';
 import type { Dashboard } from '../types';
 
 const statuses = [
@@ -91,8 +91,12 @@ export function DashboardFilters({
       />
       {filtersChanged(data) && (
         <Tooltip content="Сбросить фильтры, поиск и выбранную папку">
-          <Button view="flat" aria-label="Сбросить фильтры" onClick={onReset}>
-            <Icon data={BroomMotion} />
+          <Button
+            view="outlined"
+            aria-label="Сбросить фильтры"
+            onClick={onReset}
+          >
+            <Icon data={FunnelXmark} />
           </Button>
         </Tooltip>
       )}
