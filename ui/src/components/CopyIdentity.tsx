@@ -4,6 +4,7 @@ import {
   ClipboardButton,
   CopyToClipboard,
   Icon,
+  Tooltip,
 } from '@gravity-ui/uikit';
 import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 
@@ -33,17 +34,20 @@ export function CopyIdentity({
   };
   if (infoIcon) {
     return (
-      <ClipboardButton
-        className="run-id-info"
-        view="flat"
-        size="s"
-        text={text}
-        icon={<Icon data={CircleInfo} size={18} />}
-        aria-label={label}
-        tooltipInitialText={text}
-        tooltipSuccessText={text}
-        onCopy={onCopy}
-      />
+      <Tooltip content={text}>
+        <span className="run-id-trigger">
+          <ClipboardButton
+            className="run-id-info"
+            view="flat"
+            size="s"
+            text={text}
+            icon={<Icon data={CircleInfo} size={18} />}
+            aria-label={label}
+            hasTooltip={false}
+            onCopy={onCopy}
+          />
+        </span>
+      </Tooltip>
     );
   }
   return (

@@ -390,6 +390,12 @@ pre {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* У пары иконок меньший промежуток; отступ до названия остаётся прежним. */
+.run-id-trigger {
+  display: inline-flex;
+  flex-shrink: 0;
+  margin-left: -4px;
+}
 .run-id-info {
   --g-button-background-color: transparent;
   --g-button-background-color-hover: transparent;
