@@ -1014,12 +1014,6 @@ func Serve(ctx context.Context, root, address string) error {
 	return serve(ctx, listener, Handler(root))
 }
 
-// ServeListener принимает владение уже открытым listener (в том числе TLS).
-// HTTP-обработчик и shutdown остаются общими для CLI и macOS-интеграции.
-func ServeListener(ctx context.Context, listener net.Listener, handler http.Handler) error {
-	return serve(ctx, listener, handler)
-}
-
 // serve отделён от открытия TCP listener для детерминированного теста Shutdown.
 func serve(ctx context.Context, listener net.Listener, handler http.Handler) error {
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
