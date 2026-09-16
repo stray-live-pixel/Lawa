@@ -157,11 +157,11 @@ a.button {
 }
 .app-header {
   flex: none;
-  height: 60px;
+  height: 46px;
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 10px 24px;
+  padding: 6px 14px;
   border-bottom: 1px solid var(--line);
   background: #0d0d0d;
 }
@@ -174,9 +174,8 @@ a.button {
   color: var(--text);
 }
 .brand img {
-  width: 34px;
-  height: 34px;
-  border: 1px solid var(--line);
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
 }
 .header-right {
@@ -194,20 +193,21 @@ a.button {
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  padding: 16px 22px 18px;
-  gap: 12px;
+  padding: 0;
+  gap: 0;
 }
+/* Отступы принадлежат панелям управления: полотно занимает всю рабочую область.
+   Области отделяются одной линией, без вложенных рамок и внешних полей. */
 .filters {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 10px;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
 }
 .filters nav {
   display: flex;
-  border: 1px solid var(--line);
-  border-radius: 7px;
-  padding: 3px;
   gap: 2px;
 }
 .filters nav a {
@@ -219,6 +219,16 @@ a.button {
   color: var(--text);
   background: var(--hover);
   border-radius: 5px;
+}
+.filters > .button {
+  border-color: transparent;
+  background: none;
+}
+.filters > .button:hover {
+  background: var(--hover);
+}
+.filters select {
+  padding: 5px 8px;
 }
 .pagination {
   margin-left: auto;
@@ -236,8 +246,6 @@ a.button {
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  border: 1px solid var(--line);
-  border-radius: 9px;
   overflow: hidden;
 }
 .inspector-body {
@@ -379,20 +387,32 @@ a.button {
 .tabs {
   display: flex;
   gap: 8px;
-  padding: 10px;
+  padding: 0 12px;
+  overflow-x: auto;
   border-bottom: 1px solid var(--line);
   flex: none;
 }
 .tabs button {
-  background: var(--raised);
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 6px 10px;
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  padding: 10px 8px;
+  color: var(--muted);
+  white-space: nowrap;
   font-size: 11px;
 }
+.tabs button:hover {
+  color: var(--text);
+  background: var(--raised);
+}
 .tabs button[data-state='active'] {
-  background: var(--hover);
-  border-color: #666;
+  color: var(--text);
+  border-bottom-color: var(--link);
+}
+/* Внутренний outline остаётся видимым в горизонтально прокручиваемых вкладках. */
+.tabs button:focus-visible {
+  outline-offset: -3px;
 }
 .graph-tab {
   display: flex;
@@ -456,19 +476,34 @@ a.button {
   white-space: nowrap;
 }
 .workflow-graph {
-  padding: 12px;
+  padding: 0;
   display: flex;
   flex: 1;
   min-height: 0;
   min-width: 0;
   flex-direction: column;
-  gap: 12px;
 }
 .graph-heading {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
+  padding: 8px 14px;
+  flex: none;
+}
+.graph-heading > div {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  min-width: 0;
+}
+.graph-heading h1 {
+  font-size: 16px;
+}
+.graph-heading .status {
+  border: 0;
+  padding: 0;
 }
 .graph-heading small {
   overflow-wrap: anywhere;
@@ -478,8 +513,6 @@ a.button {
   grid-template-columns: minmax(0, 1fr) 310px;
   flex: 1;
   min-height: 0;
-  border: 1px solid var(--line);
-  border-radius: 10px;
   overflow: hidden;
 }
 .graph-area {
@@ -494,7 +527,7 @@ a.button {
   flex-wrap: wrap;
   gap: 14px;
   border-top: 1px solid var(--line);
-  padding: 10px 14px;
+  padding: 6px 14px;
   font-size: 11px;
   flex: none;
 }
@@ -586,7 +619,6 @@ a.button {
   display: flex;
   flex: 1;
   min-height: 0;
-  padding: 10px;
 }
 /* React Flow отвечает за pan/zoom и доступность узлов; палитра общая с UI. */
 .react-flow {
@@ -667,9 +699,6 @@ a.button {
   }
 }
 @media (max-width: 760px) {
-  .dashboard {
-    padding: 10px;
-  }
   .app-header {
     padding: 10px;
   }
