@@ -1,3 +1,4 @@
+import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 import { WorkflowSource } from './WorkflowSource';
 import {
   act,
@@ -650,4 +651,36 @@ it('согласует состояние кубика и детали при sk
     'data-state',
     'running',
   );
+});
+
+// Успех копирования результата не вставляет строку и не сдвигает Markdown.
+it('показывает тост вместо строки при копировании результата кубика', async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText },
+  });
+  const add = vi.spyOn(toaster, 'add').mockImplementation(() => {});
+  render(
+    <MarkdownDocument
+      text="Полный результат"
+      label="Результат работы"
+      copyLabel="Скопировать результат"
+      compact
+    />,
+  );
+  fireEvent.click(
+    screen.getByRole('button', { name: 'Скопировать результат' }),
+  );
+  await waitFor(() =>
+    expect(add).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: 'Результат работы кубика скопирован',
+        theme: 'success',
+      }),
+    ),
+  );
+  expect(writeText).toHaveBeenCalledWith('Полный результат');
+  expect(screen.queryByText('Скопировано.')).not.toBeInTheDocument();
+  add.mockRestore();
 });
