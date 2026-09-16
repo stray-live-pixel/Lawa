@@ -25,7 +25,7 @@ import { Button, Choice, Dialog, ErrorNotice, Status, statusNames } from './ui';
 // Dagre раскладывает зависимости, развилки и циклы. Только topology участвует
 // в раскладке: новые сообщения и состояния не меняют координаты или viewport.
 export function layout(nodes: GraphNode[], edges: GraphEdge[]) {
-  const graph = new dagre.graphlib.Graph({ multigraph: true })
+  const graph = new dagre.graphlib.Graph()
     .setGraph({
       rankdir: 'LR',
       nodesep: 40,
@@ -35,9 +35,10 @@ export function layout(nodes: GraphNode[], edges: GraphEdge[]) {
     })
     .setDefaultEdgeLabel(() => ({}));
   nodes.forEach((node) => graph.setNode(node.ID, { width: 220, height: 80 }));
-  edges.forEach((edge, index) =>
-    graph.setEdge(edge.From, edge.To, {}, String(index)),
-  );
+  // Параллельные маршруты внутри цикла вызывают в Dagre ошибку пересечения
+  // прямоугольника. Для координат достаточно одной зависимости между узлами:
+  // обычный Graph объединяет связи, а React Flow ниже получает все оригиналы.
+  edges.forEach((edge) => graph.setEdge(edge.From, edge.To, {}));
   dagre.layout(graph);
   return new Map(
     nodes.map((node) => {

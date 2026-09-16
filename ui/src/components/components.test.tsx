@@ -499,3 +499,55 @@ it('компактный статус задаёт полную выборку, 
   fireEvent.click(screen.getByRole('button', { name: 'Сбросить фильтры' }));
   expect(onReset).toHaveBeenCalledOnce();
 });
+
+// Анонимизированная топология: параллельные маршруты внутри цикла раньше
+// обрушали страницу исключением Dagre. Исходные связи должны сохраняться.
+it('раскладывает цикл с параллельными маршрутами', () => {
+  const pairs = [
+    ['node-13', 'node-0'],
+    ['node-0', 'node-14'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-2'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-2'],
+    ['node-0', 'node-3'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-2'],
+    ['node-0', 'node-3'],
+    ['node-0', 'node-4'],
+    ['node-0', 'node-1'],
+    ['node-0', 'node-2'],
+    ['node-0', 'node-3'],
+    ['node-0', 'node-4'],
+    ['node-0', 'node-5'],
+    ['node-1', 'node-6'],
+    ['node-2', 'node-6'],
+    ['node-3', 'node-6'],
+    ['node-4', 'node-6'],
+    ['node-5', 'node-6'],
+    ['node-6', 'node-7'],
+    ['node-7', 'node-8'],
+    ['node-8', 'node-9'],
+    ['node-8', 'node-13'],
+    ['node-9', 'node-10'],
+    ['node-10', 'node-11'],
+    ['node-11', 'node-12'],
+    ['node-12', 'node-13'],
+    ['node-14', 'node-15'],
+  ];
+  const nodes = Array.from({ length: 16 }, (_, i) => ({
+    ID: `node-${i}`,
+    Prompt: '',
+    Routes: [],
+  }));
+  const edges = pairs.map(([From, To]) => ({ From, To, Label: '' }));
+  const original = structuredClone(edges);
+  const positions = layout(nodes, edges);
+  expect(positions.size).toBe(nodes.length);
+  for (const point of positions.values()) {
+    expect(Number.isFinite(point.x)).toBe(true);
+    expect(Number.isFinite(point.y)).toBe(true);
+  }
+  expect(edges).toEqual(original);
+});
