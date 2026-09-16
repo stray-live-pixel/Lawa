@@ -368,7 +368,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px var(--panel-inset);
+  padding: 6px calc(var(--panel-inset) - 2px);
   margin-bottom: 12px;
   border-bottom: 1px solid var(--line);
   flex: none;
