@@ -372,24 +372,33 @@ pre {
   border-bottom: 1px solid var(--line);
   flex: none;
 }
-.graph-heading > div:first-child {
-  display: flex;
-  align-items: baseline;
-  flex-wrap: wrap;
-  gap: 2px 12px;
+.graph-identity {
   min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.graph-title-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.graph-title-row > .g-label {
+  flex-shrink: 0;
 }
 .graph-heading h1 {
   font-size: 14px;
   line-height: 20px;
 }
-/* В заголовке действия образуют одну компактную строку: внешние отступы
-   общих блоков .actions здесь создавали лишнее пространство над графом. */
-.graph-heading > .actions {
+.graph-run-id {
+  display: flex;
   align-items: center;
-  margin: 0;
+  gap: 4px;
 }
-.graph-heading small {
+.graph-run-id small {
+  font-size: 5px;
+  line-height: 7px;
   overflow-wrap: anywhere;
 }
 .graph-workspace {
@@ -677,14 +686,17 @@ pre {
   pointer-events: none;
 }
 
-/* Крупная схема может занять окно без перехода со страницы и потери выбора. */
-.workflow-graph-expanded {
-  position: fixed;
-  inset: 8px;
-  z-index: 100;
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 8px;
+/* Разворачивание меняет обычную сетку страницы, без overlay и перемещения
+   графа: выбор кубика, масштаб и ширина правой панели сохраняются.
+   Скрытая вкладка графа не должна прятать меню на остальных вкладках. */
+.inspector-body:has(.graph-tab:not([hidden]) .workflow-graph-expanded) {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.inspector-body:has(.graph-tab:not([hidden]) .workflow-graph-expanded) > .tree,
+.inspector-body:has(.graph-tab:not([hidden]) .workflow-graph-expanded)
+  > .run-list-resizer {
+  display: none;
 }
 .workflow-source {
   padding: 12px;

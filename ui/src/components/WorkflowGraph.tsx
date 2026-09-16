@@ -16,8 +16,14 @@ import {
   type NodeProps,
   type Edge,
 } from '@xyflow/react';
-import { Card, Icon, useThemeValue } from '@gravity-ui/uikit';
-import { Plus, Minus, ArrowsExpand } from '@gravity-ui/icons';
+import { Card, ClipboardButton, Icon, useThemeValue } from '@gravity-ui/uikit';
+import {
+  Plus,
+  Minus,
+  ArrowsExpand,
+  ChevronsExpandUpRight,
+  ChevronsCollapseUpRight,
+} from '@gravity-ui/icons';
 import { graphLayout, type RoutedEdge } from './graphLayout';
 import '@xyflow/react/dist/style.css';
 import type { Graph, GraphEdge, GraphNode } from '../types';
@@ -259,21 +265,34 @@ function GraphView({
       aria-label="Граф workflow"
     >
       <div className="graph-heading">
-        <div>
-          <h1>{graph.Name}</h1>
-          <small>Run {graph.ID}</small>
+        <div className="graph-identity">
+          <div className="graph-title-row">
+            <Status state={graph.State} />
+            <h1>{graph.Name}</h1>
+          </div>
+          <div className="graph-run-id">
+            <small>Run {graph.ID}</small>
+            <ClipboardButton
+              text={graph.ID}
+              size="xs"
+              view="flat"
+              aria-label="Скопировать ID запуска"
+              tooltipInitialText="Скопировать ID запуска"
+              tooltipSuccessText="ID скопирован"
+            />
+          </div>
         </div>
-        <div className="actions">
-          <Button
-            view="flat"
-            onClick={() => setExpanded(!expanded)}
-            aria-pressed={expanded}
-          >
-            <Icon data={ArrowsExpand} />
-            {expanded ? 'Свернуть' : 'Развернуть граф'}
-          </Button>
-          <Status state={graph.State} />
-        </div>
+        <Button
+          view="flat"
+          onClick={() => setExpanded(!expanded)}
+          aria-pressed={expanded}
+          aria-label={expanded ? 'Свернуть граф' : 'Развернуть граф'}
+          title={expanded ? 'Свернуть граф' : 'Развернуть граф'}
+        >
+          <Icon
+            data={expanded ? ChevronsCollapseUpRight : ChevronsExpandUpRight}
+          />
+        </Button>
       </div>
       <ErrorNotice error={error} />
       <ResizableRunList side="right">
