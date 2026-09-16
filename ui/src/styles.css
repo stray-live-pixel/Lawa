@@ -907,11 +907,3 @@ pre {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
-.node-routes {
-  margin-top: 12px;
-}
-.node-routes ul {
-  margin: 8px 0;
-  padding-left: 20px;
-  overflow-wrap: anywhere;
-}

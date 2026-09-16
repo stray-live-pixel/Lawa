@@ -18,7 +18,7 @@ import {
   type NodeProps,
   type Edge,
 } from '@xyflow/react';
-import { Card, Disclosure, Icon, useThemeValue } from '@gravity-ui/uikit';
+import { Card, Icon, useThemeValue } from '@gravity-ui/uikit';
 import { Plus, Minus, ArrowsExpand } from '@gravity-ui/icons';
 import { graphLayout, type RoutedEdge } from './graphLayout';
 import '@xyflow/react/dist/style.css';
@@ -348,7 +348,7 @@ function GraphView({
             {execution?.Note || (!execution ? 'Кубик ещё не запускался.' : '')}
           </p>
           {/* Факты выбранного посещения не смешиваем со статическими маршрутами:
-              список Routes описывает возможности, а не выполненные переходы. */}
+              возможные маршруты доступны на диаграмме и во вкладке «Описание». */}
           {(execution?.Decision || execution?.Trigger || graph.StopReason) && (
             <dl className="visit-facts">
               {execution?.Decision && (
@@ -370,22 +370,6 @@ function GraphView({
                 </>
               )}
             </dl>
-          )}
-          {!!selected?.Routes?.length && (
-            <Disclosure
-              key={selected.ID}
-              className="node-routes"
-              summary={`Возможные переходы · ${selected.Routes.length}`}
-            >
-              <p className="muted">
-                Маршруты из описания workflow, не история выполнения.
-              </p>
-              <ul>
-                {selected.Routes.map((route, index) => (
-                  <li key={index}>{route}</li>
-                ))}
-              </ul>
-            </Disclosure>
           )}
           <div className="actions">
             {execution?.MemoryURL && (
