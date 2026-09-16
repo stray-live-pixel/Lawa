@@ -1,3 +1,4 @@
+import { ResizableRunList } from './components/ResizableRunList';
 import { lazy, Suspense, useEffect, useState } from 'react';
 import {
   Link as RouterLink,
@@ -189,7 +190,7 @@ function DashboardPage() {
                   ))}
                 </nav>
               )}
-              <div className="inspector-body">
+              <ResizableRunList>
                 <aside className="tree" aria-label="Дерево workflow и кубиков">
                   <Search
                     key={data.Filter.Query}
@@ -368,7 +369,7 @@ function DashboardPage() {
                     <p className="empty">{data.EmptyMessage}</p>
                   )}
                 </section>
-              </div>
+              </ResizableRunList>
             </div>
           </>
         )}
