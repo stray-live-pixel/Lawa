@@ -254,24 +254,6 @@ function GraphView({
   };
   return (
     <section className="workflow-graph" aria-label="Граф workflow">
-      <div className="graph-heading">
-        <Status state={graph.State} />
-        <div className="graph-identity">
-          <div className="graph-run-id">
-            <small>runId={graph.ID}</small>
-            <ClipboardButton
-              className="run-id-copy"
-              text={graph.ID}
-              size="xs"
-              view="flat"
-              aria-label="Скопировать ID запуска"
-              tooltipInitialText="Скопировать ID запуска"
-              tooltipSuccessText="ID скопирован"
-            />
-          </div>
-          <h1>{graph.Name}</h1>
-        </div>
-      </div>
       <ErrorNotice error={error} />
       <ResizableRunList side="right">
         <div className="graph-area">
@@ -308,6 +290,25 @@ function GraphView({
           </ReactFlow>
         </div>
         <aside className="cube-details" aria-label="Информация о кубике">
+          <div className="graph-heading">
+            <Status state={graph.State} />
+            <div className="graph-identity">
+              <h1 title={graph.Name}>{graph.Name}</h1>
+              <div className="graph-run-id">
+                <small title={`runId=${graph.ID}`}>runId={graph.ID}</small>
+                <ClipboardButton
+                  className="run-id-copy"
+                  text={graph.ID}
+                  size="xs"
+                  view="flat"
+                  aria-label="Скопировать ID запуска"
+                  tooltipInitialText="Скопировать ID запуска"
+                  tooltipSuccessText="ID скопирован"
+                />
+              </div>
+            </div>
+          </div>
+
           {!preview && <ImageExport runID={graph.ID} />}
           <h2>{selected?.ID || 'Нет кубиков'}</h2>
           <Status state={execution?.State || 'not_started'} />

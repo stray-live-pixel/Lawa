@@ -367,7 +367,8 @@ pre {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px var(--panel-inset);
+  padding: 0 0 8px;
+  margin-bottom: 12px;
   border-bottom: 1px solid var(--line);
   flex: none;
 }
@@ -376,13 +377,17 @@ pre {
 }
 .graph-identity {
   min-width: 0;
+  flex: 1;
   display: flex;
   flex-direction: column;
   gap: 0;
 }
 .graph-heading h1 {
   font-size: 14px;
-  line-height: 20px;
+  line-height: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .graph-run-id {
   display: flex;
@@ -390,13 +395,29 @@ pre {
   gap: 2px;
 }
 .graph-run-id small {
-  font-size: 5px;
-  line-height: 7px;
-  overflow-wrap: anywhere;
+  font-size: 7px;
+  line-height: 9px;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-/* Масштабируем всю библиотечную кнопку вдвое, включая иконку и её место. */
+/* После уменьшения xs до 10px добавляем 2px. Явный квадрат сохраняет
+   размер кнопки при обрезании длинного ID в узкой панели. */
 .run-id-copy {
-  zoom: 0.5;
+  width: 12px;
+  min-width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  --g-button-padding: 0;
+}
+.run-id-copy .g-button__icon {
+  margin: 0;
+  width: 12px;
+}
+.run-id-copy svg {
+  width: 10px;
+  height: 10px;
 }
 .run-tabs-toolbar {
   display: flex;
