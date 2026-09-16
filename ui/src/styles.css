@@ -368,7 +368,7 @@ pre {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 0 8px;
+  padding: 8px var(--panel-inset);
   margin-bottom: 12px;
   border-bottom: 1px solid var(--line);
   flex: none;
@@ -406,6 +406,7 @@ pre {
 /* После уменьшения xs до 10px добавляем 2px. Явный квадрат сохраняет
    размер кнопки при обрезании длинного ID в узкой панели. */
 .run-id-copy {
+  --g-button-height: 12px;
   width: 12px;
   min-width: 12px;
   height: 12px;
