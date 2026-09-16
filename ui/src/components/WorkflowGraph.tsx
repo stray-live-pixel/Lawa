@@ -361,12 +361,6 @@ function GraphView({
                 </nav>
               )}
             </div>
-            {execution && (
-              <p className="muted visit-summary">
-                Посещение #{execution.Visit || 1}
-                {execution.Attempt ? ` · Попытка ${execution.Attempt}` : ''}
-              </p>
-            )}
             {execution?.Result && (
               <MarkdownDocument
                 text={execution.Result}
