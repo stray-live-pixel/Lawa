@@ -212,9 +212,34 @@
   position: relative;
   margin-bottom: 3px;
 }
-/* Отдельное место справа не даёт тексту заходить под кнопку отправки. */
-.team-compose-row textarea {
-  padding-right: 44px;
+/* Одинаковые метрики нужны для совпадения текста, курсора и переносов.
+   Отдельное место справа не даёт тексту заходить под кнопку отправки. */
+.team-compose-row .g-text-area__control,
+.team-compose-highlights {
+  padding: 5px 44px 5px 8px;
+  font-family: var(--g-text-body-font-family);
+  font-weight: var(--g-text-body-font-weight);
+  font-size: var(--g-text-body-short-font-size);
+  line-height: var(--g-text-body-short-line-height);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  tab-size: 8;
+}
+.team-compose-row .g-text-area__control {
+  color: transparent;
+  caret-color: var(--g-color-text-primary);
+}
+.team-compose-highlights {
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  box-sizing: border-box;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--g-color-text-primary);
+}
+.team-compose-mention {
+  color: var(--g-color-text-link);
 }
 .team-compose-send.g-button {
   position: absolute;

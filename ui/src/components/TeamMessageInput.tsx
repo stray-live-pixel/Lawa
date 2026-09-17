@@ -1,4 +1,11 @@
-import { useId, useRef, useState, type ReactNode } from 'react';
+import {
+  useEffect,
+  useId,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react';
 import { Button, Icon, TextArea } from '@gravity-ui/uikit';
 import { PaperPlane } from '@gravity-ui/icons';
 
@@ -27,6 +34,7 @@ export function TeamMessageInput({
   placeholder: string;
 }) {
   const field = useRef<HTMLTextAreaElement>(null);
+  const highlights = useRef<HTMLDivElement>(null);
   const listId = useId();
   const [caret, setCaret] = useState(0);
   const [focused, setFocused] = useState(false);
@@ -45,6 +53,27 @@ export function TeamMessageInput({
       .includes((query || '').toLocaleLowerCase()),
   );
   const selected = Math.min(active, Math.max(0, matches.length - 1));
+  const address = value.match(/^@(\S+)(?=\s|$)/)?.[1];
+  const validAddress = employees.some(({ id }) => id === address);
+
+  // Textarea сохраняет нативное редактирование, выделение и IME. Видимый текст
+  // рисуется в недоступном для указателя/скринридера слое с той же геометрией.
+  // clientWidth учитывает полосу прокрутки; scrollTop не даёт тегу «залипнуть».
+  function syncHighlights() {
+    const input = field.current;
+    const mirror = highlights.current;
+    if (!input || !mirror) return;
+    mirror.style.width = `${input.clientWidth}px`;
+    mirror.style.height = `${input.clientHeight}px`;
+    mirror.scrollTop = input.scrollTop;
+    mirror.scrollLeft = input.scrollLeft;
+  }
+  useLayoutEffect(syncHighlights, [value]);
+  useEffect(() => {
+    const observer = new ResizeObserver(syncHighlights);
+    if (field.current) observer.observe(field.current);
+    return () => observer.disconnect();
+  }, []);
 
   // Заменяем весь редактируемый адрес, даже если курсор стоит посередине тега.
   // Остальной черновик сохраняется; пробел отделяет канонический ID от текста.
@@ -103,6 +132,7 @@ export function TeamMessageInput({
               ? `${listId}-${matches[selected].id}`
               : undefined,
           onSelect: (event) => setCaret(event.currentTarget.selectionStart),
+          onScroll: syncHighlights,
         }}
         placeholder={placeholder}
         value={value}
@@ -141,6 +171,22 @@ export function TeamMessageInput({
         maxRows={4}
         disabled={busy}
       />
+      <div
+        ref={highlights}
+        className="team-compose-highlights"
+        aria-hidden="true"
+      >
+        {validAddress ? (
+          <>
+            <span className="team-compose-mention">@{address}</span>
+            {value.slice(address!.length + 1)}
+          </>
+        ) : (
+          value
+        )}
+        {/* Последний перенос должен занимать строку, как в textarea. */}
+        {'\u200b'}
+      </div>
       <Button
         className="team-compose-send"
         type="submit"

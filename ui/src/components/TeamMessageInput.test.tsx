@@ -107,3 +107,38 @@ it('не подставляет сотрудника при пустом пои�
   expect(field).toHaveValue('@');
   expect(submit).not.toHaveBeenCalled();
 });
+
+// Подсветка означает реального адресата, а не просто похожее имя или часть ID.
+it.each([
+  ['@boss Проверь игру', '@boss'],
+  ['@developer', '@developer'],
+  ['@dev Проверь игру', null],
+  ['@developerX Проверь игру', null],
+  ['@unknown Проверь игру', null],
+  ['@Разработчик Проверь игру', null],
+  ['Проверь игру @boss', null],
+])('подсвечивает только полный ID адресата: %s', (draft, expected) => {
+  const { field } = setup(draft);
+  const colored = field
+    .closest('.team-compose-row')!
+    .querySelector('.team-compose-mention');
+  expect(colored?.textContent || null).toBe(expected);
+  expect(field).toHaveValue(draft);
+});
+
+it('обновляет подсветку при редактировании тега и сохраняет многострочный черновик', () => {
+  const { field } = setup('@developer Строка\nещё строка');
+  const mirror = field
+    .closest('.team-compose-row')!
+    .querySelector('.team-compose-highlights')!;
+  expect(mirror).toHaveAttribute('aria-hidden', 'true');
+  fireEvent.change(field, {
+    target: { value: '@develope Строка\nещё строка' },
+  });
+  expect(mirror.querySelector('.team-compose-mention')).toBeNull();
+  fireEvent.change(field, { target: { value: '@boss Строка\nещё строка' } });
+  expect(mirror.querySelector('.team-compose-mention')).toHaveTextContent(
+    '@boss',
+  );
+  expect(field).toHaveValue('@boss Строка\nещё строка');
+});
