@@ -73,13 +73,21 @@
   box-shadow: 0 3px 10px var(--g-color-sfx-shadow-light);
   user-select: none;
 }
+/* Карточка раскрывается без заливки и сжатия кнопки. Контур клавиатурного
+   фокуса Gravity UI остаётся, чтобы управление с Tab было видно. */
 .team-pin-toggle.g-button {
+  --g-button-background-color: transparent;
+  --g-button-background-color-hover: transparent;
   --g-button-padding: 0;
   width: 100%;
   height: auto;
   text-align: left;
   border-radius: 12px;
   background: var(--g-color-base-generic-ultralight);
+}
+.team-pin-toggle.g-button:active,
+.team-pin-toggle.g-button:active::after {
+  transform: none;
 }
 .team-pin-toggle .g-button__text {
   display: block;
