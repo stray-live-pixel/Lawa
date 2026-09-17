@@ -1,0 +1,167 @@
+/* Физическая рамка — реквизит сцены. Экран, поля и сообщения используют
+   общую тему Lawa; Modal UIKit отвечает за focus trap и закрытие по Escape. */
+.team-phone-modal {
+  background: transparent;
+  border-radius: 48px;
+}
+.team-phone {
+  width: min(390px, calc(100vw - 40px));
+  height: min(760px, calc(100dvh - 40px));
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 9px solid #28272a;
+  border-radius: 48px;
+  background: var(--g-color-base-background);
+  color: var(--g-color-text-primary);
+  box-shadow:
+    0 24px 80px var(--g-color-sfx-shadow-heavy),
+    inset 0 0 0 1px var(--g-color-line-generic);
+}
+.team-phone-hardware {
+  height: 32px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.team-phone-hardware span {
+  width: 96px;
+  height: 21px;
+  border-radius: 20px;
+  background: #171719;
+}
+.team-phone-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 18px 12px;
+}
+.team-phone-picker {
+  padding: 0 18px 12px;
+}
+.team-phone-picker > * {
+  width: 100%;
+}
+.team-phone .g-alert {
+  margin: 4px 12px;
+  flex: none;
+  max-height: 100px;
+  overflow: auto;
+}
+.team-new {
+  padding: 18px;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  gap: 16px;
+  overflow: auto;
+}
+.team-pin {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 18px;
+  background: var(--g-color-base-generic);
+  max-height: 140px;
+  overflow: auto;
+}
+.team-pin > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--g-color-text-secondary);
+}
+.team-pin p {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 18px;
+}
+.team-messages {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 18px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.team-empty {
+  display: block;
+  padding: 20px;
+  text-align: center;
+  margin: auto;
+}
+.team-message {
+  display: flex;
+  align-items: flex-end;
+  gap: 7px;
+}
+.team-message > .g-avatar {
+  flex: none;
+}
+.team-message-own {
+  flex-direction: row-reverse;
+}
+.team-message-body {
+  min-width: 0;
+  max-width: calc(100% - 42px);
+}
+.team-message-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  align-items: baseline;
+  margin: 0 4px 5px;
+  color: var(--g-color-text-secondary);
+}
+.team-message-meta time {
+  font-size: 10px;
+}
+.team-message-bubble {
+  border-radius: 16px 16px 16px 4px;
+  background: var(--g-color-base-generic);
+  padding: 10px 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 13px;
+  line-height: 19px;
+}
+.team-message-own .team-message-bubble {
+  border-radius: 16px 16px 4px 16px;
+  background: var(--g-color-base-info-light);
+}
+.team-boss-avatar img {
+  object-fit: cover;
+  transform: translate(8%, 31%) scale(3.2);
+  transform-origin: 42% 19%;
+}
+.team-compose {
+  padding: 12px 14px 4px;
+  border-top: 1px solid var(--g-color-line-generic);
+  flex: none;
+}
+.team-compose-row {
+  display: flex;
+  gap: 8px;
+  align-items: flex-end;
+  margin-bottom: 5px;
+}
+.team-compose-row > .g-text-area {
+  flex: 1;
+}
+.team-phone-home {
+  height: 20px;
+  flex: none;
+  display: grid;
+  place-items: center;
+}
+.team-phone-home span {
+  width: 110px;
+  height: 4px;
+  background: var(--g-color-text-primary);
+  border-radius: 4px;
+}

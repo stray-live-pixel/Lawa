@@ -285,7 +285,7 @@ func TestChooseDecisionComposesWithConfiguredTools(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = releaseAgentWork(prepared.Work) })
 	command := prepared.Work[0].Command
-	if len(command.DynamicTools) != 2 || command.DynamicTools[0].Name != "run_child" || command.DynamicTools[1].Name != chooseDecisionToolName {
+	if len(command.DynamicTools) != 4 || command.DynamicTools[2].Name != "team_read" || command.DynamicTools[3].Name != "team_post" || command.DynamicTools[0].Name != "run_child" || command.DynamicTools[1].Name != chooseDecisionToolName {
 		t.Fatalf("configure tools потеряны или продублированы: %+v", command.DynamicTools)
 	}
 	var schema struct {
@@ -384,7 +384,7 @@ func TestCancelledDecisionKeepsCommittedChoice(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = releaseAgentWork(prepared.Work) })
 	work := prepared.Work[0]
-	if work.kind != agentWorkContinuation || work.ThreadID != "chat-choice" || len(work.Command.DynamicTools) != 1 || work.Command.DynamicTools[0].Name != "run_child" ||
+	if work.kind != agentWorkContinuation || work.ThreadID != "chat-choice" || len(work.Command.DynamicTools) != 3 || work.Command.DynamicTools[1].Name != "team_read" || work.Command.DynamicTools[2].Name != "team_post" || work.Command.DynamicTools[0].Name != "run_child" ||
 		!strings.Contains(work.Command.Text, "(attempt): 2") || !strings.Contains(work.Command.Text, `Решение уже устойчиво сохранено предыдущим turn: "go"`) ||
 		!strings.Contains(work.Command.Text, "Сохранённое состояние перед новым turn: cancelled") ||
 		!strings.Contains(work.Command.Text, "Техническая диагностика предыдущего turn этого посещения: остановлено") ||

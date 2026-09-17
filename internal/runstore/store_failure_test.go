@@ -63,7 +63,9 @@ func TestCreateWriteFailure(t *testing.T) {
 		t.Fatalf("ожидались отказ записи и пустой снимок: %+v, %v", got, err)
 	}
 	var writeErr *os.PathError
-	if !errors.As(err, &writeErr) || writeErr.Op != "write" || filepath.Base(writeErr.Path) != "task.md" {
+	// Цель записывается в task.md и pin team.json. Порядок map не определён,
+	// поэтому первым в лимит размера может упереться любой из этих файлов.
+	if !errors.As(err, &writeErr) || writeErr.Op != "write" || (filepath.Base(writeErr.Path) != "task.md" && filepath.Base(writeErr.Path) != "team.json") {
 		t.Fatalf("отказ должен произойти при записи нового файла: %v", err)
 	}
 	var failure *CreateError

@@ -1,5 +1,5 @@
-// Package dashboard предоставляет локальное read-only представление сохранённых
-// workflow. Сервер не разделяет память с координаторами: каждое обновление страницы
+// Package dashboard предоставляет локальный интерфейс workflow и общего чата.
+// Сервер не разделяет память с координаторами: каждое обновление страницы
 // перечитывает атомарные snapshot, поэтому видит run других процессов и переживает
 // собственный перезапуск без отдельной базы данных.
 package dashboard
@@ -104,6 +104,10 @@ func Handler(root string) http.Handler {
 	mux.HandleFunc("GET /ui/", serveUIAssets)
 	mux.HandleFunc("GET /preview", serveUI)
 	mux.HandleFunc("GET /office", serveUI)
+	mux.HandleFunc("GET /api/teams", h.teams)
+	mux.HandleFunc("POST /api/teams", h.createTeam)
+	mux.HandleFunc("GET /api/teams/{run}", h.team)
+	mux.HandleFunc("POST /api/teams/{run}/messages", h.postTeam)
 	mux.HandleFunc("GET /api/preview", h.preview)
 	mux.HandleFunc("GET /assets/lawa-logo.png", h.logo)
 	mux.HandleFunc("GET /memory/{run}/{thread}", h.memory)

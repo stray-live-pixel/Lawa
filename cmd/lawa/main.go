@@ -46,7 +46,7 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
   lawa logs <run-id> [step-id] [--visit <visit-id>] [--follow]
       Показать журнал всего run, логического шага или точного посещения v2.
   lawa serve [--root <путь>] [--listen <адрес>]
-      Запустить read-only dashboard; по умолчанию http://127.0.0.1:60800.
+      Запустить dashboard и общий чат; по умолчанию http://127.0.0.1:60800.
   lawa series-status <series-id>
       Показать режим, прогресс, текущий run и время следующего запуска.
   lawa series-stop <series-id>

@@ -228,6 +228,13 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 		return Snapshot{}, err
 	}
 	files := map[string][]byte{"workflow.json": in.WorkflowJSON, "task.md": []byte(s.Task), "meta.json.tmp": meta}
+	if in.ParentRunID == "" {
+		team, encodeErr := json.Marshal(newTeam(s.Meta.RunID, in.Task))
+		if encodeErr != nil {
+			return Snapshot{}, encodeErr
+		}
+		files["team.json"] = team
+	}
 	if len(in.AssignedWorkflowJSON) != 0 {
 		files[AssignedWorkflowFilename] = in.AssignedWorkflowJSON
 	}

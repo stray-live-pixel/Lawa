@@ -1,5 +1,7 @@
 import { useState } from 'react';
-import { Button, Text } from '@gravity-ui/uikit';
+import { Button, Icon, Text } from '@gravity-ui/uikit';
+import { Smartphone } from '@gravity-ui/icons';
+import { TeamPhone } from '../components/TeamPhone';
 import { ThemePicker } from '../components/Theme';
 import room from '../assets/office/room-transparent.png';
 import boss from '../assets/office/boss.png';
@@ -17,10 +19,19 @@ const demoStates = [
 // впоследствии их должен определять источник событий конкретного заказа.
 export default function Office() {
   const [demoIndex, setDemoIndex] = useState(0);
+  const [phoneOpen, setPhoneOpen] = useState(false);
   const activity = demoStates[demoIndex];
   return (
     <main className="office" aria-label="Офис агентов">
       <div className="office-toolbar">
+        <Button
+          view="flat"
+          onClick={() => setPhoneOpen(true)}
+          aria-label="Открыть чат команды"
+          title="Чат команды"
+        >
+          <Icon data={Smartphone} />
+        </Button>
         <ThemePicker />
       </div>
       <div className="office-space">
@@ -63,6 +74,7 @@ export default function Office() {
           </div>
         </div>
       </div>
+      {phoneOpen && <TeamPhone onClose={() => setPhoneOpen(false)} />}
     </main>
   );
 }

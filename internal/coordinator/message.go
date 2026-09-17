@@ -91,6 +91,7 @@ func Message(ctx context.Context, run *runstore.LockedRun, options Options, text
 	if options.ConfigureCommand != nil {
 		options.ConfigureCommand(snapshot, &command)
 	}
+	addTeamTools(options.Root, snapshot.Meta.RunID, step.ID, &command)
 	if err = run.ReserveMessage(text); err != nil {
 		return err
 	}

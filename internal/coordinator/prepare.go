@@ -155,6 +155,7 @@ func prepareConfigured(run *runstore.LockedRun, root string, pool *capacity.Pool
 		if configure != nil {
 			configure(snapshot, &command)
 		}
+		addTeamTools(root, snapshot.Meta.RunID, stepID, &command)
 		prepared.Launches = append(prepared.Launches, Launch{
 			StepID:  stepID,
 			Command: command,
@@ -239,6 +240,7 @@ func prepareContinuationsConfigured(snapshot runstore.Snapshot, root string, ena
 		if configure != nil {
 			configure(snapshot, &command)
 		}
+		addTeamTools(root, snapshot.Meta.RunID, step.ID, &command)
 		continuations = append(continuations, Continuation{
 			StepID: step.ID, ThreadID: step.CodexThreadID,
 			Command: command,

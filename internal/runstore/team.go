@@ -1,0 +1,211 @@
+package runstore
+
+import (
+	"context"
+	"encoding/json/v2"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"syscall"
+	"time"
+	"unicode/utf8"
+)
+
+// TeamChat — общая доска корневого заказа. Цель неизменна, сообщения добавляются
+// последовательно. Память кубиков остаётся рабочими заметками, чат — общими фактами.
+type TeamChat struct {
+	RunID    string                `json:"runId"`
+	Goal     string                `json:"goal"`
+	Members  map[string]TeamMember `json:"members"`
+	Messages []TeamMessage         `json:"messages"`
+}
+
+// TeamMember хранит отображение автора по ID. Avatar задаёт известный UI образ;
+// для остальных участников UI строит стабильную аватарку по тому же ID.
+type TeamMember struct {
+	Name   string `json:"name"`
+	Avatar string `json:"avatar,omitempty"`
+}
+
+// TeamMessage получает время и автора на стороне Lawa. ID — ключ повтора:
+// потеря сетевого подтверждения не должна удваивать сообщение при retry.
+type TeamMessage struct {
+	ID       string    `json:"id"`
+	AuthorID string    `json:"authorId"`
+	Date     time.Time `json:"date"`
+	Text     string    `json:"text"`
+}
+
+// newTeam создаёт pin точного входного задания, без ограничения в 50 слов.
+func newTeam(runID, goal string) TeamChat {
+	return TeamChat{RunID: runID, Goal: goal, Members: map[string]TeamMember{"human": {Name: "Чел"}}, Messages: []TeamMessage{}}
+}
+
+// TeamRoot разрешает принадлежность команде только по сохранённым родителям.
+// Набор visited останавливает повреждённую цепочку вместо вечного обхода.
+func TeamRoot(root, runID string) (Snapshot, error) {
+	seen := map[string]bool{}
+	for {
+		if seen[runID] {
+			return Snapshot{}, errors.New("цикл родителей команды")
+		}
+		seen[runID] = true
+		s, err := Load(root, runID)
+		if err != nil {
+			return Snapshot{}, err
+		}
+		if s.Meta.ParentRunID == "" {
+			return s, nil
+		}
+		runID = s.Meta.ParentRunID
+	}
+}
+
+// readTeam поддерживает старые run без миграции при чтении. Для новых запусков
+// точная цель записана Create; legacy task.md содержит также служебные заголовки.
+func readTeam(dir *os.Root, s Snapshot) (TeamChat, error) {
+	data, err := readFile(dir, "team.json")
+	if errors.Is(err, os.ErrNotExist) {
+		goal := strings.TrimPrefix(s.Task, "# Постановка задачи\n\n")
+		goal, _, _ = strings.Cut(goal, "\n\n# Комментарий пользователя\n\n")
+		return newTeam(s.Meta.RunID, strings.TrimSpace(goal)), nil
+	}
+	if err != nil {
+		return TeamChat{}, err
+	}
+	var chat TeamChat
+	if err = json.Unmarshal(data, &chat); err != nil {
+		return chat, err
+	}
+	if chat.RunID != s.Meta.RunID || chat.Members == nil || strings.TrimSpace(chat.Goal) == "" {
+		return TeamChat{}, errors.New("повреждена общая база команды")
+	}
+	return chat, nil
+}
+
+// ReadTeam видит целый старый или новый снимок благодаря атомарному Rename.
+func ReadTeam(root, runID string) (TeamChat, error) {
+	s, err := TeamRoot(root, runID)
+	if err != nil {
+		return TeamChat{}, err
+	}
+	dir, err := openRun(root, s.Meta.RunID)
+	if err != nil {
+		return TeamChat{}, err
+	}
+	defer dir.Close()
+	return readTeam(dir, s)
+}
+
+// PostTeam связывает автора с реальным кубиком sourceRun. Пустой stepID означает
+// человека; HTTP не принимает произвольный authorId, агентский tool всегда
+// передаёт свой захваченный stepID. Это локальная идентификация, не аутентификация.
+// Отдельный flock не конфликтует с долгим coordinator.lock. Нельзя удалять его
+// файл: все процессы должны блокировать один inode. Запись атомарна с fsync.
+func PostTeam(ctx context.Context, root, sourceRun, stepID, id, text string) (TeamMessage, error) {
+	text = strings.TrimSpace(text)
+	words := len(strings.Fields(text))
+	if words == 0 || words > 50 || len(text) > 8192 || !utf8.ValidString(text) {
+		return TeamMessage{}, errors.New("сообщение должно содержать от 1 до 50 слов (до 8 КБ)")
+	}
+	if id == "" || len(id) > 200 || !utf8.ValidString(id) {
+		return TeamMessage{}, errors.New("нужен ID сообщения до 200 байт")
+	}
+	source, err := Load(root, sourceRun)
+	if err != nil {
+		return TeamMessage{}, err
+	}
+	authorID, member := "human", TeamMember{Name: "Чел"}
+	if stepID != "" {
+		found := false
+		for _, step := range source.Workflow.Steps {
+			if step.ID != stepID {
+				continue
+			}
+			found = true
+			authorID, member.Name = sourceRun+":step:"+step.ID, step.ID
+			if step.Character != "" {
+				authorID = sourceRun + ":character:" + step.Character
+				member.Name = source.Workflow.Characters[step.Character].Name
+				if step.Character == "boss" {
+					member.Avatar = "boss"
+				}
+			}
+			break
+		}
+		if !found {
+			return TeamMessage{}, fmt.Errorf("неизвестный участник %q", stepID)
+		}
+	}
+	s, err := TeamRoot(root, sourceRun)
+	if err != nil {
+		return TeamMessage{}, err
+	}
+	dir, err := openRun(root, s.Meta.RunID)
+	if err != nil {
+		return TeamMessage{}, err
+	}
+	defer dir.Close()
+	// os.Root сам разрешает ссылки внутри области; Lstat запрещает их до открытия.
+	// O_NONBLOCK не позволяет зависнуть на подставленном FIFO. Не используем
+	// O_NOFOLLOW вместе с O_CREATE: на macOS это даёт ENOENT при гонке создания.
+	if info, statErr := dir.Lstat("team.lock"); statErr == nil {
+		if !info.Mode().IsRegular() {
+			return TeamMessage{}, errors.New("team.lock должен быть обычным файлом")
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return TeamMessage{}, statErr
+	}
+	lock, err := dir.OpenFile("team.lock", os.O_CREATE|os.O_RDWR|syscall.O_NONBLOCK, 0o600)
+	if err != nil {
+		return TeamMessage{}, err
+	}
+	defer lock.Close()
+	info, err := lock.Stat()
+	if err != nil {
+		return TeamMessage{}, err
+	}
+	if !info.Mode().IsRegular() {
+		return TeamMessage{}, errors.New("team.lock должен быть обычным файлом")
+	}
+	for {
+		if err = ctx.Err(); err != nil {
+			return TeamMessage{}, err
+		}
+		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			return TeamMessage{}, err
+		}
+		select {
+		case <-ctx.Done():
+			return TeamMessage{}, ctx.Err()
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	chat, err := readTeam(dir, s)
+	if err != nil {
+		return TeamMessage{}, err
+	}
+	for _, message := range chat.Messages {
+		if message.ID != id {
+			continue
+		}
+		if message.AuthorID != authorID || message.Text != text {
+			return TeamMessage{}, errors.New("ID уже принадлежит другому сообщению")
+		}
+		return message, nil
+	}
+	message := TeamMessage{ID: id, AuthorID: authorID, Date: time.Now().UTC(), Text: text}
+	chat.Members[authorID] = member
+	chat.Messages = append(chat.Messages, message)
+	data, err := json.Marshal(chat)
+	if err != nil {
+		return TeamMessage{}, err
+	}
+	err = saveRunFile(dir, "team.json", data, (*os.File).Sync)
+	return message, err
+}

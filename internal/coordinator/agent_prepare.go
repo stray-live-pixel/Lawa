@@ -159,6 +159,7 @@ func prepareAgentVisits(
 		if err = addChooseDecision(run, step, visit, &command); err != nil {
 			return agentPreparation{}, fmt.Errorf("координатор agent-graph: посещение %q: %w", visit.VisitID, err)
 		}
+		addTeamTools(root, snapshot.Meta.RunID, step.ID, &command)
 		candidates = append(candidates, agentWork{
 			VisitID: visit.VisitID, StepID: visit.StepID, ThreadID: visit.CodexThreadID,
 			Command: command, kind: kind,
