@@ -11,7 +11,6 @@ import {
   TextInput,
 } from '@gravity-ui/uikit';
 import {
-  ArrowUp,
   Pin,
   Xmark,
   CircleCheckFill,
@@ -25,6 +24,7 @@ import bossImage from '../assets/office/boss.png';
 import developerImage from '../assets/office/developer.png';
 import './team-phone.css';
 import { TeamMarkdown } from './TeamMarkdown';
+import { TeamMessageInput } from './TeamMessageInput';
 import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 
 export interface TeamMessage {
@@ -501,29 +501,22 @@ function TeamThread({
                 }
               />
             )}
-            <div className="team-compose-row">
-              <TextArea
-                controlProps={{ 'aria-label': 'Сообщение команде' }}
-                placeholder={
-                  chat.room ? '@boss Самое важное…' : 'Самое важное…'
-                }
-                value={text}
-                onUpdate={setText}
-                minRows={2}
-                maxRows={4}
-                disabled={busy}
-              />
-              <Button
-                type="submit"
-                view="action"
-                size="l"
-                aria-label="Отправить сообщение"
-                loading={busy}
-                disabled={!text.trim() || wordCount(text) > 50}
-              >
-                <Icon data={ArrowUp} />
-              </Button>
-            </div>
+            <TeamMessageInput
+              value={text}
+              onUpdate={setText}
+              employees={Object.keys((liveChat || chat).room?.actors || {}).map(
+                (id) => ({
+                  id,
+                  name: (liveChat || chat).members[id]?.name || id,
+                }),
+              )}
+              renderAvatar={(id) => (
+                <MemberAvatar id={id} chat={liveChat || chat} />
+              )}
+              busy={busy}
+              canSend={Boolean(text.trim()) && wordCount(text) <= 50}
+              placeholder={chat.room ? '@boss Самое важное…' : 'Самое важное…'}
+            />
             <div className="team-compose-meta">
               <Text
                 className="team-compose-count"

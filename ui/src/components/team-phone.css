@@ -204,18 +204,57 @@
   transform-origin: 42% 19%;
 }
 .team-compose {
-  padding: 4px 14px 2px;
+  padding: 2px 14px 2px;
   border-top: 1px solid var(--g-color-line-generic);
   flex: none;
 }
 .team-compose-row {
-  display: flex;
-  gap: 8px;
-  align-items: flex-end;
+  position: relative;
   margin-bottom: 3px;
 }
-.team-compose-row > .g-text-area {
-  flex: 1;
+/* Отдельное место справа не даёт тексту заходить под кнопку отправки. */
+.team-compose-row textarea {
+  padding-right: 44px;
+}
+.team-compose-send.g-button {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+}
+.team-mention-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  z-index: 3;
+  max-height: 180px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--g-color-line-generic);
+  border-radius: 12px;
+  background: var(--g-color-base-background);
+  box-shadow: 0 4px 16px var(--g-color-sfx-shadow);
+}
+.team-mention-option.g-button {
+  display: flex;
+  width: 100%;
+  height: 40px;
+}
+.team-mention-option .g-button__text {
+  width: 100%;
+}
+.team-mention-content {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.team-mention-id {
+  margin-left: auto;
+  color: var(--g-color-text-secondary);
+}
+.team-mention-empty {
+  padding: 10px;
+  color: var(--g-color-text-secondary);
 }
 .team-phone-home {
   height: 20px;
