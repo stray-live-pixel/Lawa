@@ -531,6 +531,16 @@ function TeamThread({
               Чел · {wordCount(text)}/50 слов
               {historyView ? ' · Отправка в текущий чат' : ''}
             </Text>
+            {(liveChat || chat).room && (
+              <Text
+                as="div"
+                className="team-compose-hint"
+                variant="caption-1"
+                color="secondary"
+              >
+                Агенты отвечают только на явный @тег
+              </Text>
+            )}
           </form>
         </>
       ) : (
@@ -565,35 +575,56 @@ function TeamRecipients({
           0,
           Math.ceil((Date.parse(actor.nextCheck) - now) / 1000),
         );
-        const status =
-          achieved || actor.nextCheck.startsWith('0001-')
-            ? 'Ждёт обращения'
-            : actor.status === 'working'
-              ? 'Работает'
-              : actor.status === 'blocked'
-                ? 'Нужна помощь'
-                : seconds > 0
-                  ? `Проверка через ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
-                  : 'Ожидает проверки';
+        const state = achieved ? 'idle' : actor.status;
+        const status = {
+          idle: 'Ждёт обращения',
+          working: 'Работает',
+          monitoring: 'Мониторит',
+          blocked: 'Нужна помощь',
+          unknown: 'Статус не записан',
+        }[state];
+        // nextCheck занятого/остановленного сотрудника не является отсчётом.
+        // После достижения таймер скрыт даже при устаревшем серверном времени.
+        const countdown =
+          !achieved &&
+          (state === 'idle' || state === 'monitoring') &&
+          seconds > 0
+            ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+            : undefined;
+        const description = countdown
+          ? `${status}. Проверка через ${countdown}`
+          : status;
         return (
           <div key={id} className="team-recipient">
             <Button
-              size="s"
-              view="flat-secondary"
+              size="m"
+              view="outlined"
               disabled={busy}
+              title={description}
+              aria-description={description}
               onClick={() => onSelect(id)}
             >
-              @{id}
+              <span className="team-recipient-content">
+                <span
+                  className={`team-recipient-dot team-recipient-dot_${state}`}
+                  aria-hidden="true"
+                />
+                @{id}
+              </span>
             </Button>
-            <Text variant="caption-1" color="secondary">
-              {status}
-            </Text>
+            {countdown && (
+              <Label
+                className="team-recipient-timer"
+                size="xs"
+                theme="normal"
+                aria-hidden="true"
+              >
+                {countdown}
+              </Label>
+            )}
           </div>
         );
       })}
-      <Text variant="caption-1" color="secondary">
-        Агенты отвечают только на явный @тег
-      </Text>
     </div>
   );
 }

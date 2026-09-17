@@ -242,15 +242,23 @@
   color: var(--g-color-text-link);
   font-weight: 500;
 }
+/* Одна строка адресатов: тачпад/свайп и Tab прокручивают переполнение.
+   Внутренний отступ сохраняет угловые лейблы и контур клавиатурного фокуса. */
 .team-recipients {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 4px;
-  margin-bottom: 8px;
+  gap: 10px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 7px 5px 3px 1px;
+  margin-bottom: 7px;
 }
-.team-recipients > .g-text {
-  flex-basis: 100%;
+.team-recipients::-webkit-scrollbar {
+  display: none;
+}
+.team-compose-hint {
+  margin-top: 3px;
 }
 .team-actor-error {
   max-height: 110px;
@@ -260,9 +268,37 @@
 }
 
 .team-recipient {
-  display: grid;
-  gap: 2px;
-  padding-right: 8px;
+  position: relative;
+  flex: none;
+}
+.team-recipient-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.team-recipient-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+  background: var(--g-color-text-secondary);
+}
+.team-recipient-dot_working {
+  background: var(--g-color-text-info);
+}
+.team-recipient-dot_monitoring {
+  background: var(--g-color-text-positive);
+}
+.team-recipient-dot_blocked {
+  background: var(--g-color-text-danger);
+}
+.team-recipient-timer.g-label {
+  position: absolute;
+  right: -4px;
+  top: -7px;
+  pointer-events: none;
+  font-variant-numeric: tabular-nums;
+  box-shadow: 0 0 0 2px var(--g-color-base-background);
 }
 
 .team-pin-achieved .team-pin-heading > svg:first-child,
