@@ -68,6 +68,9 @@ func TestHumanReopensDeveloperAndBoss(t *testing.T) {
 		t.Fatal(err)
 	}
 	claim("boss")
+	if _, err := runstore.AcceptTeamTasks(t.Context(), e.Root, run, "boss", "accepted", []string{"question", "question-2"}, "answer", "Сверил объяснение прыжка с кодом"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := runstore.CompleteTeam(t.Context(), e.Root, run, "boss", "finish-again", "@human Разработчик подтвердил: прыжок задаётся скоростью и гравитацией."); err != nil {
 		t.Fatal(err)
 	}

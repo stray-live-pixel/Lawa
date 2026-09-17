@@ -106,6 +106,16 @@ func TestConfiguredDesignerLifecycle(t *testing.T) {
 	if _, err := runstore.ClaimTeamDelivery(t.Context(), root, run, "boss", now); err != nil {
 		t.Fatal(err)
 	}
+	// Полученный отчёт ещё не закрывает поручения: Босс отдельно проверяет их.
+	chat = readChat(t, e, run)
+	var taskIDs []string
+	for id := range chat.Room.Tasks {
+		taskIDs = append(taskIDs, id)
+	}
+	resultID := chat.Messages[len(chat.Messages)-1].ID
+	if _, err := runstore.AcceptTeamTasks(t.Context(), root, run, "boss", "accepted", taskIDs, resultID, "Проверил контраст и соответствие сценарию"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := runstore.CompleteTeam(t.Context(), root, run, "boss", "complete", "@human Дизайнер проверил синий цвет."); err != nil {
 		t.Fatal(err)
 	}

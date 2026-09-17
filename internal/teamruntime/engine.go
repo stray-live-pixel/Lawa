@@ -263,6 +263,20 @@ func (e *Engine) finish(ctx context.Context, run, id string) error {
 	return runstore.UpdateTeam(ctx, e.Root, run, func(chat *runstore.TeamChat) error {
 		a := chat.Room.Actors[id]
 		end := a.Delivery.End
+		// Нормальный final не публикуется в командный чат. Если сотрудник
+		// забыл отчёт, поручение остаётся открытым, а Босс получает явный тег.
+		if id != "boss" && chat.Room.AchievedAt == nil {
+			reported := false
+			for _, m := range chat.Messages[end:] {
+				if m.AuthorID == id && m.To == "boss" {
+					reported = true
+					break
+				}
+			}
+			if !reported {
+				runstore.NotifyTeamProblem(chat, id, a.Delivery.IDs[0], "ход завершён без сообщения Боссу")
+			}
+		}
 		a.Cursor = end
 		a.Delivery = nil
 		a.Status = "idle"
@@ -276,6 +290,16 @@ func (e *Engine) finish(ctx context.Context, run, id string) error {
 			return nil
 		}
 		a.NextCheck = now.Add(runstore.TeamIdleInterval)
+		if id != "boss" {
+			// После team_post Босс может проснуться раньше turn/completed коллеги.
+			// Отдельное событие завершения не даёт потерять повторную приёмку.
+			for _, m := range chat.Messages[end:] {
+				if m.AuthorID == id && m.To == "boss" {
+					runstore.NotifyTeamResultReady(chat, id, m.ID)
+					break
+				}
+			}
+		}
 		if runstore.TeamHasUrgentMessages(*chat, id, end) {
 			a.NextCheck = now
 		}
@@ -291,13 +315,16 @@ func (e *Engine) finish(ctx context.Context, run, id string) error {
 // block сохраняет неподтверждённую порцию. Повтор через UI разрешён только если
 // клиент доказал, что создание/отправка вообще не предпринимались.
 func (e *Engine) block(ctx context.Context, run, id, problem string, attempted bool) error {
-	return e.change(ctx, run, id, func(a *runstore.TeamActor) {
+	return runstore.UpdateTeam(ctx, e.Root, run, func(chat *runstore.TeamChat) error {
+		a := chat.Room.Actors[id]
 		a.Status = "blocked"
 		a.Error = problem
 		a.Summary = "Нужна помощь"
 		if a.Delivery != nil {
 			a.Delivery.Attempted = attempted
+			runstore.NotifyTeamProblem(chat, id, a.Delivery.IDs[0], "работа заблокирована; причина указана в состоянии сотрудника")
 		}
+		return nil
 	})
 }
 
@@ -356,6 +383,7 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 	role = fmt.Sprintf("Ты %s (@%s).\nПредыстория: %s\nИнструкции личности: %s\nПравила команды: %s", character.Name, id, character.History, character.Instructions, role)
 	if id == "boss" {
 		catalog, _ := json.Marshal(chat.Room.Catalog)
+		role += bossResponsibilityPrompt
 		role += "\nКаталог доступных личностей (приглашённые указаны в team_read):\n" + string(catalog)
 	}
 	var inputs []runstore.TeamMessage
@@ -392,6 +420,10 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 	if id == "boss" {
 		command.DynamicTools = append(command.DynamicTools, codex.DynamicTool{Name: "team_set_goal", Description: "Обновить закреплённую цель по новой постановке Чела.", InputSchema: []byte(`{"type":"object","properties":{"goal":{"type":"string"}},"required":["goal"],"additionalProperties":false}`)})
 		command.DynamicTools = append(command.DynamicTools, codex.DynamicTool{Name: "team_complete", Description: "Отметить проверенную цель достигнутой и отправить последний итог @human. После успеха заверши ход.", InputSchema: []byte(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`)})
+		command.DynamicTools = append(command.DynamicTools,
+			codex.DynamicTool{Name: "team_accept", Description: "Принять проверенный результат поручений сотрудника. Укажи отчёт и фактически выполненную проверку.", InputSchema: []byte(`{"type":"object","properties":{"task_ids":{"type":"array","items":{"type":"string"}},"result_id":{"type":"string"},"evidence":{"type":"string"}},"required":["task_ids","result_id","evidence"],"additionalProperties":false}`)},
+			codex.DynamicTool{Name: "team_retry", Description: "Возобновить сотрудника только после доказанного сбоя до отправки. Неоднозначная доставка не повторяется.", InputSchema: []byte(`{"type":"object","properties":{"id":{"type":"string"}},"required":["id"],"additionalProperties":false}`)},
+		)
 		// Schema и handler используют один неизменяемый каталог. Пустой каталог
 		// сотрудников означает работу одного Босса: инструмент призыва не нужен.
 		ids := []string{}
@@ -407,6 +439,9 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 		}
 	}
 	command.CallDynamicTool = func(ctx context.Context, call codex.DynamicToolCall) (string, error) {
+		if result, handled, err := e.controlTool(ctx, run, id, call); handled {
+			return result, err
+		}
 		var result any
 		var err error
 		switch call.Tool {
@@ -480,20 +515,6 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 // RetryUnsent снимает блокировку только при доказанном отсутствии отправки.
 func RetryUnsent(ctx context.Context, root, run, id string) error {
 	return runstore.UpdateTeam(ctx, root, run, func(chat *runstore.TeamChat) error {
-		if chat.Room == nil || chat.Room.Actors[id] == nil {
-			return errors.New("нет сотрудника")
-		}
-		if chat.Room.AchievedAt != nil {
-			return errors.New("цель уже достигнута")
-		}
-		a := chat.Room.Actors[id]
-		if a.Status != "blocked" || a.Delivery == nil || a.Delivery.Attempted {
-			return errors.New("повтор неоднозначной доставки запрещён; проверьте историю Codex")
-		}
-		a.Delivery = nil
-		a.Status = "idle"
-		a.Error = ""
-		a.NextCheck = time.Now().UTC()
-		return nil
+		return resetUnsent(chat, id)
 	})
 }

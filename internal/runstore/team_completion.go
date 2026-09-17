@@ -63,6 +63,11 @@ func CompleteTeam(ctx context.Context, root, run, author, id, text string) (Team
 				return errors.New("сначала дождись завершения работы сотрудников и проверь результат")
 			}
 		}
+		for _, task := range chat.Room.Tasks {
+			if task.AcceptedAt == nil {
+				return errors.New("сначала проверь и прими результаты всех поручений через team_accept")
+			}
+		}
 		// Общая маршрутизация проверяет активное поручение, лимит и авторство.
 		result, err = appendRoomMessage(chat, author, id, text)
 		if err != nil {

@@ -21,6 +21,8 @@ type TeamRoom struct {
 	// Catalog — снимок доступных личностей из workflow при создании заказа.
 	// Только Actors означает приглашённых сотрудников. Каталог не меняется в ходе заказа.
 	Catalog map[string]workflow.Character `json:"catalog,omitempty"`
+	// Tasks отделяет полученные сообщения от принятых Боссом результатов.
+	Tasks map[string]*TeamTask `json:"tasks,omitempty"`
 	// AchievedAt останавливает новые поручения; nil сохраняет прежний активный режим.
 	AchievedAt *time.Time            `json:"achievedAt,omitempty"`
 	Actors     map[string]*TeamActor `json:"actors"`
@@ -29,6 +31,8 @@ type TeamRoom struct {
 // TeamActor — личность на весь заказ, с одним Codex thread и последовательными
 // turn. Cursor — число просмотренных сообщений; во время работы не сдвигается.
 type TeamActor struct {
+	// Attempt различает повторные доказанно недоставленные попытки одного поручения.
+	Attempt   uint64        `json:"attempt,omitempty"`
 	ThreadID  string        `json:"threadId,omitempty"`
 	TurnID    string        `json:"turnId,omitempty"`
 	Cursor    int           `json:"cursor"`
@@ -136,6 +140,7 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 	}
 	reopenForHuman(chat, &m)
 	chat.Messages = append(chat.Messages, m)
+	recordTeamTask(chat, m)
 	wakeForMessage(chat, m)
 	return m, nil
 }
@@ -212,6 +217,7 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 			actor.NextCheck = now.Add(TeamIdleInterval)
 			return nil
 		}
+		actor.Attempt++
 		actor.Delivery = &TeamDelivery{IDs: ids, End: len(chat.Messages)}
 		actor.Status, actor.Summary, actor.Error = "working", "Читает поручение", ""
 		claimed = true
@@ -275,6 +281,14 @@ func (chat TeamChat) validateRoom() error {
 		}
 		if at.IsZero() || !found {
 			return errors.New("повреждено завершение цели")
+		}
+	}
+	for id, task := range chat.Room.Tasks {
+		if task == nil || task.ID != id || task.Assignee == "boss" || chat.Room.Actors[task.Assignee] == nil {
+			return errors.New("повреждено поручение команды")
+		}
+		if task.AcceptedAt != nil && (task.AcceptedAt.IsZero() || task.ResultID == "" || task.Evidence == "") {
+			return errors.New("повреждена приёмка поручения")
 		}
 	}
 	for id, actor := range chat.Room.Actors {

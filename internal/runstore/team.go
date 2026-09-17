@@ -35,6 +35,8 @@ type TeamMember struct {
 // TeamMessage получает время и автора на стороне Lawa. ID — ключ повтора:
 // потеря сетевого подтверждения не должна удваивать сообщение при retry.
 type TeamMessage struct {
+	TaskIDs    []string  `json:"taskIds,omitempty"`  // Поручения, явно принятые Боссом этим событием.
+	ResultID   string    `json:"resultId,omitempty"` // Сообщение с проверенным результатом.
 	Goal       string    `json:"goal,omitempty"`
 	NotifyBoss bool      `json:"notifyBoss,omitempty"`
 	To         string    `json:"to,omitempty"`
@@ -100,6 +102,7 @@ func readTeam(dir *os.Root, s Snapshot) (TeamChat, error) {
 				chat.Room.Catalog["boss"] = boss
 			}
 		}
+		initializeTeamTasks(&chat)
 		if err := chat.validateRoom(); err != nil {
 			return TeamChat{}, err
 		}

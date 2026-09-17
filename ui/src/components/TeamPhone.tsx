@@ -361,7 +361,7 @@ function TeamThread({
               </Text>
             )}
             {messages.map((message) =>
-              message.kind === 'system' ||
+              message.authorId === 'system' ||
               message.kind === 'achievement' ||
               message.kind === 'goal_updated' ? (
                 <div key={message.id} className="team-system-message">

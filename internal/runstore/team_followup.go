@@ -15,7 +15,7 @@ func TeamHasUrgentMessages(chat TeamChat, id string, from int) bool {
 		if !TeamMessageForActor(m, id) {
 			continue
 		}
-		if m.AuthorID == "human" {
+		if m.AuthorID == "human" || m.AuthorID == "system" && m.To == "boss" {
 			return true
 		}
 		if id == "boss" && chat.Room.Actors[m.AuthorID] != nil && m.AuthorID != "boss" {
@@ -34,6 +34,11 @@ func TeamHasUrgentMessages(chat TeamChat, id string, from int) bool {
 func pendingHumanRelay(chat TeamChat) bool {
 	for _, m := range chat.Messages {
 		if m.AuthorID != "human" || !m.NotifyBoss {
+			continue
+		}
+		// При сбое Босс вправе объяснить проблему Челу и запросить помощь.
+		// Это не приёмка: незавершённое поручение продолжает запрещать team_complete.
+		if actor := chat.Room.Actors[m.To]; actor != nil && actor.Status == "blocked" {
 			continue
 		}
 		answered := false
