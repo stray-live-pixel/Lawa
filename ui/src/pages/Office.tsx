@@ -16,6 +16,7 @@ import {
   useEmployeeSprite,
 } from '../components/appearances';
 import { AppearancePicker } from '../components/AppearancePicker';
+import { CharacterGallery } from '../components/CharacterGallery';
 import './office.css';
 
 const states = {
@@ -46,6 +47,7 @@ export default function Office() {
         aria-label="Офис агентов"
       >
         <div className="office-toolbar">
+          <CharacterGallery />
           <AppearancePicker
             members={Object.fromEntries(
               Object.keys(currentChat?.room?.actors || { boss: {} }).map(

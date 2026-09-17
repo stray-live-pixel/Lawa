@@ -22,6 +22,25 @@ export const appearances: Appearance[] = catalog.map((item) => ({
   sprite: sprites[`../assets/office/characters/${item.id}.png`],
 }));
 const defaults: Record<string, string> = { boss, developer };
+// Галерея включает также исходные образы: их ID уже используются в реестре
+// участников. Эти два образа не меняют состав случайного выбора из 40 новых.
+export const characterGallery: Appearance[] = [
+  {
+    id: 'boss',
+    name: 'Босс',
+    profession: 'Исходный образ',
+    kind: 'human',
+    sprite: boss,
+  },
+  {
+    id: 'developer',
+    name: 'Разработчик',
+    profession: 'Исходный образ',
+    kind: 'human',
+    sprite: developer,
+  },
+  ...appearances,
+];
 type Choices = Record<string, string>;
 const storageKey = (scope: string) =>
   `lawa-office-appearance-v1:${scope || 'draft'}`;
