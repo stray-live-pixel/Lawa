@@ -9,6 +9,7 @@ import {
 import { ThemePicker } from '../components/Theme';
 import { ErrorNotice } from '../components/ui';
 import { usePoll } from '../hooks/api';
+import { TeamPlayer, useTeamPlayer } from '../components/TeamPlayer';
 import room from '../assets/office/room-transparent.png';
 import boss from '../assets/office/boss.png';
 import developer from '../assets/office/developer.png';
@@ -19,6 +20,7 @@ const states = {
   working: 'Работает',
   monitoring: 'Мониторит',
   blocked: 'Нужна помощь',
+  unknown: 'Статус не записан',
 };
 
 // Сцена читает тот же заказ, что телефон. Стол появляется только после durable
@@ -28,12 +30,17 @@ export default function Office() {
     () => new URLSearchParams(window.location.search).get('run') || '',
   );
   const [phoneOpen, setPhoneOpen] = useState(false);
-  const { data: chat, error } = usePoll<TeamChat>(
+  const { data: currentChat, error } = usePoll<TeamChat>(
     run ? `/api/teams/${encodeURIComponent(run)}` : null,
   );
+  const player = useTeamPlayer(currentChat);
+  const chat = player.view;
   const hasDeveloper = Boolean(chat?.room?.actors.developer);
   return (
-    <main className="office" aria-label="Офис агентов">
+    <main
+      className={`office ${chat?.room ? 'office-with-player' : ''}`}
+      aria-label="Офис агентов"
+    >
       <div className="office-toolbar">
         <Button
           view="flat"
@@ -75,8 +82,13 @@ export default function Office() {
           )}
         </div>
       </div>
+      <TeamPlayer player={player} />
       {phoneOpen && (
-        <TeamPhone onClose={() => setPhoneOpen(false)} onRunChange={setRun} />
+        <TeamPhone
+          onClose={() => setPhoneOpen(false)}
+          onRunChange={setRun}
+          player={player}
+        />
       )}
     </main>
   );
@@ -100,7 +112,9 @@ function Employee({
   const status = actor?.status || 'idle';
   const label = states[status] || states.idle;
   const message =
-    status === 'working' || status === 'blocked' ? actor?.summary : '';
+    status === 'working' || status === 'blocked' || status === 'unknown'
+      ? actor?.summary
+      : '';
   return (
     <div className={`office-employee office-${id}`}>
       <img src={sprite} width="1254" height="1254" alt={`${name} за MacBook`} />
@@ -121,7 +135,7 @@ function Employee({
         >
           <span className="office-nameplate-content">
             <span
-              className={`office-status-dot office-status-dot_${status === 'blocked' ? 'idle' : status}`}
+              className={`office-status-dot office-status-dot_${status === 'blocked' || status === 'unknown' ? 'idle' : status}`}
               aria-hidden="true"
             />
             {name}

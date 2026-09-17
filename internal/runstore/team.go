@@ -15,6 +15,7 @@ import (
 // TeamChat — общая доска корневого заказа. Цель неизменна, сообщения добавляются
 // последовательно. Память кубиков остаётся рабочими заметками, чат — общими фактами.
 type TeamChat struct {
+	History  *TeamHistory          `json:"history,omitempty"`
 	Room     *TeamRoom             `json:"room,omitempty"`
 	RunID    string                `json:"runId"`
 	Goal     string                `json:"goal"`
@@ -105,6 +106,14 @@ func ReadTeam(root, runID string) (TeamChat, error) {
 	}
 	defer dir.Close()
 	return readTeam(dir, s)
+}
+
+// ReadTeamForAgent сохраняет контракт общей памяти без кадров UI: история
+// визуальных состояний не должна раздувать контекст каждого team_read.
+func ReadTeamForAgent(root, runID string) (TeamChat, error) {
+	chat, err := ReadTeam(root, runID)
+	chat.History = nil
+	return chat, err
 }
 
 // PostTeam связывает автора с реальным кубиком sourceRun. Пустой stepID означает
@@ -230,9 +239,15 @@ func UpdateTeam(ctx context.Context, root, runID string, update func(*TeamChat) 
 	if err != nil {
 		return err
 	}
+	// Старой комнате сначала сохраняем достоверную точку «сейчас». Более
+	// ранние состояния восстанавливаются отдельно, без догадок при обычном GET.
+	if chat.Room != nil && chat.History == nil {
+		recordTeamFrame(&chat, time.Now())
+	}
 	if err = update(&chat); err != nil {
 		return err
 	}
+	recordTeamFrame(&chat, time.Now())
 	data, err := json.Marshal(chat)
 	if err != nil {
 		return err

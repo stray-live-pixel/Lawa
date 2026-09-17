@@ -47,6 +47,10 @@ it('показывает приглашённого Разработчика и 
       async () =>
         new Response(
           JSON.stringify({
+            runId: 'order',
+            goal: 'Игра',
+            members: {},
+            messages: [],
             room: {
               actors: {
                 boss: {

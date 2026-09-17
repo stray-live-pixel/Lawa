@@ -106,3 +106,7 @@
   top: 45%;
   width: 25%;
 }
+
+.office-with-player .office-scene {
+  width: min(100%, 1100px, calc((100dvh - 220px) * 1.5));
+}

@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -8,7 +9,9 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 
+	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/teamruntime"
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
@@ -154,4 +157,36 @@ func (h handler) postTeam(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	teamJSON(w, message)
+}
+
+// recoverTeamHistory восстанавливает только наблюдаемую историю через read-only
+// App Server. Это явное действие пользователя, а не запуск модели при GET.
+func (h handler) recoverTeamHistory(w http.ResponseWriter, r *http.Request) {
+	var input struct{}
+	if !teamInput(w, r, &input) {
+		return
+	}
+	s, err := runstore.TeamRoot(h.root, r.PathValue("run"))
+	if err != nil {
+		http.Error(w, diagnostic(err), 404)
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	observer, err := codex.OpenObserver(ctx, codex.Connection{CWD: s.Meta.CWD})
+	if err != nil {
+		http.Error(w, diagnostic(err), 502)
+		return
+	}
+	defer observer.Close()
+	if err = teamruntime.RecoverHistory(ctx, h.root, s.Meta.RunID, observer.ReadTurns); err != nil {
+		http.Error(w, diagnostic(err), 409)
+		return
+	}
+	chat, err := runstore.ReadTeam(h.root, s.Meta.RunID)
+	if err != nil {
+		http.Error(w, diagnostic(err), 500)
+		return
+	}
+	teamJSON(w, chat)
 }

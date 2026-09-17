@@ -1,0 +1,65 @@
+/* Плеер использует общие токены и контролы Lawa; кадры не меняют тему сцены. */
+.team-player {
+  flex: none;
+  width: min(760px, calc(100% - 32px));
+  align-self: center;
+  margin: 0 auto 12px;
+  padding: 10px 16px;
+  box-sizing: border-box;
+  border: 1px solid var(--g-color-line-generic);
+  border-radius: var(--g-border-radius-l);
+  background: var(--g-color-base-background);
+}
+.team-player-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.team-player-time {
+  flex: 1;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.team-player-controls .g-select {
+  width: 82px;
+}
+.team-player-range {
+  display: flex;
+  justify-content: space-between;
+  font-variant-numeric: tabular-nums;
+}
+.team-player-compact {
+  width: calc(100% - 24px);
+  padding: 6px 8px;
+  margin-bottom: 6px;
+}
+.team-player-compact .team-player-controls {
+  gap: 2px;
+}
+.team-player-compact .team-player-controls .g-select {
+  width: 74px;
+}
+.team-player-recovery {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.team-history-note {
+  padding: 12px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: none;
+}
+
+/* Tooltip расположен над дорожкой и не занимает пустую строку в телефоне. */
+.team-player .g-slider {
+  position: relative;
+}
+.team-player .g-slider__top {
+  position: absolute;
+  inset: -24px 0 auto;
+}

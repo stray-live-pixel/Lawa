@@ -11,6 +11,11 @@ import {
 import { ArrowUp, Pin, Xmark } from '@gravity-ui/icons';
 import { usePoll } from '../hooks/api';
 import { Choice, ErrorNotice } from './ui';
+import {
+  TeamPlayer,
+  type TeamPlayerState,
+  type TeamHistory,
+} from './TeamPlayer';
 import bossImage from '../assets/office/boss.png';
 import developerImage from '../assets/office/developer.png';
 import './team-phone.css';
@@ -25,13 +30,14 @@ export interface TeamMessage {
   replyTo?: string;
 }
 export interface TeamActor {
-  status: 'idle' | 'working' | 'monitoring' | 'blocked';
+  status: 'idle' | 'working' | 'monitoring' | 'blocked' | 'unknown';
   summary?: string;
   error?: string;
   nextCheck: string;
   delivery?: { attempted: boolean };
 }
 export interface TeamChat {
+  history?: TeamHistory;
   runId: string;
   goal: string;
   members: Record<string, { name: string; avatar?: string }>;
@@ -67,9 +73,11 @@ async function post<T>(url: string, input: unknown): Promise<T> {
 export function TeamPhone({
   onClose,
   onRunChange,
+  player,
 }: {
   onClose: () => void;
   onRunChange?: (run: string) => void;
+  player?: TeamPlayerState;
 }) {
   const [run, setRun] = useState(
     () => new URLSearchParams(window.location.search).get('run') || '',
@@ -131,7 +139,21 @@ export function TeamPhone({
         {creating ? (
           <NewTeam cwd={teams?.cwd || ''} onCreated={selectRun} />
         ) : (
-          <TeamThread key={run} run={run} />
+          <>
+            {player?.chat?.runId === run && (
+              <TeamPlayer player={player} compact />
+            )}
+            <TeamThread
+              key={run}
+              run={run}
+              historyView={
+                player?.historical && player.view?.runId === run
+                  ? player.view
+                  : undefined
+              }
+              onLive={player?.live}
+            />
+          </>
         )}
         <div className="team-phone-home" aria-hidden="true">
           <span />
@@ -244,9 +266,18 @@ function MemberAvatar({ id, chat }: { id: string; chat: TeamChat }) {
 // Polling получает новые реплики, локально подтверждённые записи защищены от
 // запоздавшего GET. Порядок задаёт серверная запись, а не часы браузера.
 // Скролл следует за новыми сообщениями только у нижнего края.
-function TeamThread({ run }: { run: string }) {
+function TeamThread({
+  run,
+  historyView,
+  onLive,
+}: {
+  run: string;
+  historyView?: TeamChat;
+  onLive?: () => void;
+}) {
   const url = `/api/teams/${encodeURIComponent(run)}`;
-  const { data: chat, error: readError } = usePoll<TeamChat>(url);
+  const { data: liveChat, error: readError } = usePoll<TeamChat>(url);
+  const chat = historyView || liveChat;
   const [text, setText] = useState('');
   const [confirmed, setConfirmed] = useState<TeamMessage[]>([]);
   const [busy, setBusy] = useState(false);
@@ -256,16 +287,15 @@ function TeamThread({ run }: { run: string }) {
   const follows = useRef(true);
   const messages = [
     ...new Map(
-      [...(chat?.messages || []), ...confirmed].map((message) => [
-        message.id,
-        message,
-      ]),
+      [...(chat?.messages || []), ...(historyView ? [] : confirmed)].map(
+        (message) => [message.id, message],
+      ),
     ).values(),
   ];
   useEffect(() => {
     if (follows.current && list.current)
       list.current.scrollTop = list.current.scrollHeight;
-  }, [messages.length]);
+  }, [messages.length, historyView]);
   async function send() {
     if (busy || !text.trim() || wordCount(text) > 50) return;
     setBusy(true);
@@ -373,7 +403,8 @@ function TeamThread({ run }: { run: string }) {
               ),
             )}
           </div>
-          {chat.room &&
+          {!historyView &&
+            chat.room &&
             Object.entries(chat.room.actors)
               .filter(([, actor]) => actor.error)
               .map(([id, actor]) => (
@@ -402,55 +433,66 @@ function TeamThread({ run }: { run: string }) {
                   )}
                 </div>
               ))}
-          <form
-            className="team-compose"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void send();
-            }}
-          >
-            <ErrorNotice error={error} />
-            {chat.room && (
-              <TeamRecipients
-                actors={chat.room.actors}
-                busy={busy}
-                onSelect={(id) =>
-                  setText(
-                    `@${id} ${text.replace(/^@(boss|developer|human)\s*/, '')}`,
-                  )
-                }
-              />
-            )}
-            <div className="team-compose-row">
-              <TextArea
-                controlProps={{ 'aria-label': 'Сообщение команде' }}
-                placeholder={
-                  chat.room ? '@boss Самое важное…' : 'Самое важное…'
-                }
-                value={text}
-                onUpdate={setText}
-                minRows={2}
-                maxRows={4}
-                disabled={busy}
-              />
-              <Button
-                type="submit"
-                view="action"
-                size="l"
-                aria-label="Отправить сообщение"
-                loading={busy}
-                disabled={!text.trim() || wordCount(text) > 50}
-              >
-                <Icon data={ArrowUp} />
+          {historyView ? (
+            <div className="team-history-note">
+              <Text variant="caption-2" color="secondary">
+                Просмотр истории
+              </Text>
+              <Button size="s" onClick={onLive}>
+                К текущему чату
               </Button>
             </div>
-            <Text
-              variant="caption-2"
-              color={wordCount(text) > 50 ? 'danger' : 'secondary'}
+          ) : (
+            <form
+              className="team-compose"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void send();
+              }}
             >
-              Чел · {wordCount(text)}/50 слов
-            </Text>
-          </form>
+              <ErrorNotice error={error} />
+              {chat.room && (
+                <TeamRecipients
+                  actors={chat.room.actors}
+                  busy={busy}
+                  onSelect={(id) =>
+                    setText(
+                      `@${id} ${text.replace(/^@(boss|developer|human)\s*/, '')}`,
+                    )
+                  }
+                />
+              )}
+              <div className="team-compose-row">
+                <TextArea
+                  controlProps={{ 'aria-label': 'Сообщение команде' }}
+                  placeholder={
+                    chat.room ? '@boss Самое важное…' : 'Самое важное…'
+                  }
+                  value={text}
+                  onUpdate={setText}
+                  minRows={2}
+                  maxRows={4}
+                  disabled={busy}
+                />
+                <Button
+                  type="submit"
+                  view="action"
+                  size="l"
+                  aria-label="Отправить сообщение"
+                  loading={busy}
+                  disabled={!text.trim() || wordCount(text) > 50}
+                >
+                  <Icon data={ArrowUp} />
+                </Button>
+              </div>
+              <Text
+                variant="caption-2"
+                color={wordCount(text) > 50 ? 'danger' : 'secondary'}
+              >
+                Чел · {wordCount(text)}/50 слов
+              </Text>
+            </form>
+          )}
         </>
       ) : (
         !readError && <p className="team-empty">Загрузка чата…</p>

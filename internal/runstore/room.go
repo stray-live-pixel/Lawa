@@ -48,6 +48,7 @@ func initializeRoom(chat *TeamChat) {
 	chat.Members["boss"] = TeamMember{Name: "Босс", Avatar: "boss"}
 	chat.Room = &TeamRoom{Actors: map[string]*TeamActor{"boss": {NextCheck: now, Status: "idle"}}}
 	chat.Messages = append(chat.Messages, TeamMessage{ID: "initial-goal", AuthorID: "human", To: "boss", Kind: "goal", Date: now, Text: "@boss Проанализируй закреплённую цель и организуй выполнение."})
+	recordTeamFrame(chat, now)
 }
 
 // addressedTo распознаёт ровно один явный адрес в начале сообщения. Вложения,

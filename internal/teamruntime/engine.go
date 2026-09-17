@@ -376,7 +376,7 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 			var in struct{}
 			err = json.Unmarshal(call.Arguments, &in, json.RejectUnknownMembers(true))
 			if err == nil {
-				result, err = runstore.ReadTeam(e.Root, run)
+				result, err = runstore.ReadTeamForAgent(e.Root, run)
 			}
 		case "team_post":
 			var in struct {

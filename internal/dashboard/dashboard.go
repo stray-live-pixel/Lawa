@@ -110,6 +110,7 @@ func Handler(root string) http.Handler {
 	mux.HandleFunc("GET /api/teams", h.teams)
 	mux.HandleFunc("POST /api/teams", h.createTeam)
 	mux.HandleFunc("GET /api/teams/{run}", h.team)
+	mux.HandleFunc("POST /api/teams/{run}/history/recover", h.recoverTeamHistory)
 	mux.HandleFunc("POST /api/teams/{run}/messages", h.postTeam)
 	mux.HandleFunc("POST /api/teams/{run}/actors/{actor}/retry", h.retryTeam)
 	mux.HandleFunc("GET /api/preview", h.preview)
