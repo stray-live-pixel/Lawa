@@ -118,18 +118,18 @@ export function TeamPhone({
       }}
     >
       <header className="team-phone-header" {...phoneWindow.move}>
-        <span className="team-phone-camera-island" aria-hidden="true">
-          <span className="team-phone-camera-lens" />
-        </span>
-        <Text
-          variant="subheader-2"
-          className="team-phone-title"
+        <span
+          className="team-phone-move-grip"
           role="button"
           tabIndex={0}
           aria-label="Переместить телефон"
           title="Перетащите окно или используйте стрелки"
           onKeyDown={(event) => phoneWindow.keyboard('move', event)}
-        >
+        />
+        <span className="team-phone-camera-island" aria-hidden="true">
+          <span className="team-phone-camera-lens" />
+        </span>
+        <Text variant="subheader-2" className="team-phone-title">
           Чат команды
         </Text>
         {historical && (
@@ -169,9 +169,6 @@ export function TeamPhone({
           />
         </>
       )}
-      <div className="team-phone-home" aria-hidden="true">
-        <span />
-      </div>
       <button
         className="team-phone-resize"
         type="button"
