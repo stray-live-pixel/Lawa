@@ -96,14 +96,20 @@
   border-top-color: var(--g-color-base-float);
 }
 
-/* Два независимых стола занимают свободный пол, сохраняя общий масштаб миниатюр. */
-.office-scene-team .office-boss {
-  left: 38%;
-  top: 44%;
+/* В большой команде длинные имена не закрывают соседние рабочие места. */
+.office-scene-many .office-nameplate {
+  left: 50%;
+  top: 85%;
+  transform: translateX(-50%);
+  max-width: 130%;
 }
-.office-developer {
-  left: 65%;
-  top: 53%;
+.office-scene-many .office-nameplate-content {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.office-scene-many .office-status-dot {
+  flex-shrink: 0;
 }
 
 .office-with-player .office-scene {

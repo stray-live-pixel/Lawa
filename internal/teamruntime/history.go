@@ -61,7 +61,7 @@ type historyEvent struct {
 	messages               int
 }
 
-// recoveredFrames соединяет историю двух сотрудников с append-only перепиской.
+// recoveredFrames соединяет историю сотрудников с append-only перепиской.
 // Сохранённые нативные кадры начиная с cutoff всегда имеют приоритет. Даты turn
 // имеют секундную точность: конец округляется вверх, чтобы не оказаться раньше
 // последней реплики той же секунды. Промежуток без сведений помечен unknown.
@@ -83,11 +83,11 @@ func recoveredFrames(chat runstore.TeamChat, turns map[string][]codex.Historical
 			at = lastDate
 		}
 		lastDate = at
-		if m.Kind == "system" && m.ID == "summon-developer" {
-			events = append(events, historyEvent{at: at, actor: "developer", status: "idle"})
+		if m.Kind == "system" && strings.HasPrefix(m.ID, "summon-") && chat.Room.Actors[strings.TrimPrefix(m.ID, "summon-")] != nil {
+			events = append(events, historyEvent{at: at, actor: strings.TrimPrefix(m.ID, "summon-"), status: "idle"})
 		}
 		summary := ""
-		if m.AuthorID == "boss" || m.AuthorID == "developer" {
+		if chat.Room.Actors[m.AuthorID] != nil {
 			words := strings.Fields(strings.TrimPrefix(m.Text, "@"+m.To))
 			summary = strings.Join(words[:min(7, len(words))], " ")
 		}
@@ -115,7 +115,7 @@ func recoveredFrames(chat runstore.TeamChat, turns map[string][]codex.Historical
 				status, summary = "blocked", "Ход остановлен"
 			} else if id == "boss" {
 				for _, m := range chat.Messages {
-					if m.AuthorID == id && m.To == "developer" && !m.Date.Before(at) && m.Date.Before(end) {
+					if m.AuthorID == id && m.To != "boss" && chat.Room.Actors[m.To] != nil && !m.Date.Before(at) && m.Date.Before(end) {
 						status = "monitoring"
 					}
 				}

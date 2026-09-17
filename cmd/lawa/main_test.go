@@ -292,7 +292,7 @@ func TestSkillInstruction(t *testing.T) {
 	if !bytes.Equal(out.Bytes(), want) {
 		t.Error("lawa skill изменяет содержимое встроенного SKILL.md")
 	}
-	const metadata = "---\nname: lawa\ndescription: Запуск, наблюдение и продолжение JSON-workflow Lawa через Codex App Server.\n---\n\n"
+	const metadata = "---\nname: lawa\ndescription: Запуск, наблюдение и продолжение workflow и команд личностей Lawa через CLI и Codex App Server.\n---\n\n"
 	if !strings.HasPrefix(skillInstruction, metadata) {
 		t.Errorf("инструкция не начинается с обязательных метаданных SKILL.md: %q", skillInstruction)
 	}

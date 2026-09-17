@@ -8,13 +8,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"strings"
 	"time"
 
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/teamruntime"
-	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // teamInput принимает ограниченный JSON только от своего UI. Сервер остаётся
@@ -56,10 +54,8 @@ func (h handler) teams(w http.ResponseWriter, r *http.Request) {
 	}
 	result := struct {
 		Teams    []entry  `json:"teams"`
-		CWD      string   `json:"cwd"`
 		Problems []string `json:"problems"`
 	}{Teams: []entry{}, Problems: []string{}}
-	result.CWD, _ = os.Getwd()
 	entries, err := os.ReadDir(h.root)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		http.Error(w, diagnostic(err), 500)
@@ -85,37 +81,6 @@ func (h handler) teams(w http.ResponseWriter, r *http.Request) {
 		result.Teams = append(result.Teams, entry{ID: chat.RunID, Goal: chat.Goal})
 	}
 	teamJSON(w, result)
-}
-
-// createTeam сохраняет цель и первое обращение к Боссу. Фоновый Engine в Serve
-// автоматически подхватывает заказ; HTTP не удерживает соединение на время turn.
-// Цель не ограничивается длиной сообщения, CWD выбирается человеком.
-func (h handler) createTeam(w http.ResponseWriter, r *http.Request) {
-	var input struct {
-		Goal string `json:"goal"`
-		CWD  string `json:"cwd"`
-	}
-	if !teamInput(w, r, &input) {
-		return
-	}
-	if strings.TrimSpace(input.Goal) == "" || len(input.Goal) > 65536 || strings.TrimSpace(input.CWD) == "" {
-		http.Error(w, "нужны цель (до 64 КБ) и рабочая папка", http.StatusBadRequest)
-		return
-	}
-	definition := workflow.Workflow{ID: "office-boss", Characters: map[string]workflow.Character{"boss": workflow.Boss()}, Steps: []workflow.Step{{ID: "boss", Type: "agent", Character: "boss", Prompt: workflow.BossAssignment, DependsOn: []string{}}}}
-	data, err := json.Marshal(definition)
-	if err != nil {
-		http.Error(w, diagnostic(err), 500)
-		return
-	}
-	s, err := runstore.Create(h.root, runstore.Input{Order: true, Team: true, WorkflowJSON: data, Task: input.Goal, CWD: input.CWD})
-	if err != nil {
-		http.Error(w, diagnostic(err), http.StatusBadRequest)
-		return
-	}
-	teamJSON(w, struct {
-		RunID string `json:"runId"`
-	}{s.Meta.RunID})
 }
 
 // retryTeam снимает только доказанную локальную ошибку до отправки в Codex.

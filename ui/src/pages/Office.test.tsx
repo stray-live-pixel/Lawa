@@ -10,8 +10,8 @@ afterEach(() => {
   window.history.replaceState(null, '', '/office');
 });
 
-// Пустая комната не выдумывает сотрудников или активность. Label открывает чат.
-it('показывает только ожидающего Босса до создания заказа', async () => {
+// Пустой офис не создаёт заказ: настройки задаются только запуском CLI.
+it('показывает пустой офис без настроек и создания заказа', async () => {
   vi.stubGlobal(
     'fetch',
     vi.fn(
@@ -29,12 +29,17 @@ it('показывает только ожидающего Босса до со�
   expect(
     screen.queryByAltText('Разработчик за MacBook'),
   ).not.toBeInTheDocument();
-  expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  expect(screen.queryByAltText('Босс за MacBook')).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'Внешность сотрудников' }),
+  ).not.toBeInTheDocument();
   await userEvent
     .setup()
-    .click(screen.getByRole('button', { name: 'Босс: Ждёт' }));
+    .click(screen.getByRole('button', { name: 'Открыть чат команды' }));
   expect(
-    await screen.findByRole('textbox', { name: 'Цель команды' }),
+    await screen.findByText(
+      'Нет запущенных команд. Создайте заказ через CLI Lawa.',
+    ),
   ).toBeVisible();
 });
 
@@ -78,4 +83,51 @@ it('показывает приглашённого Разработчика и 
   ).toBeVisible();
   expect(screen.getByRole('button', { name: 'Босс: Мониторит' })).toBeVisible();
   expect(screen.getByText('Проверяю прыжок')).toBeVisible();
+});
+
+// Новый ID не требует отдельного компонента. Образ и подпись берутся из конфига,
+// а неприглашённая личность каталога не занимает рабочее место.
+it('показывает произвольного сотрудника с выбранной в конфиге внешностью', async () => {
+  window.history.replaceState(null, '', '/office?run=design');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            runId: 'design',
+            goal: 'Дизайн',
+            messages: [],
+            members: {
+              boss: { name: 'Босс' },
+              designer: { name: 'Лена', avatar: 'pixel-designer' },
+            },
+            room: {
+              catalog: { qa: { name: 'QA' } },
+              actors: {
+                boss: { status: 'idle', nextCheck: '' },
+                designer: {
+                  status: 'working',
+                  summary: 'Подбирает цвета',
+                  nextCheck: '',
+                },
+              },
+            },
+          }),
+        ),
+    ),
+  );
+  render(
+    <AppTheme>
+      <Office />
+    </AppTheme>,
+  );
+  expect(
+    await screen.findByRole('button', { name: 'Лена: Работает' }),
+  ).toBeVisible();
+  expect(screen.getByAltText('Лена за MacBook')).toHaveAttribute(
+    'src',
+    expect.stringContaining('pixel-designer.png'),
+  );
+  expect(screen.queryByAltText('QA за MacBook')).not.toBeInTheDocument();
 });

@@ -45,7 +45,7 @@ func CompleteTeam(ctx context.Context, root, run, author, id, text string) (Team
 			return errors.New("сначала обработай новое обращение Чела или ответ сотрудника")
 		}
 		for _, m := range chat.Messages[boss.Delivery.End:] {
-			if m.AuthorID == "human" && (m.To == "boss" || m.To == "developer") {
+			if m.AuthorID == "human" && chat.Room.Actors[m.To] != nil {
 				return errors.New("сначала обработай новое обращение Чела")
 			}
 		}
@@ -61,6 +61,11 @@ func CompleteTeam(ctx context.Context, root, run, author, id, text string) (Team
 			}
 			if actorID != "boss" && (actor.Delivery != nil || actor.Status == "working") {
 				return errors.New("сначала дождись завершения работы сотрудников и проверь результат")
+			}
+		}
+		for _, task := range chat.Room.Tasks {
+			if task.AcceptedAt == nil {
+				return errors.New("сначала проверь и прими результаты всех поручений через team_accept")
 			}
 		}
 		// Общая маршрутизация проверяет активное поручение, лимит и авторство.

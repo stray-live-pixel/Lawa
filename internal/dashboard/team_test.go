@@ -8,11 +8,11 @@ import (
 
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
-// HTTP создаёт командный заказ с первым тегом Босса; Handler без Serve не запускает
-// модель. Pin остаётся точным, автор назначается
-// сервером. Same-origin и неизвестные поля проверяются до записи.
+// HTTP наблюдает уже созданный CLI заказ, но не создаёт новый. Чат сохраняет
+// прежние правила авторства и same-origin; POST создания недоступен даже своему UI.
 func TestTeamAPI(t *testing.T) {
 	root := t.TempDir()
 	h := Handler(root)
@@ -23,20 +23,20 @@ func TestTeamAPI(t *testing.T) {
 		h.ServeHTTP(w, r)
 		return w
 	}
-	input, _ := json.Marshal(map[string]string{"goal": "Сделать платформер", "cwd": t.TempDir()})
-	if w := request("POST", "/api/teams", string(input), "https://foreign.test"); w.Code != 403 {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	w := request("POST", "/api/teams", string(input), "http://localhost")
-	if w.Code != 200 {
-		t.Fatal(w.Code, w.Body.String())
-	}
-	var created struct {
-		RunID string `json:"runId"`
-	}
-	if err := json.Unmarshal(w.Body.Bytes(), &created); err != nil {
+	// Заказ создаётся тем же хранилищем, которое использует CLI, без HTTP.
+	definition := workflow.Workflow{ID: "office-boss", Characters: workflow.DefaultTeamCharacters(), Steps: []workflow.Step{{ID: "boss", Type: "agent", Character: "boss", Prompt: "Работай", DependsOn: []string{}}}}
+	data, _ := json.Marshal(definition)
+	initial, err := runstore.Create(root, runstore.Input{Order: true, Team: true, WorkflowJSON: data, CWD: t.TempDir(), Task: "Сделать платформер"})
+	if err != nil {
 		t.Fatal(err)
 	}
+	created := struct{ RunID string }{initial.Meta.RunID}
+	for _, origin := range []string{"https://foreign.test", "http://localhost"} {
+		if w := request("POST", "/api/teams", `{"goal":"Новая цель"}`, origin); w.Code != 405 {
+			t.Fatal("HTTP создал заказ", w.Code, w.Body.String())
+		}
+	}
+	var w *httptest.ResponseRecorder
 	s, err := runstore.Load(root, created.RunID)
 	if err != nil || s.Meta.Order == nil || !s.Meta.Order.Team || s.Meta.Steps[0].State != scheduler.Pending || s.Meta.Steps[0].CodexThreadID != "" {
 		t.Fatalf("заказ запущен или не создан: %+v %v", s.Meta, err)

@@ -3,7 +3,7 @@ package runstore
 import "slices"
 
 // TeamMessageForActor учитывает копию обращения Боссу при возобновлении через
-// Разработчика. Текст не переписывается и второго сообщения от Чела не возникает.
+// сотрудника. Текст не переписывается и второго сообщения от Чела не возникает.
 func TeamMessageForActor(m TeamMessage, id string) bool {
 	return m.To == id || id == "boss" && m.AuthorID == "human" && m.NotifyBoss
 }
@@ -15,36 +15,15 @@ func TeamHasUrgentMessages(chat TeamChat, id string, from int) bool {
 		if !TeamMessageForActor(m, id) {
 			continue
 		}
-		if m.AuthorID == "human" {
+		if m.AuthorID == "human" || m.AuthorID == "system" && m.To == "boss" {
 			return true
 		}
-		if id == "boss" && m.AuthorID == "developer" {
+		if id == "boss" && chat.Room.Actors[m.AuthorID] != nil && m.AuthorID != "boss" {
 			for _, source := range chat.Messages {
 				if (source.ID == m.ReplyTo || slices.Contains(m.ReplyToIDs, source.ID)) && source.AuthorID == "human" {
 					return true
 				}
 			}
-		}
-	}
-	return false
-}
-
-// pendingHumanRelay не позволяет Боссу выдать ответ за сотрудника до его
-// фактической реплики. Ответ проверяется по replyTo, а не по словам «готово».
-func pendingHumanRelay(chat TeamChat) bool {
-	for _, m := range chat.Messages {
-		if m.AuthorID != "human" || !m.NotifyBoss {
-			continue
-		}
-		answered := false
-		for _, reply := range chat.Messages {
-			if reply.AuthorID == "developer" && reply.To == "boss" && (reply.ReplyTo == m.ID || slices.Contains(reply.ReplyToIDs, m.ID)) {
-				answered = true
-				break
-			}
-		}
-		if !answered {
-			return true
 		}
 	}
 	return false
@@ -70,11 +49,13 @@ func wakeForMessage(chat *TeamChat, m TeamMessage) {
 // reopenForHuman вызывается только после валидации нового сообщения и до его
 // вставки. Поэтому retry не будит сотрудников повторно. Без тега цель достигнута.
 func reopenForHuman(chat *TeamChat, m *TeamMessage) {
-	if m.AuthorID != "human" || (m.To != "boss" && m.To != "developer") {
+	if m.AuthorID != "human" || chat.Room.Actors[m.To] == nil {
 		return
 	}
+	// Прямой вопрос любому сотруднику всегда проходит через Босса,
+	// в том числе до первого завершения цели.
+	m.NotifyBoss = m.To != "boss"
 	if chat.Room.AchievedAt != nil {
-		m.NotifyBoss = m.To == "developer"
 		chat.Room.AchievedAt = nil
 		chat.Members["system"] = TeamMember{Name: "Lawa"}
 		chat.Messages = append(chat.Messages, TeamMessage{ID: "reopen-" + m.ID, AuthorID: "system", Kind: "system", Date: m.Date, Text: "Чел возобновил работу команды."})

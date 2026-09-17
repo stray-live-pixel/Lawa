@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // TeamChat — общая доска корневого заказа. Текущая цель версионируется кадрами, сообщения добавляются
@@ -33,6 +35,8 @@ type TeamMember struct {
 // TeamMessage получает время и автора на стороне Lawa. ID — ключ повтора:
 // потеря сетевого подтверждения не должна удваивать сообщение при retry.
 type TeamMessage struct {
+	TaskIDs    []string  `json:"taskIds,omitempty"`  // Поручения, явно принятые Боссом этим событием.
+	ResultID   string    `json:"resultId,omitempty"` // Сообщение с проверенным результатом.
 	Goal       string    `json:"goal,omitempty"`
 	NotifyBoss bool      `json:"notifyBoss,omitempty"`
 	To         string    `json:"to,omitempty"`
@@ -90,6 +94,15 @@ func readTeam(dir *os.Root, s Snapshot) (TeamChat, error) {
 		return TeamChat{}, errors.New("повреждена общая база команды")
 	}
 	if chat.Room != nil {
+		// Legacy-комнаты не имели каталога. Не добавляем им новые роли из конфига:
+		// прежние thread/tools знают только Босса и Разработчика.
+		if chat.Room.Catalog == nil {
+			chat.Room.Catalog = workflow.DefaultTeamCharacters()
+			if boss, ok := s.Workflow.Characters["boss"]; ok {
+				chat.Room.Catalog["boss"] = boss
+			}
+		}
+		initializeTeamTasks(&chat)
 		if err := chat.validateRoom(); err != nil {
 			return TeamChat{}, err
 		}

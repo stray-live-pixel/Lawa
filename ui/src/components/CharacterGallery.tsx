@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   Button,
   ClipboardButton,
@@ -17,6 +17,9 @@ import './appearance-picker.css';
 export function CharacterGallery() {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  // Modal устанавливает фокус после анимации. Направляем его в поиск,
+  // чтобы отложенная фокусировка контейнера не прервала уже начатый ввод.
+  const searchRef = useRef<HTMLInputElement>(null);
   const search = query.trim().toLocaleLowerCase('ru');
   const characters = characterGallery.filter((item) =>
     `${item.id} ${item.name} ${item.profession}`
@@ -36,11 +39,13 @@ export function CharacterGallery() {
       <Dialog
         open={open}
         onOpenChange={setOpen}
+        initialFocus={searchRef}
         title="Галерея персонажей"
         description="40 новых и 2 исходных образа. Скопируйте ID внешности для будущей настройки конфигов — это не @id сотрудника."
       >
         <div className="appearance-picker">
           <TextInput
+            controlRef={searchRef}
             value={query}
             onUpdate={setQuery}
             placeholder="Имя, профессия или ID"

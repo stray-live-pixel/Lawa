@@ -42,7 +42,7 @@ func (f *fakeObserver) Close() error                              { return nil }
 func teamEngine(t *testing.T) (*Engine, string, *fakeClient, *time.Time) {
 	t.Helper()
 	root := t.TempDir()
-	s, err := runstore.Create(root, runstore.Input{Order: true, Team: true, CWD: t.TempDir(), Task: "Создать платформер", WorkflowJSON: []byte(`{"id":"office","characters":{"boss":{"name":"Босс","history":"Опытный инженер","instructions":"Веди команду"}},"steps":[{"id":"boss","type":"agent","character":"boss","prompt":"Работай","dependsOn":[]}]}`)})
+	s, err := runstore.Create(root, runstore.Input{Order: true, Team: true, CWD: t.TempDir(), Task: "Создать платформер", WorkflowJSON: []byte(`{"id":"office","characters":{"developer":{"name":"Разработчик","history":"Опытный инженер","instructions":"Выполняй поручения","avatar":"developer"},"boss":{"name":"Босс","history":"Опытный инженер","instructions":"Веди команду"}},"steps":[{"id":"boss","type":"agent","character":"boss","prompt":"Работай","dependsOn":[]}]}`)})
 	if err != nil {
 		t.Fatal(err)
 	}

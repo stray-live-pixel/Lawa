@@ -97,6 +97,10 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
 Параметры serve:
   --root <путь>                То же хранилище run.
   --listen <host:port>         Адрес сервера; по умолчанию 127.0.0.1:60800.
+  --team-config <путь.json>    Личности новой команды; без файла — Босс и Разработчик.
+  --cwd <путь>                Рабочая папка новой команды.
+  --task / --task-file        Цель нового заказа; требует --cwd.
+                               Без цели serve продолжает существующие заказы.
 
 Параметры update:
   --yes                        Не ждать подтверждения файлов Lawa и PATH.
@@ -104,7 +108,8 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
                                требует --yes.
   --codex-home <путь>          Корень скиллов; по умолчанию $CODEX_HOME или ~/.codex.
 
-graph, status, logs, serve, validate, skill, version, update и help не запускают агентов.
+graph, status, logs, validate, skill, version, update и help не запускают агентов.
+serve исполняет сохранённые команды; новая цель создаётся только через CLI.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
 Сопутствующая ошибка сохранения остаётся видимой в stderr при коде 130 или 143.
@@ -217,6 +222,8 @@ func exitCode(err error, received int32) int {
 // dependencies содержит заменяемые границы CLI. Production использует настоящий
 // app-server, тесты — клиент без модели и изолированное временное хранилище.
 type dependencies struct {
+	// serve позволяет проверять CLI-инициализацию без TCP и запуска моделей.
+	serve            func(context.Context, string, string, func() error) error
 	check            func(context.Context, codex.Connection) error
 	client           func(string, io.Writer, *codex.Directory) coordinator.Client
 	pollInterval     time.Duration
@@ -332,8 +339,8 @@ type runArguments struct {
 // resumeArguments не содержит cwd: продолжение обязано использовать сохранённый.
 type resumeArguments struct{ runID, root, executable, maxParallel string }
 
-// serveArguments хранит независимые от Codex параметры локального HTTP-сервера.
-type serveArguments struct{ root, address string }
+// serveArguments хранит параметры HTTP-сервера и необязательной новой команды.
+type serveArguments struct{ root, address, teamConfig, cwd, task, taskFile string }
 
 // runCommand валидирует весь ввод и подключение до создания нового run. После
 // публикации runId дальнейшая ошибка оставляет его пригодным для resume.
@@ -416,10 +423,9 @@ func resumeCommand(ctx context.Context, args []string, out, stderr io.Writer, de
 	return coordinate(ctx, parsed.root, parsed.runID, parsed.executable, pool, out, stderr, deps, true, false)
 }
 
-// serveCommand не открывает Codex и не создаёт хранилище. Loopback безопасен по
-// умолчанию; явная публикация на другом интерфейсе остаётся возможной, но видимой.
-// Предупреждение отдельно называет live-вывод, потому что read-only HTTP не делает
-// команды и ответы агента публично безопасными.
+// serveCommand читает настройки нового командного заказа только при старте CLI.
+// Без постановки запускает наблюдение/продолжение уже сохранённых комнат. Порт
+// должен открыться до создания нового заказа; после этого Engine запускает Босса.
 func serveCommand(ctx context.Context, args []string, out, stderr io.Writer, deps dependencies) error {
 	parsed, err := parseServeArguments(args)
 	if err != nil {
@@ -436,7 +442,26 @@ func serveCommand(ctx context.Context, args []string, out, stderr io.Writer, dep
 	if _, err = fmt.Fprintf(out, "Dashboard: http://%s\nPreview: http://%s/preview\n", parsed.address, parsed.address); err != nil {
 		return err
 	}
-	return dashboard.Serve(ctx, parsed.root, parsed.address)
+	input, err := officeInput(parsed)
+	if err != nil {
+		return err
+	}
+	var startup func() error
+	if input != nil {
+		startup = func() error {
+			snapshot, err := runstore.Create(parsed.root, *input)
+			if err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(out, "runId: %s\nOffice: http://%s/office?run=%s\n", snapshot.Meta.RunID, parsed.address, snapshot.Meta.RunID)
+			return err
+		}
+	}
+	serve := deps.serve
+	if serve == nil {
+		serve = dashboard.ServeWithStartup
+	}
+	return serve(ctx, parsed.root, parsed.address, startup)
 }
 
 // runSeries последовательно создаёт обычные run. Блокирующий coordinate служит
@@ -705,12 +730,29 @@ func parseResumeArguments(args []string) (resumeArguments, error) {
 // позиционные значения, которые можно ошибочно принять за root или адрес.
 func parseServeArguments(args []string) (serveArguments, error) {
 	parsed := serveArguments{address: dashboard.DefaultAddress}
-	positionals, values, err := parseOptions(args, map[string]bool{"root": true, "listen": true})
+	positionals, values, err := parseOptions(args, map[string]bool{"root": true, "listen": true, "team-config": true, "cwd": true, "task": true, "task-file": true})
 	if err != nil || len(positionals) != 0 {
 		if err != nil {
 			return serveArguments{}, err
 		}
 		return serveArguments{}, errors.New("использование: lawa serve [--root <путь>] [--listen <host:port>]")
+	}
+	parsed.teamConfig, parsed.cwd = values["team-config"], values["cwd"]
+	parsed.task, parsed.taskFile = values["task"], values["task-file"]
+	_, hasTask := values["task"]
+	_, hasTaskFile := values["task-file"]
+	if hasTask && hasTaskFile {
+		return parsed, errors.New("используйте только один из --task/--task-file")
+	}
+	for _, name := range []string{"team-config", "cwd", "task", "task-file"} {
+		if value, present := values[name]; present && strings.TrimSpace(value) == "" {
+			return parsed, fmt.Errorf("--%s требует непустое значение", name)
+		}
+	}
+	if parsed.teamConfig != "" || parsed.cwd != "" || hasTask || hasTaskFile {
+		if parsed.cwd == "" || !hasTask && !hasTaskFile {
+			return parsed, errors.New("новая команда требует --cwd и один из --task/--task-file; --team-config необязателен")
+		}
 	}
 	parsed.root = values["root"]
 	if listen, exists := values["listen"]; exists {
