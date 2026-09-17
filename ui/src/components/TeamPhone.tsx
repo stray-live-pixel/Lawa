@@ -118,9 +118,6 @@ export function TeamPhone({
         }
       }}
     >
-      <div className="team-phone-hardware" aria-hidden="true">
-        <span />
-      </div>
       <header className="team-phone-header" {...phoneWindow.move}>
         <Text
           variant="subheader-2"
@@ -149,8 +146,8 @@ export function TeamPhone({
             </Button>
           </>
         )}
-        <Button view="flat" aria-label="Закрыть чат" onClick={onClose}>
-          <Icon data={Xmark} />
+        <Button view="flat" size="s" aria-label="Закрыть чат" onClick={onClose}>
+          <Icon data={Xmark} size={16} />
         </Button>
       </header>
       <ErrorNotice error={error || teams?.problems.join('\n')} />

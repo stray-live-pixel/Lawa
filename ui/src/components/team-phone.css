@@ -16,23 +16,18 @@
     0 24px 80px var(--g-color-sfx-shadow-heavy),
     inset 0 0 0 1px var(--g-color-line-generic);
 }
-.team-phone-hardware {
-  height: 32px;
-  flex: none;
-  display: grid;
-  place-items: center;
-}
-.team-phone-hardware span {
-  width: 96px;
-  height: 21px;
-  border-radius: 20px;
-  background: #171719;
-}
+/* Шапка занимает бывшую декоративную верхнюю область телефона целиком.
+   Вся её свободная площадь служит ручкой, кнопки сохраняют обычные действия. */
 .team-phone-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 18px 12px;
+  padding: 10px 18px 8px;
+  gap: 6px;
+  flex: none;
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
 }
 .team-phone .g-alert {
   margin: 4px 12px;
@@ -48,10 +43,6 @@
   flex-direction: column;
   gap: 16px;
   overflow: auto;
-}
-.team-phone-header {
-  gap: 6px;
-  flex: none;
 }
 .team-phone-title {
   flex: 1;
@@ -454,12 +445,6 @@
   overflow-wrap: anywhere;
 }
 
-/* В шапке перетаскиваются свободная область и заголовок, но не кнопки. */
-.team-phone-header {
-  cursor: grab;
-  touch-action: none;
-  user-select: none;
-}
 .team-phone-header:active {
   cursor: grabbing;
 }
