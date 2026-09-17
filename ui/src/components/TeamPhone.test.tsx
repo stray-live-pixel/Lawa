@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -89,6 +90,26 @@ it('показывает pin и автора, проверяет 50 слов и 
     'aria-expanded',
     'true',
   );
+  expect(
+    within(screen.getByRole('log')).getByRole('button', {
+      name: 'Свернуть цель',
+    }),
+  ).toBeVisible();
+  // Клик по полному тексту сворачивает карточку; копирование не меняет её вид.
+  fireEvent.click(screen.getByText(chat.goal));
+  expect(
+    screen.getByRole('button', { name: 'Развернуть цель' }),
+  ).toHaveAttribute('aria-expanded', 'false');
+  const copy = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: copy },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Скопировать цель' }));
+  await waitFor(() => expect(copy).toHaveBeenCalledWith(chat.goal));
+  expect(
+    screen.getByRole('button', { name: 'Развернуть цель' }),
+  ).toHaveAttribute('aria-expanded', 'false');
   const field = screen.getByRole('textbox', { name: 'Сообщение команде' });
   const send = screen.getByRole('button', { name: 'Отправить сообщение' });
   fireEvent.change(field, { target: { value: 'слово '.repeat(51) } });

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Avatar,
+  ClipboardButton,
   Label,
   Button,
   Icon,
@@ -23,6 +24,8 @@ import { type TeamPlayerState, type TeamHistory } from './TeamPlayer';
 import bossImage from '../assets/office/boss.png';
 import developerImage from '../assets/office/developer.png';
 import './team-phone.css';
+import { TeamMarkdown } from './TeamMarkdown';
+import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 
 export interface TeamMessage {
   id: string;
@@ -246,22 +249,39 @@ function TeamGoal({ goal, achieved }: { goal: string; achieved: boolean }) {
         aria-expanded={expanded}
         onClick={() => setExpanded(!expanded)}
       >
-        <span className="team-pin-content">
+        <span className="team-pin-heading">
           <Icon data={achieved ? CircleCheckFill : Pin} size={16} />
-          <span className="team-pin-copy">
-            <Text
-              as="span"
-              variant="caption-2"
-              color={achieved ? 'positive' : 'secondary'}
-            >
-              Цель команды
-            </Text>
-            {!expanded && <span className="team-pin-preview">{goal}</span>}
-          </span>
+          <Text
+            as="span"
+            variant="caption-2"
+            color={achieved ? 'positive' : 'secondary'}
+          >
+            Цель команды
+          </Text>
           <Icon className="team-pin-chevron" data={ChevronDown} size={14} />
         </span>
+        <span className={expanded ? 'team-pin-details' : 'team-pin-preview'}>
+          {goal}
+        </span>
       </Button>
-      {expanded && <div className="team-pin-details">{goal}</div>}
+      <ClipboardButton
+        className="team-pin-clipboard"
+        view="flat"
+        size="s"
+        text={goal}
+        aria-label="Скопировать цель"
+        tooltipInitialText="Скопировать цель"
+        tooltipSuccessText="Цель скопирована"
+        onCopy={(_, copied) => {
+          if (!copied)
+            toaster.add({
+              name: 'copy-team-goal',
+              title: 'Не удалось скопировать цель',
+              theme: 'danger',
+              autoHiding: 2500,
+            });
+        }}
+      />
     </section>
   );
 }
@@ -356,11 +376,6 @@ function TeamThread({
       <ErrorNotice error={readError} />
       {chat ? (
         <>
-          <TeamGoal
-            key={chat.goal}
-            goal={chat.goal}
-            achieved={Boolean(chat.room?.achievedAt)}
-          />
           <div
             className="team-messages"
             ref={list}
@@ -372,6 +387,11 @@ function TeamThread({
                 el.scrollHeight - el.scrollTop - el.clientHeight < 48;
             }}
           >
+            <TeamGoal
+              key={chat.goal}
+              goal={chat.goal}
+              achieved={Boolean(chat.room?.achievedAt)}
+            />
             {!messages.length && (
               <Text className="team-empty" color="secondary">
                 Здесь — самое важное для всей команды.
@@ -424,17 +444,7 @@ function TeamThread({
                       </time>
                     </div>
                     <div className="team-message-bubble">
-                      {message.to &&
-                      message.text.startsWith(`@${message.to} `) ? (
-                        <>
-                          <strong className="team-mention">
-                            @{message.to}
-                          </strong>
-                          {message.text.slice(message.to.length + 1)}
-                        </>
-                      ) : (
-                        message.text
-                      )}
+                      <TeamMarkdown text={message.text} to={message.to} />
                     </div>
                   </div>
                 </article>
