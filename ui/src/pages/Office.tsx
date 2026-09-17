@@ -11,8 +11,11 @@ import { ErrorNotice } from '../components/ui';
 import { usePoll } from '../hooks/api';
 import { TeamPlayer, useTeamPlayer } from '../components/TeamPlayer';
 import room from '../assets/office/room-large-selected.png';
-import boss from '../assets/office/boss.png';
-import developer from '../assets/office/developer.png';
+import {
+  AppearanceProvider,
+  useEmployeeSprite,
+} from '../components/appearances';
+import { AppearancePicker } from '../components/AppearancePicker';
 import './office.css';
 
 const states = {
@@ -37,61 +40,79 @@ export default function Office() {
   const chat = player.view;
   const hasDeveloper = Boolean(chat?.room?.actors.developer);
   return (
-    <main
-      className={`office ${chat?.room ? 'office-with-player' : ''}`}
-      aria-label="Офис агентов"
-    >
-      <div className="office-toolbar">
-        <Button
-          view="flat"
-          onClick={() => setPhoneOpen(true)}
-          aria-label="Открыть чат команды"
-          title="Чат команды"
-        >
-          <Icon data={Smartphone} />
-        </Button>
-        <ThemePicker />
-      </div>
-      <ErrorNotice error={error} />
-      <div className="office-space">
-        <div
-          className={`office-scene ${hasDeveloper ? 'office-scene-team' : ''}`}
-        >
-          <img
-            className="office-room-image"
-            src={room}
-            width="1536"
-            height="1024"
-            alt="Просторный изометрический офис с зоной отдыха, стеллажами и кофейным уголком"
+    <AppearanceProvider scope={run}>
+      <main
+        className={`office ${chat?.room ? 'office-with-player' : ''}`}
+        aria-label="Офис агентов"
+      >
+        <div className="office-toolbar">
+          <AppearancePicker
+            members={Object.fromEntries(
+              Object.keys(currentChat?.room?.actors || { boss: {} }).map(
+                (id) => [
+                  id,
+                  {
+                    name:
+                      currentChat?.members[id]?.name ||
+                      (id === 'boss'
+                        ? 'Босс'
+                        : id === 'developer'
+                          ? 'Разработчик'
+                          : id),
+                  },
+                ],
+              ),
+            )}
           />
-          <Employee
-            id="boss"
-            name="Босс"
-            sprite={boss}
-            actor={chat?.room?.actors.boss}
-            achieved={Boolean(chat?.room?.achievedAt)}
+          <Button
+            view="flat"
             onClick={() => setPhoneOpen(true)}
-          />
-          {hasDeveloper && (
+            aria-label="Открыть чат команды"
+            title="Чат команды"
+          >
+            <Icon data={Smartphone} />
+          </Button>
+          <ThemePicker />
+        </div>
+        <ErrorNotice error={error} />
+        <div className="office-space">
+          <div
+            className={`office-scene ${hasDeveloper ? 'office-scene-team' : ''}`}
+          >
+            <img
+              className="office-room-image"
+              src={room}
+              width="1536"
+              height="1024"
+              alt="Просторный изометрический офис с зоной отдыха, стеллажами и кофейным уголком"
+            />
             <Employee
-              id="developer"
-              name="Разработчик"
-              sprite={developer}
-              actor={chat?.room?.actors.developer}
+              id="boss"
+              name="Босс"
+              actor={chat?.room?.actors.boss}
+              achieved={Boolean(chat?.room?.achievedAt)}
               onClick={() => setPhoneOpen(true)}
             />
-          )}
+            {hasDeveloper && (
+              <Employee
+                id="developer"
+                name="Разработчик"
+                actor={chat?.room?.actors.developer}
+                onClick={() => setPhoneOpen(true)}
+              />
+            )}
+          </div>
         </div>
-      </div>
-      <TeamPlayer player={player} />
-      {phoneOpen && (
-        <TeamPhone
-          onClose={() => setPhoneOpen(false)}
-          onRunChange={setRun}
-          player={player}
-        />
-      )}
-    </main>
+        <TeamPlayer player={player} />
+        {phoneOpen && (
+          <TeamPhone
+            onClose={() => setPhoneOpen(false)}
+            onRunChange={setRun}
+            player={player}
+          />
+        )}
+      </main>
+    </AppearanceProvider>
   );
 }
 
@@ -100,18 +121,17 @@ export default function Office() {
 function Employee({
   id,
   name,
-  sprite,
   actor,
   achieved = false,
   onClick,
 }: {
   id: string;
   name: string;
-  sprite: string;
   actor?: TeamActor;
   achieved?: boolean;
   onClick: () => void;
 }) {
+  const sprite = useEmployeeSprite(id);
   const status = actor?.status || 'idle';
   const label = states[status] || states.idle;
   const message =
