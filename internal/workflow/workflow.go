@@ -56,11 +56,12 @@ type Route struct {
 // шагов без собственного override; nil оставляет выбор конфигурации Codex. Порядок
 // Steps не задаёт зависимости, но служит стабильным порядком планирования.
 type Workflow struct {
-	Version *int     `json:"version,omitempty"`
-	ID      string   `json:"id"`
-	Model   *string  `json:"model,omitempty"`
-	Start   []string `json:"start,omitzero"`
-	Steps   []Step   `json:"steps"`
+	Characters map[string]Character `json:"characters,omitempty"`
+	Version    *int                 `json:"version,omitempty"`
+	ID         string               `json:"id"`
+	Model      *string              `json:"model,omitempty"`
+	Start      []string             `json:"start,omitzero"`
+	Steps      []Step               `json:"steps"`
 }
 
 // EffectiveVersion возвращает семантическую версию, не меняя представление
@@ -80,6 +81,7 @@ func (w Workflow) EffectiveVersion() int {
 // наследование: Model сначала берётся из Workflow, остальные настройки — из Codex.
 // Явное значение попадает в неизменяемый снимок run и используется при продолжении.
 type Step struct {
+	Character string           `json:"character,omitempty"`
 	ID        string           `json:"id"`
 	Type      string           `json:"type"`
 	Prompt    string           `json:"prompt"`
@@ -234,11 +236,12 @@ func (setting optionalRuntimeSetting[T]) pointer() *T {
 // workflowJSON отделяет корневой model от публичной структуры по той же причине,
 // что и настройки Step: отсутствие наследует Codex, а явный null является ошибкой.
 type workflowJSON struct {
-	Version optionalInteger                `json:"version"`
-	ID      string                         `json:"id"`
-	Model   optionalRuntimeSetting[string] `json:"model"`
-	Start   stringList                     `json:"start"`
-	Steps   []Step                         `json:"steps"`
+	Characters map[string]Character           `json:"characters"`
+	Version    optionalInteger                `json:"version"`
+	ID         string                         `json:"id"`
+	Model      optionalRuntimeSetting[string] `json:"model"`
+	Start      stringList                     `json:"start"`
+	Steps      []Step                         `json:"steps"`
 }
 
 // UnmarshalJSONFrom собирает публичный Workflow после проверки присутствия model.
@@ -250,7 +253,8 @@ func (workflow *Workflow) UnmarshalJSONFrom(decoder *jsontext.Decoder) error {
 		return err
 	}
 	*workflow = Workflow{
-		Version: raw.Version.pointer(), ID: raw.ID, Model: raw.Model.pointer(),
+		Characters: raw.Characters,
+		Version:    raw.Version.pointer(), ID: raw.ID, Model: raw.Model.pointer(),
 		Start: []string(raw.Start), Steps: raw.Steps,
 	}
 	return nil
@@ -259,6 +263,7 @@ func (workflow *Workflow) UnmarshalJSONFrom(decoder *jsontext.Decoder) error {
 // stepJSON отделяет присутствие необязательных полей от публичной модели Step.
 // Обязательные поля остаются обычными Go-значениями и проходят прежнюю Validate.
 type stepJSON struct {
+	Character string                         `json:"character"`
 	ID        string                         `json:"id"`
 	Type      string                         `json:"type"`
 	Prompt    string                         `json:"prompt"`
@@ -282,7 +287,8 @@ func (step *Step) UnmarshalJSONFrom(decoder *jsontext.Decoder) error {
 		return err
 	}
 	*step = Step{
-		ID: raw.ID, Type: raw.Type, Prompt: raw.Prompt,
+		Character: raw.Character,
+		ID:        raw.ID, Type: raw.Type, Prompt: raw.Prompt,
 		DependsOn: []string(raw.DependsOn), After: []string(raw.After), Decisions: map[string]Route(raw.Decisions),
 		MaxVisits: raw.MaxVisits.pointer(), OnLimit: raw.OnLimit.pointer(),
 		Model: raw.Model.pointer(), Effort: raw.Effort.pointer(), Speed: raw.Speed.pointer(),
@@ -337,6 +343,9 @@ func Decode(r io.Reader) (Workflow, error) {
 // только через ограниченное агентное решение. Проверка ничего не нормализует и не
 // меняет: порядок Steps и массивов является частью детерминированного исполнения.
 func (w Workflow) Validate() error {
+	if err := w.validateCharacters(); err != nil {
+		return err
+	}
 	if strings.TrimSpace(w.ID) == "" || len(w.Steps) == 0 {
 		return fmt.Errorf("нужны непустой id workflow и непустой массив steps")
 	}

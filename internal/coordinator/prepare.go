@@ -110,8 +110,20 @@ func prepareConfigured(run *runstore.LockedRun, root string, pool *capacity.Pool
 		pool = capacity.Unlimited()
 	}
 	ready := make([]string, 0, len(plan.Ready))
+	// Одна личность пишет одну память: даже независимые кубики этого персонажа
+	// выполняются последовательно. Разные личности сохраняют обычный параллелизм.
+	busyCharacters := map[string]bool{}
+	for _, saved := range snapshot.Meta.Steps {
+		if saved.State != scheduler.Pending && saved.State != scheduler.Succeeded && saved.State != scheduler.Failed {
+			busyCharacters[steps[saved.ID].Character] = true
+		}
+	}
 	leases := make([]*capacity.Lease, 0, len(plan.Ready))
 	for index, stepID := range plan.Ready {
+		character := steps[stepID].Character
+		if character != "" && busyCharacters[character] {
+			continue
+		}
 		lease, available, acquireErr := pool.TryAcquire()
 		if acquireErr != nil {
 			return Preparation{}, errors.Join(fmt.Errorf("координатор: получить слот параллельности: %w", acquireErr), releaseLeases(leases))
@@ -121,6 +133,7 @@ func prepareConfigured(run *runstore.LockedRun, root string, pool *capacity.Pool
 			break
 		}
 		ready = append(ready, stepID)
+		busyCharacters[character] = true
 		leases = append(leases, lease)
 	}
 	if err := run.Reserve(ready); err != nil {
@@ -136,12 +149,13 @@ func prepareConfigured(run *runstore.LockedRun, root string, pool *capacity.Pool
 			CWD:         snapshot.Meta.CWD,
 			Title:       fmt.Sprintf("Lawa: %s / %s [%s]", snapshot.Workflow.ID, stepID, snapshot.Meta.RunID),
 			Text:        buildPrompt(snapshot, workflowStep, saved, root),
-			Permissions: stepPermissions(runDir, ownMemory, saved.ThreadID),
+			Permissions: characterPermissions(snapshot.Workflow, workflowStep, runDir, ownMemory, saved.ThreadID),
 		}
 		applyRuntimeSettings(&command, snapshot.Workflow.Model, workflowStep)
 		if configure != nil {
 			configure(snapshot, &command)
 		}
+		addTeamTools(root, snapshot.Meta.RunID, stepID, &command)
 		prepared.Launches = append(prepared.Launches, Launch{
 			StepID:  stepID,
 			Command: command,
@@ -195,10 +209,21 @@ func prepareContinuationsConfigured(snapshot runstore.Snapshot, root string, ena
 		workflowSteps[step.ID] = step
 	}
 	var continuations []Continuation
+	busyCharacters := map[string]bool{}
+	for _, saved := range snapshot.Meta.Steps {
+		if saved.State == scheduler.Cancelled && already[saved.ID] || (saved.State != scheduler.Pending && saved.State != scheduler.Cancelled && saved.State != scheduler.Succeeded && saved.State != scheduler.Failed) {
+			busyCharacters[workflowSteps[saved.ID].Character] = true
+		}
+	}
 	for _, step := range snapshot.Meta.Steps {
 		if step.State != scheduler.Cancelled || already[step.ID] {
 			continue
 		}
+		character := workflowSteps[step.ID].Character
+		if character != "" && busyCharacters[character] {
+			continue
+		}
+		busyCharacters[character] = true
 		memory := filepath.Join(runDir, "memory", step.ThreadID+".md")
 		info, statErr := os.Stat(memory)
 		if statErr != nil || !info.Mode().IsRegular() {
@@ -209,12 +234,13 @@ func prepareContinuationsConfigured(snapshot runstore.Snapshot, root string, ena
 		}
 		command := codex.Command{
 			CWD: snapshot.Meta.CWD, Text: "continue",
-			Permissions: stepPermissions(runDir, memory, step.ThreadID),
+			Permissions: characterPermissions(snapshot.Workflow, workflowSteps[step.ID], runDir, memory, step.ThreadID),
 		}
 		applyRuntimeSettings(&command, snapshot.Workflow.Model, workflowSteps[step.ID])
 		if configure != nil {
 			configure(snapshot, &command)
 		}
+		addTeamTools(root, snapshot.Meta.RunID, step.ID, &command)
 		continuations = append(continuations, Continuation{
 			StepID: step.ID, ThreadID: step.CodexThreadID,
 			Command: command,
@@ -258,11 +284,15 @@ func stepPermissions(runDir, ownMemory, threadID string) *codex.PermissionProfil
 // buildPrompt разделяет неизменяемую постановку, локальную задачу кубика и
 // служебный контракт. Пути абсолютны: чат может пережить процесс Lawa и не должен
 // зависеть от его текущей директории. Чужая память перечислена только для чтения;
-// единственный разрешённый файл записи назван отдельно и недвусмысленно.
+// собственная память исполнения и назначенной личности указаны отдельно.
 func buildPrompt(snapshot runstore.Snapshot, step workflow.Step, savedStep runstore.Step, root string) string {
+	memoryRule := "По ходу работы обновляй только этот файл. Чужую память можно читать, но нельзя изменять."
+	if step.Character != "" {
+		memoryRule = "Из памяти исполнений обновляй только собственную. Чужую память можно читать, но нельзя изменять."
+	}
 	return buildPromptWithClosing(snapshot, step, savedStep, root, []string{
 		"Перед началом прочитай свою память: %s",
-		"По ходу работы обновляй только этот файл. Чужую память можно читать, но нельзя изменять.",
+		memoryRule,
 		"Не изменяй workflow.json, task.md, meta.json и coordinator.lock в папке запуска.",
 		"Если задача требует динамически запустить дочерний workflow, используй только встроенные run_child/run_children, а не shell-команду lawa run; передавай каждому ребёнку нужный существующий абсолютный cwd.",
 		"Перед завершением запиши в свою память итог, пути к результатам и оставшиеся ограничения.",
@@ -286,6 +316,7 @@ func buildPromptWithClosing(snapshot runstore.Snapshot, step workflow.Step, save
 	}
 	sections := []string{
 		"Ты выполняешь кубик workflow Lawa.",
+		snapshot.Workflow.CharacterPrompt(step, filepath.Join(runDir, workflow.CharacterMemory(step.Character))),
 		"ID запуска (runId): " + snapshot.Meta.RunID,
 		"ID этого кубика в run (threadId Lawa): " + savedStep.ThreadID,
 		"",

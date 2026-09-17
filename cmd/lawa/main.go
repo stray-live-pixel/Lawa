@@ -31,6 +31,10 @@ import (
 const help = `Lawa — выполнение JSON-workflow через Codex App Server.
 
 Команды:
+  lawa order [workflow.json] --cwd <проект> (--task <текст> | --task-file <путь>)
+      Передать исходный заказ Чела новому Боссу; workflow необязателен.
+  lawa reply <run-id> (--task <текст> | --task-file <путь>)
+      Передать следующую реплику тому же Боссу в рамках одного заказа.
   lawa run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>)
       Создать run, запустить готовые кубики и наблюдать их до результата.
   lawa resume <run-id>
@@ -42,7 +46,7 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
   lawa logs <run-id> [step-id] [--visit <visit-id>] [--follow]
       Показать журнал всего run, логического шага или точного посещения v2.
   lawa serve [--root <путь>] [--listen <адрес>]
-      Запустить read-only dashboard; по умолчанию http://127.0.0.1:60800.
+      Запустить dashboard и общий чат; по умолчанию http://127.0.0.1:60800.
   lawa series-status <series-id>
       Показать режим, прогресс, текущий run и время следующего запуска.
   lawa series-stop <series-id>
@@ -74,6 +78,11 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
   --timezone <IANA-зона>       Явная зона cron, например Europe/Moscow.
   --max-runs <N>               Положительный лимит; без него серия бесконечна.
 
+Параметры order/reply:
+  --task / --task-file         Дословный заказ или следующая реплика Чела.
+  --cwd                       Обязателен для order; reply берёт сохранённую папку.
+  --root / --codex / --max-parallel поддерживаются, как у run.
+
 Параметры resume:
   --root <путь>                То же хранилище run.
   --codex <путь>               Исполняемый файл Codex.
@@ -104,8 +113,8 @@ Resume отправляет continue только interrupted-чатам и canc
 Run и resume печатают краткую статистику и VS Code-ссылку не чаще раза в 5 минут;
 первый и финальный снимки выводятся сразу. Подробный workflow-status.md и схема
 обновляются локально при изменениях и не реже раза в минуту.
-Max-parallel сохраняется для root и суммарно ограничивает отдельные процессы run
-и resume; без сохранённого значения собственного лимита нет.
+Max-parallel сохраняется для root и суммарно ограничивает отдельные процессы run,
+resume, order и reply; без сохранённого значения собственного лимита нет.
 Кубики могут запускать дочерние workflow через встроенные run_child/run_children;
 Lawa возвращает runId после сохранения и ждёт всё созданное дерево.
 Для PNG нужна команда plantuml с поддержкой -pipe; её ошибка не останавливает workflow.
@@ -277,6 +286,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return validateCommand(args[1:], out)
 	case "run":
 		return runCommand(ctx, args[1:], out, stderr, deps)
+	case "order", "reply":
+		return orderCommand(ctx, args[1:], out, stderr, deps, args[0] == "reply")
 	case "resume":
 		return resumeCommand(ctx, args[1:], out, stderr, deps)
 	case "graph":

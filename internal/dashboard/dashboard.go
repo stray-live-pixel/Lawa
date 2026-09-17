@@ -1,5 +1,5 @@
-// Package dashboard предоставляет локальное read-only представление сохранённых
-// workflow. Сервер не разделяет память с координаторами: каждое обновление страницы
+// Package dashboard предоставляет локальный интерфейс workflow и общего чата.
+// Сервер не разделяет память с координаторами: каждое обновление страницы
 // перечитывает атомарные snapshot, поэтому видит run других процессов и переживает
 // собственный перезапуск без отдельной базы данных.
 package dashboard
@@ -23,9 +23,12 @@ import (
 	"unicode/utf8"
 
 	"github.com/stray-live-pixel/Lawa/assets"
+	"github.com/stray-live-pixel/Lawa/internal/capacity"
+	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 	"github.com/stray-live-pixel/Lawa/internal/series"
+	"github.com/stray-live-pixel/Lawa/internal/teamruntime"
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
@@ -103,6 +106,12 @@ func Handler(root string) http.Handler {
 	mux.HandleFunc("GET /api/source/{run}", h.workflowSource)
 	mux.HandleFunc("GET /ui/", serveUIAssets)
 	mux.HandleFunc("GET /preview", serveUI)
+	mux.HandleFunc("GET /office", serveUI)
+	mux.HandleFunc("GET /api/teams", h.teams)
+	mux.HandleFunc("POST /api/teams", h.createTeam)
+	mux.HandleFunc("GET /api/teams/{run}", h.team)
+	mux.HandleFunc("POST /api/teams/{run}/messages", h.postTeam)
+	mux.HandleFunc("POST /api/teams/{run}/actors/{actor}/retry", h.retryTeam)
 	mux.HandleFunc("GET /api/preview", h.preview)
 	mux.HandleFunc("GET /assets/lawa-logo.png", h.logo)
 	mux.HandleFunc("GET /memory/{run}/{thread}", h.memory)
@@ -1004,8 +1013,8 @@ func diagnostic(err error) string {
 }
 
 // Serve запускает сервер на уже проверенном абсолютном root и завершает его по
-// отмене контекста. Shutdown даёт активному короткому чтению закончиться, но не
-// удерживает процесс дольше пяти секунд после Ctrl+C.
+// отмене контекста. HTTP завершает короткие запросы, командный runtime прерывает
+// собственные turn и сохраняет известные результаты перед выходом.
 func Serve(ctx context.Context, root, address string) error {
 	if err := ctx.Err(); err != nil {
 		return err
@@ -1014,7 +1023,19 @@ func Serve(ctx context.Context, root, address string) error {
 	if err != nil {
 		return fmt.Errorf("слушать %s: %w", address, err)
 	}
-	return serve(ctx, listener, Handler(root))
+	pool, err := capacity.Configure(root, "")
+	if err != nil {
+		listener.Close()
+		return err
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	engine := &teamruntime.Engine{Root: root, Client: coordinator.ProductionClient{Stderr: os.Stderr}, Pool: pool, Log: func(err error) { fmt.Fprintln(os.Stderr, "команда:", runstore.SafeTerminalText(err.Error())) }}
+	go func() { defer close(done); engine.Run(ctx) }()
+	err = serve(ctx, listener, Handler(root))
+	cancel()
+	<-done
+	return err
 }
 
 // serve отделён от открытия TCP listener для детерминированного теста Shutdown.

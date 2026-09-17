@@ -551,7 +551,8 @@ func TestExecuteAgentGraphKeepsCommittedChoiceOnCancelledResume(t *testing.T) {
 	client.mu.Lock()
 	continues, tools := client.continues["choice"], client.toolSets["choice"]
 	client.mu.Unlock()
-	if continues != 1 || tools != 0 {
+	// Доступен только общий чат (read/post), нового choose_decision нет.
+	if continues != 1 || tools != 2 {
 		t.Fatalf("сохранённый выбор переигран или continue повторён: continues=%d tools=%d", continues, tools)
 	}
 }

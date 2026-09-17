@@ -1,0 +1,77 @@
+import { cleanup, render, screen } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
+import { afterEach, expect, it, vi } from 'vitest';
+import { AppTheme } from '../components/Theme';
+import Office from './Office';
+
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  window.history.replaceState(null, '', '/office');
+});
+
+// Пустая комната не выдумывает сотрудников или активность. Label открывает чат.
+it('показывает только ожидающего Босса до создания заказа', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ teams: [], cwd: '/project', problems: [] }),
+        ),
+    ),
+  );
+  render(
+    <AppTheme>
+      <Office />
+    </AppTheme>,
+  );
+  expect(
+    screen.queryByAltText('Разработчик за MacBook'),
+  ).not.toBeInTheDocument();
+  expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  await userEvent
+    .setup()
+    .click(screen.getByRole('button', { name: 'Босс: Ждёт' }));
+  expect(
+    await screen.findByRole('textbox', { name: 'Цель команды' }),
+  ).toBeVisible();
+});
+
+// Стол, точка и реплика выводятся из durable-состояния выбранного заказа.
+it('показывает приглашённого Разработчика и настоящую активность', async () => {
+  window.history.replaceState(null, '', '/office?run=order');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            room: {
+              actors: {
+                boss: {
+                  status: 'monitoring',
+                  nextCheck: '2026-09-17T12:00:00Z',
+                },
+                developer: {
+                  status: 'working',
+                  summary: 'Проверяю прыжок',
+                  nextCheck: '2026-09-17T12:00:00Z',
+                },
+              },
+            },
+          }),
+        ),
+    ),
+  );
+  render(
+    <AppTheme>
+      <Office />
+    </AppTheme>,
+  );
+  expect(
+    await screen.findByRole('button', { name: 'Разработчик: Работает' }),
+  ).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Босс: Мониторит' })).toBeVisible();
+  expect(screen.getByText('Проверяю прыжок')).toBeVisible();
+});

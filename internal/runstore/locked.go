@@ -342,6 +342,10 @@ func (r *LockedRun) SetTurn(stepID, turnID string) error {
 		}
 		if step.TurnID != turnID {
 			s.Meta.Steps[index].Result = ""
+			if order := s.Meta.Order; order != nil && order.Pending {
+				order.Messages[len(order.Messages)-1].TurnID = turnID
+				order.Pending = false
+			}
 		}
 		s.Meta.Steps[index].TurnID = turnID
 		if err = s.validate(r.runID); err != nil {

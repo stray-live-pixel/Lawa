@@ -403,7 +403,7 @@ func (c *cliFakeClient) Run(_ context.Context, command codex.Command) (codex.Res
 }
 
 func (c *cliFakeClient) Continue(_ context.Context, threadID string, command codex.Command) (codex.Result, error) {
-	if command.Text != "continue" && cliAgentPromptField(command.Text, "ID посещения (visitId): ") == "" {
+	if !strings.HasPrefix(command.Text, "continue\n") && cliAgentPromptField(command.Text, "ID посещения (visitId): ") == "" {
 		return codex.Result{ThreadID: threadID}, errors.New("resume передал неверный текст")
 	}
 	c.mu.Lock()
@@ -918,7 +918,7 @@ func TestNativeParentStartsRegisteredChild(t *testing.T) {
 		if !strings.Contains(command.Title, "Lawa: parent / root-") {
 			return nil
 		}
-		if len(command.DynamicTools) != 2 || command.CallDynamicTool == nil {
+		if len(command.DynamicTools) != 4 || command.CallDynamicTool == nil {
 			return errors.New("родитель не получил встроенные child tools")
 		}
 		open := strings.LastIndex(command.Title, "[")

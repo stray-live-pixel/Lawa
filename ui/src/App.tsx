@@ -49,6 +49,9 @@ const WorkflowGraph = lazy(() =>
   })),
 );
 
+// Офис доступен только по прямому адресу; его картинки не загружаются dashboard.
+const Office = lazy(() => import('./pages/Office'));
+
 // Состояние фильтров находится в URL: back/forward и ссылки воспроизводят вид.
 // Локальный выбор и состояние React Flow не пересоздаются от каждого polling.
 function DashboardPage() {
@@ -534,6 +537,14 @@ export default function App() {
     <Routes>
       <Route path="/" element={<DashboardPage />} />
       <Route path="/preview" element={<DashboardPage />} />
+      <Route
+        path="/office"
+        element={
+          <Suspense fallback={<Loader />}>
+            <Office />
+          </Suspense>
+        }
+      />
       <Route path="/graph/:run" element={<GraphPage />} />
       <Route
         path="*"

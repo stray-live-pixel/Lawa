@@ -229,9 +229,15 @@ func (m *childRunManager) resolve(ctx context.Context, parent runstore.Snapshot,
 	}
 	// Каждый Markdown читается с теми же ограничениями, что и исходный JSON.
 	// Относительный request.Workflow уже считается от workspace родителя.
-	workflowJSON, _, err = workflow.ResolveSource(workflowJSON, request.Workflow, func(path string) ([]byte, error) {
-		return readAllowedFile(workspaceRoot, runRoot, workspace, runDir, path)
-	})
+	if filepath.Clean(request.Workflow) == filepath.Join(runDir, runstore.AssignedWorkflowFilename) {
+		// Снимок уже раскрыт при order. Повторное раскрытие изменило бы литералы
+		// {{...}} и потребовало бы уже несуществующие исходные Markdown-файлы.
+		_, err = workflow.Decode(bytes.NewReader(workflowJSON))
+	} else {
+		workflowJSON, _, err = workflow.ResolveSource(workflowJSON, request.Workflow, func(path string) ([]byte, error) {
+			return readAllowedFile(workspaceRoot, runRoot, workspace, runDir, path)
+		})
+	}
 	if err != nil {
 		return resolvedChild{}, fmt.Errorf("проверить workflow: %w", err)
 	}

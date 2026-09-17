@@ -1,0 +1,108 @@
+/* Общая тема Lawa управляет фоном и контролами. Здесь только компоновка сцены. */
+.office {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+.office-toolbar {
+  display: flex;
+  justify-content: flex-end;
+  flex: none;
+  min-height: var(--panel-toolbar-height);
+  padding: 6px var(--panel-inset);
+}
+.office-space {
+  display: grid;
+  place-items: center;
+  flex: 1;
+  min-height: 0;
+  padding: var(--panel-inset);
+}
+.office-scene {
+  position: relative;
+  width: min(100%, 1100px, calc((100dvh - 80px) * 1.5));
+}
+.office-room-image {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+/* Единая система координат сохраняет персонажа в центре пола на любом экране. */
+.office-employee {
+  position: absolute;
+  left: 50%;
+  top: 38%;
+  width: 28%;
+  transform: translateX(-50%);
+}
+.office-employee > img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.office-nameplate {
+  position: absolute;
+  left: 60%;
+  top: 20%;
+}
+.office-nameplate-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.office-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: none;
+  border-radius: 50%;
+}
+.office-status-dot_idle {
+  background: var(--g-color-text-secondary);
+}
+.office-status-dot_working {
+  background: var(--g-color-text-info);
+}
+.office-status-dot_monitoring {
+  background: var(--g-color-text-positive);
+}
+/* Облачко привязано к голове, а не к экрану. Пустая live-region остаётся
+   смонтированной, чтобы скринридер объявлял новые реплики при смене состояния. */
+.office-speech {
+  position: absolute;
+  left: 42%;
+  bottom: 99%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(200px, 55vw);
+}
+.office-speech-bubble {
+  display: block;
+  position: relative;
+  padding: 10px 14px;
+  border-radius: var(--g-border-radius-l);
+  background: var(--g-color-base-float);
+  color: var(--g-color-text-primary);
+  box-shadow: 0 4px 16px var(--g-color-sfx-shadow);
+}
+.office-speech-bubble::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: calc(50% - 6px);
+  border: 6px solid transparent;
+  border-top-color: var(--g-color-base-float);
+}
+
+/* Два независимых стола занимают свободный пол, сохраняя общий масштаб миниатюр. */
+.office-scene-team .office-boss {
+  left: 38%;
+  top: 36%;
+  width: 25%;
+}
+.office-developer {
+  left: 65%;
+  top: 45%;
+  width: 25%;
+}

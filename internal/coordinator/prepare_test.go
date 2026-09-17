@@ -157,7 +157,7 @@ func TestPrepareContinuationKeepsRuntimeSettings(t *testing.T) {
 		t.Fatalf("продолжение не подготовлено: %+v, %v", continuations, err)
 	}
 	command := continuations[0].Command
-	if command.Model != "gpt-5.6-terra" || command.Effort != "medium" || command.ServiceTier != "fast" || command.Text != "continue" {
+	if command.Model != "gpt-5.6-terra" || command.Effort != "medium" || command.ServiceTier != "fast" || !strings.HasPrefix(command.Text, "continue\n") {
 		t.Fatalf("resume изменил настройки кубика: %+v", command)
 	}
 }

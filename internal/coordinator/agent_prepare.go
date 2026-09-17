@@ -110,6 +110,17 @@ func prepareAgentVisits(
 	// встроенного имени инструмента либо повреждённая причинная ссылка не оставит
 	// Starting, хотя ни один сетевой запрос ещё даже не мог начаться.
 	candidates := make([]agentWork, 0)
+	// Посещения одной личности делят память, поэтому не могут писать параллельно.
+	// Продолжения Cancelled участвуют в том же выборе, что и новые поручения.
+	// Уже отправленный continue остаётся занят до наблюдения нового состояния:
+	// turn/started может прийти после следующей итерации координатора. Повторный
+	// interrupted требует нового явного resume, а не запуска соседа той же личности.
+	busyCharacters := map[string]bool{}
+	for _, saved := range snapshot.Meta.Visits {
+		if saved.State == scheduler.Cancelled && continued[saved.VisitID] || (saved.State != scheduler.Pending && saved.State != scheduler.Succeeded && saved.State != scheduler.Failed && saved.State != scheduler.Skipped && saved.State != scheduler.Cancelled) {
+			busyCharacters[steps[saved.StepID].Character] = true
+		}
+	}
 	for _, visit := range snapshot.Meta.Visits {
 		kind := agentWorkKind(0)
 		switch {
@@ -124,6 +135,10 @@ func prepareAgentVisits(
 		if !exists {
 			return agentPreparation{}, fmt.Errorf("координатор agent-graph: посещение %q ссылается на неизвестный шаг %q", visit.VisitID, visit.StepID)
 		}
+		if step.Character != "" && busyCharacters[step.Character] {
+			continue
+		}
+		busyCharacters[step.Character] = true
 		prompt, promptErr := buildAgentPrompt(snapshot, step, visit, runDir)
 		if promptErr != nil {
 			return agentPreparation{}, promptErr
@@ -133,7 +148,7 @@ func prepareAgentVisits(
 			CWD:         snapshot.Meta.CWD,
 			Title:       fmt.Sprintf("Lawa: %s / %s #%d, итерация %d [%s]", snapshot.Workflow.ID, visit.StepID, visit.Visit, visit.Iteration, snapshot.Meta.RunID),
 			Text:        prompt,
-			Permissions: stepPermissions(runDir, ownMemory, visit.VisitID),
+			Permissions: characterPermissions(snapshot.Workflow, step, runDir, ownMemory, visit.VisitID),
 		}
 		applyRuntimeSettings(&command, snapshot.Workflow.Model, step)
 		if configure != nil {
@@ -144,6 +159,7 @@ func prepareAgentVisits(
 		if err = addChooseDecision(run, step, visit, &command); err != nil {
 			return agentPreparation{}, fmt.Errorf("координатор agent-graph: посещение %q: %w", visit.VisitID, err)
 		}
+		addTeamTools(root, snapshot.Meta.RunID, step.ID, &command)
 		candidates = append(candidates, agentWork{
 			VisitID: visit.VisitID, StepID: visit.StepID, ThreadID: visit.CodexThreadID,
 			Command: command, kind: kind,
@@ -295,6 +311,7 @@ func buildAgentPrompt(snapshot runstore.Snapshot, step workflow.Step, visit runs
 	}
 	sections := []string{
 		"Ты выполняешь отдельное посещение кубика workflow Lawa.",
+		snapshot.Workflow.CharacterPrompt(step, filepath.Join(runDir, workflow.CharacterMemory(step.Character))),
 		"ID запуска (runId): " + snapshot.Meta.RunID,
 		"ID посещения (visitId): " + visit.VisitID,
 		"ID логического кубика (stepId): " + visit.StepID,
@@ -309,7 +326,7 @@ func buildAgentPrompt(snapshot runstore.Snapshot, step workflow.Step, visit runs
 		"Задача этого кубика:",
 		step.Prompt,
 		"",
-		"Собственная память; прочитай её перед работой и обновляй только этот файл:",
+		"Собственная память исполнения; прочитай её перед работой и не изменяй память других исполнений:",
 		filepath.Join(runDir, "memory", visit.VisitID+".md"),
 		"",
 		"Причинные источники в порядке trigger; статус и диагностика ниже являются техническими фактами, бизнес-вывод сделай сам:",

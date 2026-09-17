@@ -307,12 +307,18 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 	if initial.Meta.Version == 4 {
 		return executeAgentGraph(ctx, run, options, initial)
 	}
+	if initial.Meta.Order != nil && initial.Meta.Order.Team {
+		return Outcome{}, errors.New("командный заказ исполняется через lawa serve; поручения отправляются в общем чате")
+	}
 	observer := &sharedObserver{ctx: ctx, client: options.Client, cwd: initial.Meta.CWD}
 	// Закрытие наблюдения регистрируется до defer активных turn ниже. На Ctrl+C
 	// координатор поэтому сначала отправит адресные interrupt через владеющие
 	// сессии и только затем закроет независимый read-only процесс. Если известных
 	// чатов ещё нет, процесс не запускается вовсе.
 	defer func() { err = errors.Join(err, observer.Close()) }()
+	if err = reconcileOrderMessage(run, initial, observer); err != nil {
+		return outcome, err
+	}
 	// Буфер равен числу шагов: после остановки наблюдения каждый уже запущенный
 	// turn сможет завершить свою горутину, даже если получатель больше не читает.
 	results := make(chan launchResult, len(initial.Meta.Steps))
