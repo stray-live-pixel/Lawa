@@ -8,6 +8,7 @@ import {
   DefinitionList,
   Select,
   type ButtonProps,
+  type ModalProps,
   type SelectOption,
 } from '@gravity-ui/uikit';
 import { Xmark } from '@gravity-ui/icons';
@@ -48,18 +49,22 @@ export function Choice({
 }
 // Modal обеспечивает portal, focus trap, Escape и возврат фокуса инициатору.
 // Заголовок и описание явно связаны с диалогом для screen reader.
+// initialFocus позволяет форме выбрать поле, которое получит фокус после открытия;
+// без него сохраняется стандартная фокусировка контейнера Gravity UI.
 export function Dialog({
   open,
   onOpenChange,
   title,
   description,
   children,
+  initialFocus,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
   description?: string;
   children: ReactNode;
+  initialFocus?: ModalProps['initialFocus'];
 }) {
   const titleID = useId(),
     descriptionID = useId();
@@ -67,6 +72,7 @@ export function Dialog({
     <Modal
       open={open}
       onOpenChange={onOpenChange}
+      initialFocus={initialFocus}
       aria-labelledby={titleID}
       aria-describedby={description ? descriptionID : undefined}
       contentClassName="dialog-content"

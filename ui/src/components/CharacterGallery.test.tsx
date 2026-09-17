@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it } from 'vitest';
 import { AppTheme } from './Theme';
@@ -23,10 +23,13 @@ it('находит персонажа по ID и копирует его без 
   );
   await user.click(screen.getByRole('button', { name: 'Галерея персонажей' }));
   expect(screen.getAllByRole('listitem')).toHaveLength(42);
-  await user.type(
-    screen.getByRole('textbox', { name: 'Поиск персонажей' }),
-    'deer-reindeer',
-  );
+  const search = screen.getByRole('textbox', { name: 'Поиск персонажей' });
+  // Окончание анимации запускает фокусировку Modal. Проверяем её адресата,
+  // а затем ввод: наличие карточек ещё не означает готовность клавиатурного фокуса.
+  await waitFor(() => expect(search).toHaveFocus());
+  await user.type(search, 'deer-reindeer');
+  expect(search).toHaveValue('deer-reindeer');
+  expect(search).toHaveFocus();
   expect(screen.getAllByRole('listitem')).toHaveLength(1);
   expect(screen.getByText('Северный тимлид')).toBeVisible();
   await user.click(
