@@ -487,7 +487,6 @@
   transform: translateX(-50%);
   width: 60px;
   height: 12px;
-  opacity: 0;
   color: var(--g-color-text-secondary);
 }
 .team-phone-move-grip::after {
@@ -518,7 +517,6 @@
   border-radius: 8px;
   background: transparent;
   color: var(--g-color-text-secondary);
-  opacity: 0;
   cursor: nwse-resize;
   touch-action: none;
 }
@@ -531,19 +529,6 @@
   stroke-width: 2.5;
   stroke-linecap: round;
 }
-.team-phone:hover .team-phone-move-grip,
-.team-phone-move-grip:focus-visible,
-.team-phone:hover .team-phone-resize,
-.team-phone-resize:focus-visible {
-  opacity: 1;
-}
 .team-phone-resize:focus-visible {
   outline: 2px solid var(--g-color-line-focus);
-}
-/* На сенсорном экране нет hover; ручка остаётся заметной без анимации. */
-@media (hover: none) {
-  .team-phone-move-grip,
-  .team-phone-resize {
-    opacity: 0.65;
-  }
 }
