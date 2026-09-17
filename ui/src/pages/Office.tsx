@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Button, Icon, Text } from '@gravity-ui/uikit';
-import { Smartphone } from '@gravity-ui/icons';
+import { Smartphone, CircleCheckFill } from '@gravity-ui/icons';
 import {
   TeamPhone,
   type TeamChat,
@@ -69,6 +69,7 @@ export default function Office() {
             name="Босс"
             sprite={boss}
             actor={chat?.room?.actors.boss}
+            achieved={Boolean(chat?.room?.achievedAt)}
             onClick={() => setPhoneOpen(true)}
           />
           {hasDeveloper && (
@@ -101,12 +102,14 @@ function Employee({
   name,
   sprite,
   actor,
+  achieved = false,
   onClick,
 }: {
   id: string;
   name: string;
   sprite: string;
   actor?: TeamActor;
+  achieved?: boolean;
   onClick: () => void;
 }) {
   const status = actor?.status || 'idle';
@@ -119,10 +122,19 @@ function Employee({
     <div className={`office-employee office-${id}`}>
       <img src={sprite} width="1254" height="1254" alt={`${name} за MacBook`} />
       <div className="office-speech" role="status" aria-atomic="true">
-        {message && (
-          <Text className="office-speech-bubble" variant="body-1">
-            {message}
+        {achieved ? (
+          <Text
+            className="office-speech-bubble office-speech-achieved"
+            variant="body-1"
+          >
+            <Icon data={CircleCheckFill} size={16} /> Цель достигнута
           </Text>
+        ) : (
+          message && (
+            <Text className="office-speech-bubble" variant="body-1">
+              {message}
+            </Text>
+          )
         )}
       </div>
       <div className="office-nameplate">

@@ -8,14 +8,10 @@ import {
   TextArea,
   TextInput,
 } from '@gravity-ui/uikit';
-import { ArrowUp, Pin, Xmark } from '@gravity-ui/icons';
+import { ArrowUp, Pin, Xmark, CircleCheckFill } from '@gravity-ui/icons';
 import { usePoll } from '../hooks/api';
 import { Choice, ErrorNotice } from './ui';
-import {
-  TeamPlayer,
-  type TeamPlayerState,
-  type TeamHistory,
-} from './TeamPlayer';
+import { type TeamPlayerState, type TeamHistory } from './TeamPlayer';
 import bossImage from '../assets/office/boss.png';
 import developerImage from '../assets/office/developer.png';
 import './team-phone.css';
@@ -42,7 +38,7 @@ export interface TeamChat {
   goal: string;
   members: Record<string, { name: string; avatar?: string }>;
   messages: TeamMessage[];
-  room?: { actors: Record<string, TeamActor> };
+  room?: { actors: Record<string, TeamActor>; achievedAt?: string };
 }
 interface Teams {
   teams: { id: string; goal: string }[];
@@ -140,9 +136,6 @@ export function TeamPhone({
           <NewTeam cwd={teams?.cwd || ''} onCreated={selectRun} />
         ) : (
           <>
-            {player?.chat?.runId === run && (
-              <TeamPlayer player={player} compact />
-            )}
             <TeamThread
               key={run}
               run={run}
@@ -325,11 +318,19 @@ function TeamThread({
       <ErrorNotice error={readError} />
       {chat ? (
         <>
-          <div className="team-pin" tabIndex={0}>
-            <Icon data={Pin} size={16} />
+          <div
+            className={`team-pin ${chat.room?.achievedAt ? 'team-pin-achieved' : ''}`}
+            tabIndex={0}
+          >
+            <Icon
+              data={chat.room?.achievedAt ? CircleCheckFill : Pin}
+              size={16}
+            />
             <div>
               <Text variant="caption-2" color="secondary">
-                Цель команды · закреплено
+                {chat.room?.achievedAt
+                  ? 'Цель достигнута'
+                  : 'Цель команды · закреплено'}
               </Text>
               <p>{chat.goal}</p>
             </div>
@@ -351,7 +352,7 @@ function TeamThread({
               </Text>
             )}
             {messages.map((message) =>
-              message.kind === 'system' ? (
+              message.kind === 'system' || message.kind === 'achievement' ? (
                 <div key={message.id} className="team-system-message">
                   <time dateTime={message.date}>
                     {new Date(message.date).toLocaleTimeString('ru-RU', {
@@ -359,7 +360,16 @@ function TeamThread({
                       minute: '2-digit',
                     })}
                   </time>
-                  <span>{message.text}</span>
+                  <span>
+                    {message.kind === 'achievement' && (
+                      <Icon
+                        data={CircleCheckFill}
+                        size={14}
+                        className="team-achievement-icon"
+                      />
+                    )}{' '}
+                    {message.text}
+                  </span>
                 </div>
               ) : (
                 <article
@@ -441,6 +451,12 @@ function TeamThread({
               <Button size="s" onClick={onLive}>
                 К текущему чату
               </Button>
+            </div>
+          ) : chat.room?.achievedAt ? (
+            <div className="team-history-note">
+              <Text color="positive">
+                Цель достигнута. Команда завершила работу.
+              </Text>
             </div>
           ) : (
             <form

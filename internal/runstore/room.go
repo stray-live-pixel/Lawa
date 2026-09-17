@@ -16,7 +16,9 @@ const TeamIdleInterval = 5 * time.Minute
 // TeamRoom включает адресный runtime только для новых командных заказов.
 // Старые фиксированные workflow и их общая база не меняют способ исполнения.
 type TeamRoom struct {
-	Actors map[string]*TeamActor `json:"actors"`
+	// AchievedAt останавливает новые поручения; nil сохраняет прежний активный режим.
+	AchievedAt *time.Time            `json:"achievedAt,omitempty"`
+	Actors     map[string]*TeamActor `json:"actors"`
 }
 
 // TeamActor — личность на весь заказ, с одним Codex thread и последовательными
@@ -85,6 +87,9 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 			return previous, nil
 		}
 	}
+	if chat.Room.AchievedAt != nil {
+		return TeamMessage{}, errors.New("цель достигнута; чат доступен только для просмотра")
+	}
 	to, err := addressedTo(text)
 	if err != nil {
 		return TeamMessage{}, err
@@ -143,7 +148,7 @@ func PostActor(ctx context.Context, root, run, author, id, text string) (TeamMes
 // Повтор summon идемпотентен. Сам призыв не является поручением Разработчику.
 func SummonDeveloper(ctx context.Context, root, run, author string) error {
 	return UpdateTeam(ctx, root, run, func(chat *TeamChat) error {
-		if chat.Room == nil || author != "boss" || chat.Room.Actors["boss"] == nil || chat.Room.Actors["boss"].Status != "working" {
+		if chat.Room == nil || chat.Room.AchievedAt != nil || author != "boss" || chat.Room.Actors["boss"] == nil || chat.Room.Actors["boss"].Status != "working" {
 			return errors.New("пригласить Разработчика может только работающий Босс")
 		}
 		if chat.Room.Actors["developer"] != nil {
@@ -165,6 +170,9 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 	err := UpdateTeam(ctx, root, run, func(chat *TeamChat) error {
 		if chat.Room == nil {
 			return errors.New("нет комнаты")
+		}
+		if chat.Room.AchievedAt != nil {
+			return nil
 		}
 		actor := chat.Room.Actors[actorID]
 		if actor == nil || actor.Delivery != nil || actor.Status == "blocked" || now.Before(actor.NextCheck) {
@@ -232,6 +240,14 @@ func LockTeamActor(root, run, actor string) (*os.File, error) {
 func (chat TeamChat) validateRoom() error {
 	if chat.Room.Actors["boss"] == nil {
 		return errors.New("в комнате отсутствует Босс")
+	}
+	// Терминальная отметка без двух финальных записей означает повреждение,
+	// а не завершённую цель. Заодно запрещаем доступ к пустому срезу при retry.
+	if at := chat.Room.AchievedAt; at != nil {
+		n := len(chat.Messages)
+		if at.IsZero() || n < 2 || chat.Messages[n-2].Kind != "achievement" || chat.Messages[n-1].AuthorID != "boss" || chat.Messages[n-1].To != "human" {
+			return errors.New("повреждено завершение цели")
+		}
 	}
 	for id, actor := range chat.Room.Actors {
 		if (id != "boss" && id != "developer") || actor == nil || actor.Cursor < 0 || actor.Cursor > len(chat.Messages) {

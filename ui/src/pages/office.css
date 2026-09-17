@@ -110,3 +110,13 @@
 .office-with-player .office-scene {
   width: min(100%, 1100px, calc((100dvh - 220px) * 1.5));
 }
+
+.office-speech-achieved {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.office-speech-achieved svg {
+  flex: none;
+  color: var(--g-color-text-positive);
+}

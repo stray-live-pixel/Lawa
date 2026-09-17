@@ -16,6 +16,7 @@ type TeamHistory struct {
 // TeamFrame — неизменяемый кадр. MessageCount ссылается на префикс append-only
 // переписки. В кадре нет thread/turn ID, доставки и внутренних рассуждений.
 type TeamFrame struct {
+	AchievedAt   *time.Time               `json:"achievedAt,omitempty"`
 	At           time.Time                `json:"at"`
 	MessageCount int                      `json:"messageCount"`
 	Actors       map[string]TeamActorView `json:"actors"`
@@ -33,6 +34,10 @@ type TeamActorView struct {
 func CaptureTeamFrame(chat TeamChat, at time.Time) TeamFrame {
 	frame := TeamFrame{At: at.UTC(), MessageCount: len(chat.Messages), Actors: map[string]TeamActorView{}}
 	if chat.Room != nil {
+		if chat.Room.AchievedAt != nil {
+			at := *chat.Room.AchievedAt
+			frame.AchievedAt = &at
+		}
 		for id, a := range chat.Room.Actors {
 			if a == nil {
 				continue
@@ -56,7 +61,7 @@ func recordTeamFrame(chat *TeamChat, at time.Time) {
 	frames := chat.History.Frames
 	if len(frames) > 0 {
 		last := frames[len(frames)-1]
-		if frame.MessageCount == last.MessageCount && sameVisibleActors(frame.Actors, last.Actors) {
+		if frame.MessageCount == last.MessageCount && sameAchievement(frame.AchievedAt, last.AchievedAt) && sameVisibleActors(frame.Actors, last.Actors) {
 			return
 		}
 		if frame.At.Before(last.At) {
@@ -79,4 +84,9 @@ func sameVisibleActors(a, b map[string]TeamActorView) bool {
 		}
 	}
 	return true
+}
+
+// Отметка цели — часть кадра, поэтому при перемотке в прошлое галочка исчезает.
+func sameAchievement(a, b *time.Time) bool {
+	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
 }

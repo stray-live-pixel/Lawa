@@ -5,6 +5,7 @@ import {
   render,
   screen,
   within,
+  waitFor,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -166,16 +167,94 @@ it('перематывает сцену и телефон вместе без з
   expect(
     phone.queryByRole('textbox', { name: 'Сообщение команде' }),
   ).not.toBeInTheDocument();
-  await user.click(phone.getByRole('button', { name: 'Предыдущее событие' }));
+  expect(
+    phone.queryByRole('region', { name: 'Плеер команды' }),
+  ).not.toBeInTheDocument();
+  await user.click(phone.getByRole('button', { name: 'Закрыть чат' }));
+  await user.click(screen.getByRole('button', { name: 'Предыдущее событие' }));
   expect(
     screen.queryByAltText('Разработчик за MacBook'),
   ).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button', { name: 'К текущему' }));
+  await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));
+  const livePhone = within(
+    screen.getByRole('region', { name: 'Смартфон команды' }),
+  );
+  expect(await livePhone.findByText('Игра готова')).toBeVisible();
   expect(
-    phone.queryByText('Разработчик присоединился'),
-  ).not.toBeInTheDocument();
-  await user.click(phone.getByRole('button', { name: 'К текущему чату' }));
-  expect(await phone.findByText('Игра готова')).toBeVisible();
-  expect(
-    phone.getByRole('textbox', { name: 'Сообщение команде' }),
+    livePhone.getByRole('textbox', { name: 'Сообщение команде' }),
   ).toBeVisible();
+});
+
+// Галочка относится к времени достижения, а не ко всей истории заказа.
+it('показывает достигнутую цель в офисе и pin, но не переносит её в прошлое', async () => {
+  window.history.replaceState(null, '', '/office?run=order');
+  const achieved: TeamChat = {
+    ...chat,
+    room: { ...chat.room!, achievedAt: date(20) },
+    history: {
+      ...chat.history!,
+      frames: chat.history!.frames.map((f, i) =>
+        i === 2 ? { ...f, achievedAt: date(20) } : f,
+      ),
+    },
+    messages: [
+      ...chat.messages.slice(0, 2),
+      {
+        id: 'achievement',
+        authorId: 'system',
+        kind: 'achievement',
+        text: 'Босс отметил цель достигнутой.',
+        date: date(20),
+      },
+      {
+        id: 'done',
+        authorId: 'boss',
+        to: 'human',
+        text: '@human Игра готова',
+        date: date(20),
+      },
+    ],
+  };
+  achieved.history!.frames[2].messageCount = 4;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async (url: string) =>
+        new Response(
+          JSON.stringify(
+            url === '/api/teams'
+              ? {
+                  teams: [{ id: 'order', goal: 'Игра' }],
+                  cwd: '/project',
+                  problems: [],
+                }
+              : achieved,
+          ),
+        ),
+    ),
+  );
+  render(
+    <AppTheme>
+      <Office />
+    </AppTheme>,
+  );
+  await screen.findByText('Цель достигнута');
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));
+  const phone = within(
+    screen.getByRole('region', { name: 'Смартфон команды' }),
+  );
+  await waitFor(() => expect(phone.getByText('Цель достигнута')).toBeVisible());
+  expect(phone.getByText('Босс отметил цель достигнутой.')).toBeVisible();
+  expect(
+    phone.queryByRole('textbox', { name: 'Сообщение команде' }),
+  ).not.toBeInTheDocument();
+  expect(phone.queryByRole('slider')).not.toBeInTheDocument();
+  await user.click(phone.getByRole('button', { name: 'Закрыть чат' }));
+  await user.click(screen.getByRole('button', { name: 'Предыдущее событие' }));
+  expect(screen.queryByText('Цель достигнута')).not.toBeInTheDocument();
+  expect(
+    screen.queryByText('Восстановлено по ходам Codex и сообщениям'),
+  ).not.toBeInTheDocument();
 });

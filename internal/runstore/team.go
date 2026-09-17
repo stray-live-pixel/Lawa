@@ -207,6 +207,12 @@ func UpdateTeam(ctx context.Context, root, runID string, update func(*TeamChat) 
 		return statErr
 	}
 	lock, err := dir.OpenFile("team.lock", os.O_CREATE|os.O_RDWR|syscall.O_NONBLOCK, 0o600)
+	// macOS иногда возвращает ENOENT для O_CREATE, когда соседний процесс уже
+	// создал тот же файл. Открываем существующий inode без создания; если файл
+	// действительно отсутствует, ошибка сохранится. Lock никогда не удаляем.
+	if errors.Is(err, os.ErrNotExist) {
+		lock, err = dir.OpenFile("team.lock", os.O_RDWR|syscall.O_NONBLOCK, 0)
+	}
 	if err != nil {
 		return err
 	}

@@ -200,3 +200,12 @@
   gap: 2px;
   padding-right: 8px;
 }
+
+.team-pin-achieved > svg,
+.team-achievement-icon {
+  color: var(--g-color-text-positive);
+}
+.team-achievement-icon {
+  vertical-align: middle;
+  margin-right: 4px;
+}

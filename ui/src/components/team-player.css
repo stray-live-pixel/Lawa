@@ -29,17 +29,6 @@
   justify-content: space-between;
   font-variant-numeric: tabular-nums;
 }
-.team-player-compact {
-  width: calc(100% - 24px);
-  padding: 6px 8px;
-  margin-bottom: 6px;
-}
-.team-player-compact .team-player-controls {
-  gap: 2px;
-}
-.team-player-compact .team-player-controls .g-select {
-  width: 74px;
-}
 .team-player-recovery {
   display: flex;
   flex-wrap: wrap;
@@ -53,13 +42,4 @@
   justify-content: space-between;
   gap: 8px;
   flex: none;
-}
-
-/* Tooltip расположен над дорожкой и не занимает пустую строку в телефоне. */
-.team-player .g-slider {
-  position: relative;
-}
-.team-player .g-slider__top {
-  position: absolute;
-  inset: -24px 0 auto;
 }

@@ -1,10 +1,18 @@
 import { useEffect, useState } from 'react';
-import { Button, Slider, Text } from '@gravity-ui/uikit';
+import { Button, Icon, Slider, Text } from '@gravity-ui/uikit';
+import {
+  ChevronLeft,
+  ChevronRight,
+  ChevronsRight,
+  PlayFill,
+  PauseFill,
+} from '@gravity-ui/icons';
 import { Choice, ErrorNotice } from './ui';
 import { type TeamActor, type TeamChat } from './TeamPhone';
 import './team-player.css';
 
 export interface TeamFrame {
+  achievedAt?: string;
   at: string;
   messageCount: number;
   actors: Record<string, TeamActor>;
@@ -63,7 +71,7 @@ export function teamAt(
   return {
     ...chat,
     messages: frame ? chat.messages.slice(0, frame.messageCount) : [],
-    room: { actors: frame?.actors || {} },
+    room: { actors: frame?.actors || {}, achievedAt: frame?.achievedAt },
   };
 }
 
@@ -79,7 +87,11 @@ export function useTeamPlayer(chat?: TeamChat) {
   const start = frames.length ? Date.parse(frames[0].at) : Date.now();
   const end =
     current?.end ??
-    Math.max(start, Date.now(), Date.parse(frames.at(-1)?.at || '') || 0);
+    Math.max(
+      start,
+      chat?.room?.achievedAt ? Date.parse(chat.room.achievedAt) : Date.now(),
+      Date.parse(frames.at(-1)?.at || '') || 0,
+    );
   const at = current?.at ?? end;
   const historical = Boolean(current);
   useEffect(() => {
@@ -150,15 +162,9 @@ export type TeamPlayerState = ReturnType<typeof useTeamPlayer>;
 const timeLabel = (value: number) =>
   new Date(value).toLocaleTimeString('ru-RU');
 
-// Один и тот же плеер доступен под сценой и внутри модального телефона: время
-// синхронно для обоих, даже когда затемнение Modal закрывает внешний контрол.
-export function TeamPlayer({
-  player,
-  compact = false,
-}: {
-  player: TeamPlayerState;
-  compact?: boolean;
-}) {
+// Плеер живёт только под сценой. Телефон отображает выбранный кадр без
+// второго набора контролов; доступная подпись сохраняет смысл кнопок-иконок.
+export function TeamPlayer({ player }: { player: TeamPlayerState }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const chat = player.chat;
@@ -188,37 +194,34 @@ export function TeamPlayer({
     }
   }
   return (
-    <section
-      className={`team-player ${compact ? 'team-player-compact' : ''}`}
-      aria-label="Плеер команды"
-    >
+    <section className="team-player" aria-label="Плеер команды">
       <div className="team-player-controls">
         <Button
-          view="flat"
+          view="outlined"
           size="s"
           aria-label="Предыдущее событие"
           onClick={() => player.step(-1)}
           disabled={!player.frames.length}
         >
-          ‹
+          <Icon data={ChevronLeft} size={16} />
         </Button>
         <Button
-          view="raised"
+          view="outlined"
           size="s"
           aria-label={player.playing ? 'Пауза' : 'Воспроизвести историю'}
           onClick={player.toggle}
           disabled={!player.frames.length}
         >
-          {player.playing ? 'Ⅱ' : '▶'}
+          <Icon data={player.playing ? PauseFill : PlayFill} size={16} />
         </Button>
         <Button
-          view="flat"
+          view="outlined"
           size="s"
           aria-label="Следующее событие"
           onClick={() => player.step(1)}
           disabled={!player.frames.length}
         >
-          ›
+          <Icon data={ChevronRight} size={16} />
         </Button>
         <Text variant="caption-2" className="team-player-time">
           {player.historical ? timeLabel(player.at) : 'Сейчас'}
@@ -234,10 +237,12 @@ export function TeamPlayer({
         />
         <Button
           size="s"
-          view={player.historical ? 'outlined' : 'action'}
+          view="outlined"
+          aria-label="К текущему"
+          title="К текущему"
           onClick={player.live}
         >
-          К текущему
+          <Icon data={ChevronsRight} size={16} />
         </Button>
       </div>
       <Slider<number>
@@ -248,7 +253,7 @@ export function TeamPlayer({
         step={1}
         value={Math.max(0, player.at - player.start)}
         onUpdate={(value) => player.seek(player.start + value)}
-        tooltipFormat={(value) => timeLabel(player.start + value)}
+        tooltipDisplay="off"
         disabled={!player.frames.length}
       />
       <div className="team-player-range">
@@ -274,13 +279,6 @@ export function TeamPlayer({
           </Button>
         </div>
       )}
-      {player.historical &&
-        chat.history?.recovered &&
-        player.at < Date.parse(chat.history.recordedFrom) && (
-          <Text variant="caption-1" color="secondary">
-            Восстановлено по ходам Codex и сообщениям
-          </Text>
-        )}
       <ErrorNotice error={error} />
     </section>
   );
