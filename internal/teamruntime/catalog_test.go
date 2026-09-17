@@ -79,8 +79,8 @@ func TestConfiguredDesignerLifecycle(t *testing.T) {
 	if _, err := runstore.ClaimTeamDelivery(t.Context(), root, run, "boss", now); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := runstore.PostActor(t.Context(), root, run, "boss", "premature", "@human Ответ без дизайнера"); err == nil {
-		t.Fatal("Босс обошёл ответ сотрудника")
+	if _, err := runstore.PostActor(t.Context(), root, run, "boss", "premature", "@human Дизайнер проверяет цвет. Есть пожелания?"); err != nil {
+		t.Fatal("Босс не может уточнить пожелания", err)
 	}
 	if err := e.finish(t.Context(), run, "boss"); err != nil {
 		t.Fatal(err)

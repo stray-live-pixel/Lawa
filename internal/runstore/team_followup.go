@@ -29,32 +29,6 @@ func TeamHasUrgentMessages(chat TeamChat, id string, from int) bool {
 	return false
 }
 
-// pendingHumanRelay не позволяет Боссу выдать ответ за сотрудника до его
-// фактической реплики. Ответ проверяется по replyTo, а не по словам «готово».
-func pendingHumanRelay(chat TeamChat) bool {
-	for _, m := range chat.Messages {
-		if m.AuthorID != "human" || !m.NotifyBoss {
-			continue
-		}
-		// При сбое Босс вправе объяснить проблему Челу и запросить помощь.
-		// Это не приёмка: незавершённое поручение продолжает запрещать team_complete.
-		if actor := chat.Room.Actors[m.To]; actor != nil && actor.Status == "blocked" {
-			continue
-		}
-		answered := false
-		for _, reply := range chat.Messages {
-			if reply.AuthorID == m.To && reply.To == "boss" && (reply.ReplyTo == m.ID || slices.Contains(reply.ReplyToIDs, m.ID)) {
-				answered = true
-				break
-			}
-		}
-		if !answered {
-			return true
-		}
-	}
-	return false
-}
-
 // wakeForMessage изменяет только расписание, не сбрасывает Delivery/ошибки.
 // При занятом сотруднике finish проверит непрочитанный хвост; неоднозначный
 // старый turn остаётся заблокированным, даже если Чел прислал новое поручение.

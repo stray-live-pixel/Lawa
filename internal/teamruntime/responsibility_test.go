@@ -332,3 +332,91 @@ func TestRepeatedUnsentFailureNotifiesAgain(t *testing.T) {
 		t.Fatal("нет повторного пробуждения", ok, err)
 	}
 }
+
+// Общение и достижение цели — разные действия. Пока коллега ещё не ответил,
+// Босс может уточнить вопрос Чела или сообщить о ходе работы. Это не принимает
+// поручение и не даёт закрыть цель ни до claim сотрудника, ни во время его хода.
+func TestBossCanMessageHumanWhileEmployeeHasNotAnswered(t *testing.T) {
+	for _, working := range []bool{false, true} {
+		t.Run(map[bool]string{false: "поручение ожидает", true: "сотрудник работает"}[working], func(t *testing.T) {
+			e, run, _, now := assignedTeam(t)
+			postHuman(t, e, run, "human-question", "@developer Проверь управление")
+			if working {
+				if ok, err := runstore.ClaimTeamDelivery(t.Context(), e.Root, run, "developer", now.Add(6*time.Minute)); err != nil || !ok {
+					t.Fatal(ok, err)
+				}
+			}
+			if _, err := runstore.PostActor(t.Context(), e.Root, run, "boss", "clarification", "@human Уточни, нужно ли управление с телефона?"); err != nil {
+				t.Fatal("Босс не может уточнить вопрос", err)
+			}
+			if _, err := runstore.PostActor(t.Context(), e.Root, run, "boss", "progress", "@human Разработчик проверяет управление"); err != nil {
+				t.Fatal("Босс не может сообщить статус", err)
+			}
+			if readChat(t, e, run).Room.Tasks["human-question"].AcceptedAt != nil {
+				t.Fatal("сообщение Босса приняло поручение")
+			}
+			if _, err := runstore.CompleteTeam(t.Context(), e.Root, run, "boss", "premature", "@human Готово"); err == nil {
+				t.Fatal("общение позволило закрыть незавершённую цель")
+			}
+		})
+	}
+}
+
+// Отчёт по повторному запросу относится к уже сделанной работе. Босс принимает
+// исходное поручение Чела и повторный запрос, после чего может передать результат
+// Челу и завершить цель. Совпадение replyTo с самым первым вопросом не требуется.
+func TestRecoveredReportAllowsHumanReplyAndCompletion(t *testing.T) {
+	e, run, _, now := assignedTeam(t)
+	postHuman(t, e, run, "human-question", "@developer Как устроено управление?")
+	if err := e.finish(t.Context(), run, "boss"); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(6 * time.Minute)
+	claim := func(id string) {
+		t.Helper()
+		ok, err := runstore.ClaimTeamDelivery(t.Context(), e.Root, run, id, *now)
+		if err != nil || !ok {
+			t.Fatal(id, ok, err)
+		}
+	}
+	claim("developer")
+	if err := e.finish(t.Context(), run, "developer"); err != nil {
+		t.Fatal(err)
+	}
+	claim("boss")
+	if _, err := runstore.PostActor(t.Context(), e.Root, run, "boss", "report-request", "@developer Пришли отчёт по игре и ответ Челу"); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.finish(t.Context(), run, "boss"); err != nil {
+		t.Fatal(err)
+	}
+	*now = now.Add(6 * time.Minute)
+	claim("developer")
+	report, err := runstore.PostActor(t.Context(), e.Root, run, "developer", "recovered-report", "@boss Игра готова, стрелки перемещают героя, пробел задаёт прыжок. Проверил")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.ReplyTo != "report-request" {
+		t.Fatal("проверка должна воспроизводить ответ на повторное поручение", report)
+	}
+	if err := e.finish(t.Context(), run, "developer"); err != nil {
+		t.Fatal(err)
+	}
+	claim("boss")
+	if _, err := runstore.CompleteTeam(t.Context(), e.Root, run, "boss", "unaccepted", "@human Готово"); err == nil {
+		t.Fatal("отчёт без приёмки закрыл цель")
+	}
+	if _, err := runstore.AcceptTeamTasks(t.Context(), e.Root, run, "boss", "accept-all", []string{"assignment", "human-question", "report-request"}, "recovered-report", "Открыл игру, сверил управление с исходниками"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runstore.PostActor(t.Context(), e.Root, run, "boss", "human-answer", "@human Стрелки перемещают героя, пробел задаёт прыжок. Проверено"); err != nil {
+		t.Fatal("принятый результат нельзя передать Челу", err)
+	}
+	if _, err := runstore.CompleteTeam(t.Context(), e.Root, run, "boss", "goal-complete", "@human Цель достигнута, управление проверено"); err != nil {
+		t.Fatal("нельзя завершить проверенную цель", err)
+	}
+	chat := readChat(t, e, run)
+	if chat.Room.AchievedAt == nil || chat.Messages[len(chat.Messages)-1].To != "human" {
+		t.Fatal("нет финала для Чела")
+	}
+}

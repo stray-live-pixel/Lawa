@@ -10,7 +10,7 @@ import (
 )
 
 // Прямой запрос Чела разработчику после завершения получает два адресата,
-// но ответ Челу разрешён только Боссу после фактического ответа разработчика.
+// Босс может общаться с Челом сразу; достижение ждёт отчёта и приёмки.
 func TestHumanReopensDeveloperAndBoss(t *testing.T) {
 	e, run, _, now := teamEngine(t)
 	claim := func(id string) {
@@ -51,8 +51,8 @@ func TestHumanReopensDeveloperAndBoss(t *testing.T) {
 	postHuman(t, e, run, "question-2", "@developer И какая сила гравитации?")
 	claim("boss")
 	claim("developer")
-	if _, err := runstore.PostActor(t.Context(), e.Root, run, "boss", "early", "@human Ответ без разработчика"); err == nil {
-		t.Fatal("ранний ответ")
+	if _, err := runstore.PostActor(t.Context(), e.Root, run, "boss", "early", "@human Разработчик проверяет прыжок"); err != nil {
+		t.Fatal("сообщение о ходе работы запрещено", err)
 	}
 	if err := e.finish(t.Context(), run, "boss"); err != nil {
 		t.Fatal(err)

@@ -126,9 +126,9 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 				}
 			}
 		}
-		if author == "boss" && to == "human" && pendingHumanRelay(*chat) {
-			return m, errors.New("сначала дождись ответа сотрудника на обращение Чела")
-		}
+		// Босс может уточнить вопрос или сообщить статус до ответа коллеги.
+		// Полноту результата проверяет CompleteTeam по приёмке поручений;
+		// обычное сообщение Челу не принимает и не завершает работу.
 		if m.ReplyTo != "" {
 			m.Kind = "reply"
 		} else if author == "boss" && (chat.Room.Actors[to] != nil || to == "human") {
