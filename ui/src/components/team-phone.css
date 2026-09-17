@@ -165,3 +165,38 @@
   background: var(--g-color-text-primary);
   border-radius: 4px;
 }
+
+.team-system-message {
+  text-align: center;
+  color: var(--g-color-text-secondary);
+  font-size: 11px;
+  padding: 8px 14px;
+  display: grid;
+  gap: 4px;
+}
+.team-mention {
+  color: var(--g-color-text-link);
+  font-weight: 500;
+}
+.team-recipients {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+.team-recipients > .g-text {
+  flex-basis: 100%;
+}
+.team-actor-error {
+  max-height: 110px;
+  overflow: auto;
+  padding: 0 12px;
+  flex-shrink: 0;
+}
+
+.team-recipient {
+  display: grid;
+  gap: 2px;
+  padding-right: 8px;
+}

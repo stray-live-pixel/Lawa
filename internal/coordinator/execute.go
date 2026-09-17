@@ -307,6 +307,9 @@ func ExecuteWithOutcome(ctx context.Context, run *runstore.LockedRun, options Op
 	if initial.Meta.Version == 4 {
 		return executeAgentGraph(ctx, run, options, initial)
 	}
+	if initial.Meta.Order != nil && initial.Meta.Order.Team {
+		return Outcome{}, errors.New("командный заказ исполняется через lawa serve; поручения отправляются в общем чате")
+	}
 	observer := &sharedObserver{ctx: ctx, client: options.Client, cwd: initial.Meta.CWD}
 	// Закрытие наблюдения регистрируется до defer активных turn ниже. На Ctrl+C
 	// координатор поэтому сначала отправит адресные interrupt через владеющие

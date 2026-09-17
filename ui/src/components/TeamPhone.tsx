@@ -12,6 +12,7 @@ import { ArrowUp, Pin, Xmark } from '@gravity-ui/icons';
 import { usePoll } from '../hooks/api';
 import { Choice, ErrorNotice } from './ui';
 import bossImage from '../assets/office/boss.png';
+import developerImage from '../assets/office/developer.png';
 import './team-phone.css';
 
 export interface TeamMessage {
@@ -19,12 +20,23 @@ export interface TeamMessage {
   authorId: string;
   date: string;
   text: string;
+  to?: string;
+  kind?: string;
+  replyTo?: string;
+}
+export interface TeamActor {
+  status: 'idle' | 'working' | 'monitoring' | 'blocked';
+  summary?: string;
+  error?: string;
+  nextCheck: string;
+  delivery?: { attempted: boolean };
 }
 export interface TeamChat {
   runId: string;
   goal: string;
   members: Record<string, { name: string; avatar?: string }>;
   messages: TeamMessage[];
+  room?: { actors: Record<string, TeamActor> };
 }
 interface Teams {
   teams: { id: string; goal: string }[];
@@ -51,8 +63,14 @@ async function post<T>(url: string, input: unknown): Promise<T> {
 }
 
 // Один телефон показывает одну команду; выбранный run остаётся в адресе страницы.
-// Пустая сцена позволяет сохранить заказ, не инициируя работу Codex.
-export function TeamPhone({ onClose }: { onClose: () => void }) {
+// Новая цель автоматически становится первым поручением Боссу.
+export function TeamPhone({
+  onClose,
+  onRunChange,
+}: {
+  onClose: () => void;
+  onRunChange?: (run: string) => void;
+}) {
   const [run, setRun] = useState(
     () => new URLSearchParams(window.location.search).get('run') || '',
   );
@@ -60,6 +78,7 @@ export function TeamPhone({ onClose }: { onClose: () => void }) {
   const [creating, setCreating] = useState(!run);
   function selectRun(id: string) {
     setRun(id);
+    onRunChange?.(id);
     setCreating(false);
     const url = new URL(window.location.href);
     url.searchParams.set('run', id);
@@ -189,16 +208,22 @@ function NewTeam({
         Закрепить цель
       </Button>
       <Text variant="caption-2" color="secondary">
-        Заказ сохранится. Агенты пока не запускаются.
+        Босс сразу начнёт работу в выбранной папке.
       </Text>
     </form>
   );
 }
 
 // ID автора разрешается через реестр команды. Образ Босса берётся из сцены,
-// остальные аватарки получают инициалы и стабильный цвет, независимо от порядка.
+// Разработчик использует свой образ. Прочие авторы получают стабильные инициалы.
 function MemberAvatar({ id, chat }: { id: string; chat: TeamChat }) {
   const member = chat.members[id];
+  const sprite =
+    member?.avatar === 'boss'
+      ? bossImage
+      : member?.avatar === 'developer'
+        ? developerImage
+        : undefined;
   const hash = Array.from(id).reduce(
     (value, letter) => (value * 31 + letter.codePointAt(0)!) >>> 0,
     0,
@@ -208,8 +233,8 @@ function MemberAvatar({ id, chat }: { id: string; chat: TeamChat }) {
       size="s"
       aria-label={`Аватар: ${member?.name || id}`}
       text={member?.name || '?'}
-      imgUrl={member?.avatar === 'boss' ? bossImage : undefined}
-      className={member?.avatar === 'boss' ? 'team-boss-avatar' : undefined}
+      imgUrl={sprite}
+      className={sprite ? 'team-boss-avatar' : undefined}
       theme="normal"
       style={{ backgroundColor: `hsl(${hash % 360} 25% 78%)` }}
     />
@@ -295,34 +320,88 @@ function TeamThread({ run }: { run: string }) {
                 Здесь — самое важное для всей команды.
               </Text>
             )}
-            {messages.map((message) => (
-              <article
-                key={message.id}
-                className={`team-message ${message.authorId === 'human' ? 'team-message-own' : ''}`}
-              >
-                <MemberAvatar id={message.authorId} chat={chat} />
-                <div className="team-message-body">
-                  <div className="team-message-meta">
-                    <Text variant="caption-2">
-                      {chat.members[message.authorId]?.name || message.authorId}
-                    </Text>
-                    <time
-                      dateTime={message.date}
-                      title={new Date(message.date).toLocaleString('ru-RU')}
-                    >
-                      {new Date(message.date).toLocaleString('ru-RU', {
-                        day: '2-digit',
-                        month: '2-digit',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </time>
-                  </div>
-                  <div className="team-message-bubble">{message.text}</div>
+            {messages.map((message) =>
+              message.kind === 'system' ? (
+                <div key={message.id} className="team-system-message">
+                  <time dateTime={message.date}>
+                    {new Date(message.date).toLocaleTimeString('ru-RU', {
+                      hour: '2-digit',
+                      minute: '2-digit',
+                    })}
+                  </time>
+                  <span>{message.text}</span>
                 </div>
-              </article>
-            ))}
+              ) : (
+                <article
+                  key={message.id}
+                  className={`team-message ${message.authorId === 'human' ? 'team-message-own' : ''}`}
+                >
+                  <MemberAvatar id={message.authorId} chat={chat} />
+                  <div className="team-message-body">
+                    <div className="team-message-meta">
+                      <Text variant="caption-2">
+                        {chat.members[message.authorId]?.name ||
+                          message.authorId}
+                      </Text>
+                      <time
+                        dateTime={message.date}
+                        title={new Date(message.date).toLocaleString('ru-RU')}
+                      >
+                        {new Date(message.date).toLocaleString('ru-RU', {
+                          day: '2-digit',
+                          month: '2-digit',
+                          hour: '2-digit',
+                          minute: '2-digit',
+                        })}
+                      </time>
+                    </div>
+                    <div className="team-message-bubble">
+                      {message.to &&
+                      message.text.startsWith(`@${message.to} `) ? (
+                        <>
+                          <strong className="team-mention">
+                            @{message.to}
+                          </strong>
+                          {message.text.slice(message.to.length + 1)}
+                        </>
+                      ) : (
+                        message.text
+                      )}
+                    </div>
+                  </div>
+                </article>
+              ),
+            )}
           </div>
+          {chat.room &&
+            Object.entries(chat.room.actors)
+              .filter(([, actor]) => actor.error)
+              .map(([id, actor]) => (
+                <div key={id} className="team-actor-error">
+                  <ErrorNotice
+                    error={`${chat.members[id]?.name || id}: ${actor.error}`}
+                  />
+                  {actor.delivery && !actor.delivery.attempted && (
+                    <Button
+                      size="s"
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true);
+                        try {
+                          await post(`${url}/actors/${id}/retry`, {});
+                          setError('');
+                        } catch (cause) {
+                          setError(String(cause));
+                        } finally {
+                          setBusy(false);
+                        }
+                      }}
+                    >
+                      Повторить запуск
+                    </Button>
+                  )}
+                </div>
+              ))}
           <form
             className="team-compose"
             onSubmit={(event) => {
@@ -331,10 +410,23 @@ function TeamThread({ run }: { run: string }) {
             }}
           >
             <ErrorNotice error={error} />
+            {chat.room && (
+              <TeamRecipients
+                actors={chat.room.actors}
+                busy={busy}
+                onSelect={(id) =>
+                  setText(
+                    `@${id} ${text.replace(/^@(boss|developer|human)\s*/, '')}`,
+                  )
+                }
+              />
+            )}
             <div className="team-compose-row">
               <TextArea
                 controlProps={{ 'aria-label': 'Сообщение команде' }}
-                placeholder="Самое важное…"
+                placeholder={
+                  chat.room ? '@boss Самое важное…' : 'Самое важное…'
+                }
                 value={text}
                 onUpdate={setText}
                 minRows={2}
@@ -364,5 +456,59 @@ function TeamThread({ run }: { run: string }) {
         !readError && <p className="team-empty">Загрузка чата…</p>
       )}
     </>
+  );
+}
+
+// Личный таймер виден без активной модели: ожидание пяти минут не выглядит
+// зависшим интерфейсом. Сервер остаётся источником времени следующей проверки.
+function TeamRecipients({
+  actors,
+  busy,
+  onSelect,
+}: {
+  actors: Record<string, TeamActor>;
+  busy: boolean;
+  onSelect: (id: string) => void;
+}) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return (
+    <div className="team-recipients" aria-label="Адресовать сотруднику">
+      {Object.entries(actors).map(([id, actor]) => {
+        const seconds = Math.max(
+          0,
+          Math.ceil((Date.parse(actor.nextCheck) - now) / 1000),
+        );
+        const status =
+          actor.status === 'working'
+            ? 'Работает'
+            : actor.status === 'blocked'
+              ? 'Нужна помощь'
+              : seconds > 0
+                ? `Проверка через ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+                : 'Ожидает проверки';
+        return (
+          <div key={id} className="team-recipient">
+            <Button
+              size="s"
+              view="flat-secondary"
+              disabled={busy}
+              onClick={() => onSelect(id)}
+            >
+              @{id}
+            </Button>
+            <Text variant="caption-1" color="secondary">
+              {status}
+            </Text>
+          </div>
+        );
+      })}
+      <Text variant="caption-1" color="secondary">
+        Агенты отвечают только на явный @тег
+      </Text>
+    </div>
   );
 }

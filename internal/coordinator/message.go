@@ -41,6 +41,9 @@ func Message(ctx context.Context, run *runstore.LockedRun, options Options, text
 	if snapshot.Meta.Order == nil {
 		return errors.New("reply принимает только заказ, созданный через lawa order")
 	}
+	if snapshot.Meta.Order.Team {
+		return errors.New("командный заказ принимает сообщения через общий чат с @boss")
+	}
 	observer := &sharedObserver{ctx: ctx, client: options.Client, cwd: snapshot.Meta.CWD}
 	defer func() { err = errors.Join(err, observer.Close()) }()
 	if err = reconcileOrderMessage(run, snapshot, observer); err != nil {

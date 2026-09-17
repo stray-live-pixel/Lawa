@@ -30,14 +30,14 @@
   height: auto;
 }
 /* Единая система координат сохраняет персонажа в центре пола на любом экране. */
-.office-boss {
+.office-employee {
   position: absolute;
   left: 50%;
   top: 38%;
   width: 28%;
   transform: translateX(-50%);
 }
-.office-boss > img {
+.office-employee > img {
   display: block;
   width: 100%;
   height: auto;
@@ -93,4 +93,16 @@
   left: calc(50% - 6px);
   border: 6px solid transparent;
   border-top-color: var(--g-color-base-float);
+}
+
+/* Два независимых стола занимают свободный пол, сохраняя общий масштаб миниатюр. */
+.office-scene-team .office-boss {
+  left: 38%;
+  top: 36%;
+  width: 25%;
+}
+.office-developer {
+  left: 65%;
+  top: 45%;
+  width: 25%;
 }

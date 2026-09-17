@@ -17,6 +17,7 @@ const AssignedWorkflowFilename = "assigned-workflow.json"
 // Pending означает намерение отправить новый turn: после сбоя его нельзя
 // повторять вслепую. Предыдущий TurnID остаётся в Step до подтверждения нового.
 type Order struct {
+	Team     bool           `json:"team,omitempty"`
 	Pending  bool           `json:"pending,omitempty"`
 	Messages []OrderMessage `json:"messages,omitempty"`
 }

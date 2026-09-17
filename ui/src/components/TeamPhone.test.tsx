@@ -101,7 +101,7 @@ it('показывает pin и автора, проверяет 50 слов и 
 });
 
 // Создание из пустого телефона отправляет только цель и выбранную папку;
-// дальше открывает чат сохранённого заказа без команды запуска агентов.
+// дальше открывает чат. Автозапуском Босса занимается сервер, не второй POST.
 it('создаёт заказ из введённой цели и открывает его чат', async () => {
   const sent: unknown[] = [];
   vi.stubGlobal(
@@ -138,4 +138,66 @@ it('создаёт заказ из введённой цели и открыва
   ).toBeVisible();
   expect(sent).toEqual([{ goal: chat.goal, cwd: '/project' }]);
   expect(window.location.search).toBe('?run=order');
+});
+
+// Адрес выбирается среди присутствующих сотрудников; технические реплики не
+// маскируются под человека, изображение автора разрешается по реестру команды.
+it('подставляет тег и показывает приглашение с аватаром Разработчика', async () => {
+  window.history.replaceState(null, '', '/office?run=order');
+  const room: TeamChat = {
+    ...chat,
+    members: {
+      human: { name: 'Чел' },
+      boss: { name: 'Босс', avatar: 'boss' },
+      developer: { name: 'Разработчик', avatar: 'developer' },
+    },
+    room: {
+      actors: {
+        boss: { status: 'monitoring', nextCheck: '' },
+        developer: { status: 'idle', nextCheck: '' },
+      },
+    },
+    messages: [
+      {
+        id: 'system',
+        kind: 'system',
+        authorId: 'system',
+        date: '2026-09-17T09:30:00Z',
+        text: 'Босс пригласил Разработчика',
+      },
+      {
+        id: 'dev',
+        kind: 'reply',
+        authorId: 'developer',
+        to: 'boss',
+        date: '2026-09-17T09:31:00Z',
+        text: '@boss Готово',
+      },
+    ],
+  };
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) =>
+      response(
+        url === '/api/teams'
+          ? { teams: [], cwd: '/project', problems: [] }
+          : room,
+      ),
+    ),
+  );
+  render(
+    <AppTheme>
+      <TeamPhone onClose={() => {}} />
+    </AppTheme>,
+  );
+  expect(await screen.findByText('Босс пригласил Разработчика')).toBeVisible();
+  expect(
+    screen.getByLabelText('Аватар: Разработчик').querySelector('img'),
+  ).toHaveAttribute('src', expect.stringContaining('developer.png'));
+  const field = screen.getByRole('textbox', { name: 'Сообщение команде' });
+  fireEvent.change(field, { target: { value: 'Проверь прыжок' } });
+  fireEvent.click(screen.getByRole('button', { name: '@developer' }));
+  expect(field).toHaveValue('@developer Проверь прыжок');
+  fireEvent.click(screen.getByRole('button', { name: '@boss' }));
+  expect(field).toHaveValue('@boss Проверь прыжок');
 });

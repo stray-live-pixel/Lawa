@@ -15,6 +15,7 @@ import (
 // TeamChat — общая доска корневого заказа. Цель неизменна, сообщения добавляются
 // последовательно. Память кубиков остаётся рабочими заметками, чат — общими фактами.
 type TeamChat struct {
+	Room     *TeamRoom             `json:"room,omitempty"`
 	RunID    string                `json:"runId"`
 	Goal     string                `json:"goal"`
 	Members  map[string]TeamMember `json:"members"`
@@ -31,6 +32,9 @@ type TeamMember struct {
 // TeamMessage получает время и автора на стороне Lawa. ID — ключ повтора:
 // потеря сетевого подтверждения не должна удваивать сообщение при retry.
 type TeamMessage struct {
+	To       string    `json:"to,omitempty"`
+	Kind     string    `json:"kind,omitempty"`
+	ReplyTo  string    `json:"replyTo,omitempty"`
 	ID       string    `json:"id"`
 	AuthorID string    `json:"authorId"`
 	Date     time.Time `json:"date"`
@@ -80,6 +84,11 @@ func readTeam(dir *os.Root, s Snapshot) (TeamChat, error) {
 	}
 	if chat.RunID != s.Meta.RunID || chat.Members == nil || strings.TrimSpace(chat.Goal) == "" {
 		return TeamChat{}, errors.New("повреждена общая база команды")
+	}
+	if chat.Room != nil {
+		if err := chat.validateRoom(); err != nil {
+			return TeamChat{}, err
+		}
 	}
 	return chat, nil
 }
@@ -138,13 +147,44 @@ func PostTeam(ctx context.Context, root, sourceRun, stepID, id, text string) (Te
 			return TeamMessage{}, fmt.Errorf("неизвестный участник %q", stepID)
 		}
 	}
-	s, err := TeamRoot(root, sourceRun)
+	var message TeamMessage
+	err = UpdateTeam(ctx, root, sourceRun, func(chat *TeamChat) error {
+		var postErr error
+		if chat.Room != nil {
+			if stepID != "" {
+				return errors.New("комнатой управляет командный runtime")
+			}
+			message, postErr = appendRoomMessage(chat, "human", id, text)
+			return postErr
+		}
+		for _, previous := range chat.Messages {
+			if previous.ID != id {
+				continue
+			}
+			if previous.AuthorID != authorID || previous.Text != text {
+				return errors.New("ID уже принадлежит другому сообщению")
+			}
+			message = previous
+			return nil
+		}
+		message = TeamMessage{ID: id, AuthorID: authorID, Date: time.Now().UTC(), Text: text}
+		chat.Members[authorID] = member
+		chat.Messages = append(chat.Messages, message)
+		return nil
+	})
+	return message, err
+}
+
+// UpdateTeam сериализует короткую транзакцию общей базы между процессами.
+// Callback не выполняет сеть/модель и не вызывает UpdateTeam повторно.
+func UpdateTeam(ctx context.Context, root, runID string, update func(*TeamChat) error) error {
+	s, err := TeamRoot(root, runID)
 	if err != nil {
-		return TeamMessage{}, err
+		return err
 	}
 	dir, err := openRun(root, s.Meta.RunID)
 	if err != nil {
-		return TeamMessage{}, err
+		return err
 	}
 	defer dir.Close()
 	// os.Root сам разрешает ссылки внутри области; Lstat запрещает их до открытия.
@@ -152,60 +192,50 @@ func PostTeam(ctx context.Context, root, sourceRun, stepID, id, text string) (Te
 	// O_NOFOLLOW вместе с O_CREATE: на macOS это даёт ENOENT при гонке создания.
 	if info, statErr := dir.Lstat("team.lock"); statErr == nil {
 		if !info.Mode().IsRegular() {
-			return TeamMessage{}, errors.New("team.lock должен быть обычным файлом")
+			return errors.New("team.lock должен быть обычным файлом")
 		}
 	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return TeamMessage{}, statErr
+		return statErr
 	}
 	lock, err := dir.OpenFile("team.lock", os.O_CREATE|os.O_RDWR|syscall.O_NONBLOCK, 0o600)
 	if err != nil {
-		return TeamMessage{}, err
+		return err
 	}
 	defer lock.Close()
 	info, err := lock.Stat()
 	if err != nil {
-		return TeamMessage{}, err
+		return err
 	}
 	if !info.Mode().IsRegular() {
-		return TeamMessage{}, errors.New("team.lock должен быть обычным файлом")
+		return errors.New("team.lock должен быть обычным файлом")
 	}
 	for {
 		if err = ctx.Err(); err != nil {
-			return TeamMessage{}, err
+			return err
 		}
 		err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
 		if err == nil {
 			break
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			return TeamMessage{}, err
+			return err
 		}
 		select {
 		case <-ctx.Done():
-			return TeamMessage{}, ctx.Err()
+			return ctx.Err()
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
 	chat, err := readTeam(dir, s)
 	if err != nil {
-		return TeamMessage{}, err
+		return err
 	}
-	for _, message := range chat.Messages {
-		if message.ID != id {
-			continue
-		}
-		if message.AuthorID != authorID || message.Text != text {
-			return TeamMessage{}, errors.New("ID уже принадлежит другому сообщению")
-		}
-		return message, nil
+	if err = update(&chat); err != nil {
+		return err
 	}
-	message := TeamMessage{ID: id, AuthorID: authorID, Date: time.Now().UTC(), Text: text}
-	chat.Members[authorID] = member
-	chat.Messages = append(chat.Messages, message)
 	data, err := json.Marshal(chat)
 	if err != nil {
-		return TeamMessage{}, err
+		return err
 	}
-	err = saveRunFile(dir, "team.json", data, (*os.File).Sync)
-	return message, err
+	return saveRunFile(dir, "team.json", data, (*os.File).Sync)
 }

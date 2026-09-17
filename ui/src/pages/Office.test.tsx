@@ -1,30 +1,77 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { AppTheme } from '../components/Theme';
 import Office from './Office';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+  window.history.replaceState(null, '', '/office');
+});
 
-// Проверяем весь демо-цикл с клавиатуры: состояние доступно без различения
-// цветов, а возвращение в ожидание убирает прежнюю активную реплику.
-it('переключает состояния Босса и очищает облачко в ожидании', async () => {
-  const user = userEvent.setup();
+// Пустая комната не выдумывает сотрудников или активность. Label открывает чат.
+it('показывает только ожидающего Босса до создания заказа', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ teams: [], cwd: '/project', problems: [] }),
+        ),
+    ),
+  );
   render(
     <AppTheme>
       <Office />
     </AppTheme>,
   );
-  const boss = screen.getByRole('button', { name: 'Босс: Ждёт' });
+  expect(
+    screen.queryByAltText('Разработчик за MacBook'),
+  ).not.toBeInTheDocument();
   expect(screen.getByRole('status')).toBeEmptyDOMElement();
-  boss.focus();
-  await user.keyboard('{Enter}');
-  expect(boss).toHaveAccessibleName('Босс: Работает');
-  expect(screen.getByRole('status')).toHaveTextContent('Изучаю задачу');
-  await user.keyboard(' ');
-  expect(boss).toHaveAccessibleName('Босс: Мониторит');
-  expect(screen.getByRole('status')).toHaveTextContent('Слежу за командой');
-  await user.click(boss);
-  expect(boss).toHaveAccessibleName('Босс: Ждёт');
-  expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  await userEvent
+    .setup()
+    .click(screen.getByRole('button', { name: 'Босс: Ждёт' }));
+  expect(
+    await screen.findByRole('textbox', { name: 'Цель команды' }),
+  ).toBeVisible();
+});
+
+// Стол, точка и реплика выводятся из durable-состояния выбранного заказа.
+it('показывает приглашённого Разработчика и настоящую активность', async () => {
+  window.history.replaceState(null, '', '/office?run=order');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            room: {
+              actors: {
+                boss: {
+                  status: 'monitoring',
+                  nextCheck: '2026-09-17T12:00:00Z',
+                },
+                developer: {
+                  status: 'working',
+                  summary: 'Проверяю прыжок',
+                  nextCheck: '2026-09-17T12:00:00Z',
+                },
+              },
+            },
+          }),
+        ),
+    ),
+  );
+  render(
+    <AppTheme>
+      <Office />
+    </AppTheme>,
+  );
+  expect(
+    await screen.findByRole('button', { name: 'Разработчик: Работает' }),
+  ).toBeVisible();
+  expect(screen.getByRole('button', { name: 'Босс: Мониторит' })).toBeVisible();
+  expect(screen.getByText('Проверяю прыжок')).toBeVisible();
 });

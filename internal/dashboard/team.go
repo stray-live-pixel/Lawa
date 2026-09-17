@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/teamruntime"
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
@@ -83,9 +84,9 @@ func (h handler) teams(w http.ResponseWriter, r *http.Request) {
 	teamJSON(w, result)
 }
 
-// createTeam сохраняет такой же pending-заказ Босса, как CLI, но не подключается
-// к Codex и не запускает координатор. CWD явно выбран человеком; позже заказ
-// можно запустить через lawa resume. Цель не ограничивается длиной сообщения.
+// createTeam сохраняет цель и первое обращение к Боссу. Фоновый Engine в Serve
+// автоматически подхватывает заказ; HTTP не удерживает соединение на время turn.
+// Цель не ограничивается длиной сообщения, CWD выбирается человеком.
 func (h handler) createTeam(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Goal string `json:"goal"`
@@ -104,7 +105,7 @@ func (h handler) createTeam(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, diagnostic(err), 500)
 		return
 	}
-	s, err := runstore.Create(h.root, runstore.Input{Order: true, WorkflowJSON: data, Task: input.Goal, CWD: input.CWD})
+	s, err := runstore.Create(h.root, runstore.Input{Order: true, Team: true, WorkflowJSON: data, Task: input.Goal, CWD: input.CWD})
 	if err != nil {
 		http.Error(w, diagnostic(err), http.StatusBadRequest)
 		return
@@ -112,6 +113,19 @@ func (h handler) createTeam(w http.ResponseWriter, r *http.Request) {
 	teamJSON(w, struct {
 		RunID string `json:"runId"`
 	}{s.Meta.RunID})
+}
+
+// retryTeam снимает только доказанную локальную ошибку до отправки в Codex.
+func (h handler) retryTeam(w http.ResponseWriter, r *http.Request) {
+	var input struct{}
+	if !teamInput(w, r, &input) {
+		return
+	}
+	if err := teamruntime.RetryUnsent(r.Context(), h.root, r.PathValue("run"), r.PathValue("actor")); err != nil {
+		http.Error(w, diagnostic(err), http.StatusConflict)
+		return
+	}
+	teamJSON(w, map[string]bool{"retried": true})
 }
 
 // team читает в том числе по ID ребёнка: UI всегда получает ID общего корня.

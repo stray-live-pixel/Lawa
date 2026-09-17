@@ -16,7 +16,9 @@ export default defineConfig({
   server: {
     proxy: Object.fromEntries(
       ['/api', '/memory', '/events', '/uml', '/graph-image', '/assets'].map(
-        (path) => [path, backend],
+        // Vite shorthand меняет Host на backend, ломая same-origin POST.
+        // Сохраняем исходный Host: чужой Origin всё ещё отклоняет Go.
+        (path) => [path, { target: backend, changeOrigin: false }],
       ),
     ),
   },

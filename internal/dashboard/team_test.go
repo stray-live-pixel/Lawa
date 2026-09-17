@@ -10,7 +10,8 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 )
 
-// HTTP создаёт только pending-заказ, pin остаётся точным, автор назначается
+// HTTP создаёт командный заказ с первым тегом Босса; Handler без Serve не запускает
+// модель. Pin остаётся точным, автор назначается
 // сервером. Same-origin и неизвестные поля проверяются до записи.
 func TestTeamAPI(t *testing.T) {
 	root := t.TempDir()
@@ -37,7 +38,7 @@ func TestTeamAPI(t *testing.T) {
 		t.Fatal(err)
 	}
 	s, err := runstore.Load(root, created.RunID)
-	if err != nil || s.Meta.Order == nil || s.Meta.Steps[0].State != scheduler.Pending || s.Meta.Steps[0].CodexThreadID != "" {
+	if err != nil || s.Meta.Order == nil || !s.Meta.Order.Team || s.Meta.Steps[0].State != scheduler.Pending || s.Meta.Steps[0].CodexThreadID != "" {
 		t.Fatalf("заказ запущен или не создан: %+v %v", s.Meta, err)
 	}
 	path := "/api/teams/" + created.RunID
@@ -51,7 +52,7 @@ func TestTeamAPI(t *testing.T) {
 	}
 	w = request("GET", path, "", "")
 	var chat runstore.TeamChat
-	if err = json.Unmarshal(w.Body.Bytes(), &chat); err != nil || chat.Goal != "Сделать платформер" || len(chat.Messages) != 1 || chat.Messages[0].AuthorID != "human" || chat.Messages[0].Date.IsZero() {
+	if err = json.Unmarshal(w.Body.Bytes(), &chat); err != nil || chat.Goal != "Сделать платформер" || len(chat.Messages) != 2 || chat.Messages[0].AuthorID != "human" || chat.Messages[0].Date.IsZero() {
 		t.Fatalf("история: %+v %v", chat, err)
 	}
 	if w = request("GET", "/api/teams", "", ""); w.Code != 200 || !strings.Contains(w.Body.String(), created.RunID) {

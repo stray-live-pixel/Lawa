@@ -3,8 +3,8 @@
 `room.png` — исходная комната; `room-transparent.png` — её вариант для общей
 светлой и тёмной темы Lawa; `boss.png` — персонаж со столом и прозрачным фоном.
 Созданы встроенным image_gen для страницы `/office`. Изображения независимы:
-положение Босса задаёт HTML/CSS, а не перерисовка комнаты. Это визуальный прототип,
-не отображение реального состояния агентов. Исходные PNG входят в сборку Vite.
+положение Босса задаёт HTML/CSS, а не перерисовка комнаты. Состав сцены и статусы соответствуют
+выбранной команде. Исходные PNG входят в сборку Vite.
 
 ## Промпт комнаты
 
@@ -17,3 +17,11 @@ Use case: stylized-concept. Asset: isolated transparent PNG sprite to place into
 ## Промпт прозрачного фона комнаты
 
 Use case: background-extraction. Edit the provided office room image ONLY by removing the off-white external background around the miniature room and its floor plinth. Output a genuine transparent alpha PNG. Preserve exactly the room, walls, floor, sofa, plants, furniture, materials, colors, lighting, perspective and object positions. Preserve the original landscape 1536x1024 canvas, scale and framing; do not crop or zoom. Keep soft contact shadow with transparency rather than a solid background. The rectangular area outside the room must be transparent, not white, not black, not a checkerboard. Do not add people, text or objects. This will be displayed on both dark and light UI backgrounds.
+
+## Разработчик
+
+`developer.png` создан встроенным `image_gen` 17.09.2026 с `boss.png` как образцом
+стиля и ракурса. Используется как самостоятельный прозрачный спрайт и аватар;
+положение и масштаб задаются CSS.
+
+Use case: stylized-concept. Create a new standalone developer character at his own small light-oak desk as a transparent PNG sprite for the same cozy isometric office as the reference Boss. Reference image is style and camera guidance only. Match the handmade plasticine/clay texture, realistic soft miniature materials, warm beige pastel palette, gentle lighting, same elevated three-quarter isometric angle with character facing lower-right. Developer is a younger adult programmer with short dark hair, clean shaven, wearing a muted dusty-blue sweatshirt, cream trousers and simple sneakers, sitting on a beige swivel chair and working on a silver laptop. Include entire desk, chair, both feet and legs of desk, unobstructed silhouette, similar proportions and framing to reference. A small coffee cup on the table. No room, floor tile, background, text, label or watermark. Real transparent alpha outside character+furniture, minimal soft contact shadow only. Square canvas with padding around the complete sprite.
