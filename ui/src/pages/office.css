@@ -29,12 +29,13 @@
   width: 100%;
   height: auto;
 }
-/* Единая система координат сохраняет персонажа в центре пола на любом экране. */
+/* Координаты заданы относительно большого офиса. Масштаб персонажей согласован
+   с мебелью на фоне; столы остаются на открытом полу на любом размере экрана. */
 .office-employee {
   position: absolute;
   left: 50%;
-  top: 38%;
-  width: 28%;
+  top: 46%;
+  width: 16%;
   transform: translateX(-50%);
 }
 .office-employee > img {
@@ -98,13 +99,11 @@
 /* Два независимых стола занимают свободный пол, сохраняя общий масштаб миниатюр. */
 .office-scene-team .office-boss {
   left: 38%;
-  top: 36%;
-  width: 25%;
+  top: 44%;
 }
 .office-developer {
   left: 65%;
-  top: 45%;
-  width: 25%;
+  top: 53%;
 }
 
 .office-with-player .office-scene {

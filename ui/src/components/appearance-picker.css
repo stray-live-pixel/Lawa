@@ -1,0 +1,75 @@
+.appearance-picker {
+  display: grid;
+  gap: 12px;
+  width: min(680px, calc(100vw - 80px));
+}
+.appearance-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.appearance-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 8px;
+  max-height: min(520px, 55dvh);
+  overflow-y: auto;
+  padding: 3px;
+}
+.appearance-card.g-button {
+  height: auto;
+  min-width: 0;
+}
+.appearance-card .g-button__text {
+  margin: 8px;
+  white-space: normal;
+}
+.appearance-card-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.appearance-card img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+
+.character-gallery-grid {
+  grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+}
+.character-gallery-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--g-color-line-generic);
+  border-radius: var(--g-border-radius-l);
+  text-align: center;
+}
+.character-gallery-card > img {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 1;
+  object-fit: contain;
+}
+.character-gallery-id {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 100%;
+  margin-top: auto;
+  padding-top: 6px;
+}
+.character-gallery-id code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+  user-select: text;
+}

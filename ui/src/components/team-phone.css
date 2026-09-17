@@ -232,7 +232,7 @@
   border-radius: 16px 16px 4px 16px;
   background: var(--g-color-base-info-light);
 }
-.team-boss-avatar img {
+.team-employee-avatar img {
   object-fit: cover;
   transform: translate(8%, 31%) scale(3.2);
   transform-origin: 42% 19%;

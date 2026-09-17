@@ -1,0 +1,282 @@
+[
+  {
+    "id": "qa-detective",
+    "name": "Детектив багов",
+    "profession": "QA",
+    "kind": "human",
+    "description": "woman with short dark bob, round magnifying spectacles, beige detective jacket, curious raised eyebrow, small magnifying glass on desk"
+  },
+  {
+    "id": "frontend-neon",
+    "name": "Неоновый фронтендер",
+    "profession": "Frontend",
+    "kind": "human",
+    "description": "young man with mint streak in swept hair, lavender hoodie, colorful sneakers, neon yellow headphones around neck, playful smile"
+  },
+  {
+    "id": "backend-monk",
+    "name": "Монах бэкенда",
+    "profession": "Backend",
+    "kind": "human",
+    "description": "calm bald middle aged man with round glasses and long dark beard, deep charcoal cardigan, tiny bonsai beside laptop, quietly focused"
+  },
+  {
+    "id": "pixel-designer",
+    "name": "Пиксельная фея",
+    "profession": "Дизайн",
+    "kind": "human",
+    "description": "woman with bright coral pixie hair, oversized lilac round glasses, pastel patchwork sweater, stylus and color swatches on desk"
+  },
+  {
+    "id": "release-captain",
+    "name": "Капитан релиза",
+    "profession": "Менеджмент",
+    "kind": "human",
+    "description": "confident older woman with silver bob, navy blazer, red silk scarf, small rocket figurine beside laptop, decisive smile"
+  },
+  {
+    "id": "devops-astronaut",
+    "name": "Космонавт инфраструктуры",
+    "profession": "DevOps",
+    "kind": "human",
+    "description": "man with dark curly hair wearing playful cream astronaut-inspired jumpsuit, no helmet on head, tiny space helmet beside laptop, orange accents"
+  },
+  {
+    "id": "data-oracle",
+    "name": "Оракул данных",
+    "profession": "Аналитика",
+    "kind": "human",
+    "description": "Black woman with tall braided bun and golden round spectacles, teal turtleneck, small crystal-like geometric paperweight on desk, composed"
+  },
+  {
+    "id": "security-knight",
+    "name": "Рыцарь безопасности",
+    "profession": "Безопасность",
+    "kind": "human",
+    "description": "big friendly man with short ginger beard, knitted grey sweater resembling chain mail, tiny shield emblem pin, serious brow, no weapons"
+  },
+  {
+    "id": "mobile-nomad",
+    "name": "Мобильный кочевник",
+    "profession": "Mobile",
+    "kind": "human",
+    "description": "East Asian woman with short black hair, mustard utility vest over white tee, small phone stand and travel flask at desk, relaxed"
+  },
+  {
+    "id": "architect-professor",
+    "name": "Профессор архитектуры",
+    "profession": "Архитектура",
+    "kind": "human",
+    "description": "elderly man with spectacular swept white hair, tiny oval glasses, tweed jacket with elbow patches, miniature wooden blocks on desk"
+  },
+  {
+    "id": "qa-rubberduck",
+    "name": "Утиный инспектор",
+    "profession": "QA",
+    "kind": "human",
+    "description": "cheerful plus-size woman with curly auburn hair, sunshine yellow cardigan, three tiny rubber ducks lined neatly on desk"
+  },
+  {
+    "id": "frontend-punk",
+    "name": "CSS-панк",
+    "profession": "Frontend",
+    "kind": "human",
+    "description": "androgynous adult with purple mohawk and chunky black glasses, black jacket with bright geometric patches, exaggerated spiky hairstyle, friendly smirk"
+  },
+  {
+    "id": "backend-viking",
+    "name": "Викинг баз данных",
+    "profession": "Backend",
+    "kind": "human",
+    "description": "large sturdy man with long braided blond beard and hair bun, chunky forest-green knit sweater, oversized ceramic mug, warm smile, no weapons or helmet"
+  },
+  {
+    "id": "ux-gardener",
+    "name": "Садовник интерфейсов",
+    "profession": "UX",
+    "kind": "human",
+    "description": "woman with long dark braid and freckles, sage overalls over cream shirt, little succulent and pencil cup, attentive expression"
+  },
+  {
+    "id": "product-conductor",
+    "name": "Дирижёр продукта",
+    "profession": "Product",
+    "kind": "human",
+    "description": "slim man with dramatically curly black hair and expressive eyebrows, burgundy waistcoat and bow tie, neat colored sticky notes beside laptop"
+  },
+  {
+    "id": "scrum-wizard",
+    "name": "Волшебница спринта",
+    "profession": "Менеджмент",
+    "kind": "human",
+    "description": "older woman with silver curls, soft indigo cardigan, whimsical small pointed felt hat, star-shaped brooch, hourglass on desk"
+  },
+  {
+    "id": "support-sunshine",
+    "name": "Солнечная поддержка",
+    "profession": "Поддержка",
+    "kind": "human",
+    "description": "South Asian woman with dark ponytail, peach blouse, discreet headset, welcoming smile and tiny sun-shaped desk ornament"
+  },
+  {
+    "id": "sre-firefighter",
+    "name": "Пожарный продакшена",
+    "profession": "SRE",
+    "kind": "human",
+    "description": "man with dark skin and short coiled hair, orange hoodie under navy utility vest, small red toy fire engine on desk, steady focused expression"
+  },
+  {
+    "id": "technical-writer",
+    "name": "Хранитель документации",
+    "profession": "Документация",
+    "kind": "human",
+    "description": "elderly woman with long grey braid, round tortoiseshell glasses, warm brown cardigan, neatly stacked little books beside laptop"
+  },
+  {
+    "id": "ml-alchemist",
+    "name": "Алхимик моделей",
+    "profession": "ML",
+    "kind": "human",
+    "description": "man with unruly chestnut hair and curled moustache, teal waistcoat and cream rolled sleeves, geometric glass paperweights, mischievous genius smile"
+  },
+  {
+    "id": "game-engineer",
+    "name": "Мастер игровых миров",
+    "profession": "GameDev",
+    "kind": "human",
+    "description": "young woman with two dark space buns, violet oversized hoodie, bright sneakers, small game controller and pixel-like cube on desk"
+  },
+  {
+    "id": "accessibility-guide",
+    "name": "Проводник доступности",
+    "profession": "Frontend",
+    "kind": "human",
+    "description": "Black man with close-cropped silver hair, round glasses, cobalt sweater, small tactile wooden puzzle beside laptop, thoughtful kind face"
+  },
+  {
+    "id": "finance-fox",
+    "name": "Мастер точных цифр",
+    "profession": "Финансы",
+    "kind": "human",
+    "description": "woman with red wavy hair, sharp green spectacles, dark plum blazer, pocket calculator and impeccably tidy notebook, serious poised expression"
+  },
+  {
+    "id": "hr-heart",
+    "name": "Сердце команды",
+    "profession": "HR",
+    "kind": "human",
+    "description": "plus-size man with soft brown curls and moustache, salmon-pink knit cardigan, little heart-shaped plant leaf beside laptop, gentle smile"
+  },
+  {
+    "id": "research-diver",
+    "name": "Ныряльщица в исследования",
+    "profession": "Исследования",
+    "kind": "human",
+    "description": "woman with olive skin and thick curly dark hair, turquoise sweater, whimsical diving goggles resting on head, notebook and pencil"
+  },
+  {
+    "id": "intern-comet",
+    "name": "Стажёр-комета",
+    "profession": "Разработка",
+    "kind": "human",
+    "description": "young adult man with spectacular fluffy red hair, oversized mint sweatshirt, huge round glasses, small rocket stickers without text on laptop, enthusiastic"
+  },
+  {
+    "id": "database-librarian",
+    "name": "Библиотекарь данных",
+    "profession": "Базы данных",
+    "kind": "human",
+    "description": "East Asian middle aged man with neatly parted grey hair, charcoal vest over white shirt, rectangular glasses, neatly stacked labeled-free storage boxes"
+  },
+  {
+    "id": "design-diva",
+    "name": "Дива дизайна",
+    "profession": "Дизайн",
+    "kind": "human",
+    "description": "Black woman with extravagant sculptural violet hair, giant angular orange glasses, cream architectural blouse, dramatic but kind confident expression"
+  },
+  {
+    "id": "agile-octopus",
+    "name": "Повелитель дедлайнов",
+    "profession": "Менеджмент",
+    "kind": "human",
+    "description": "human man with enormous moustache, rolled-up sleeves and striped waistcoat, comically many colorful watches on wrists, small hourglass, exactly two arms"
+  },
+  {
+    "id": "night-debugger",
+    "name": "Ночной отладчик",
+    "profession": "Backend",
+    "kind": "human",
+    "description": "pale woman with long ink-blue hair and crescent moon hair clip, oversized midnight-blue sweater, star patterned ceramic mug, sleepy friendly eyes"
+  },
+  {
+    "id": "cat-ginger",
+    "name": "Рыжий ревьюер",
+    "profession": "Кот",
+    "kind": "animal",
+    "description": "cute round ginger tabby cat with white muzzle and emerald eyes, knitted sage vest, front paws typing on laptop, curled tail"
+  },
+  {
+    "id": "cat-black",
+    "name": "Ночной кот",
+    "profession": "Кот",
+    "kind": "animal",
+    "description": "cute black cat with golden eyes and white chest spot, plum bow tie, front paws on laptop, alert tall ears"
+  },
+  {
+    "id": "dog-corgi",
+    "name": "Корги-релизер",
+    "profession": "Собака",
+    "kind": "animal",
+    "description": "cute short-legged tan and white corgi with huge ears, blue neckerchief, front paws on laptop, delighted expression"
+  },
+  {
+    "id": "dog-poodle",
+    "name": "Пудель-дизайнер",
+    "profession": "Собака",
+    "kind": "animal",
+    "description": "cute cream poodle with fluffy rounded ears and topknot, coral round spectacles and lavender scarf, front paws typing"
+  },
+  {
+    "id": "parrot-green",
+    "name": "Зелёный аналитик",
+    "profession": "Попугай",
+    "kind": "animal",
+    "description": "cute green parrot with yellow cheeks, small round glasses and tiny cream vest, wings resting at laptop keyboard, rounded curved beak"
+  },
+  {
+    "id": "parrot-macaw",
+    "name": "Ара-креативщик",
+    "profession": "Попугай",
+    "kind": "animal",
+    "description": "cute scarlet macaw parrot with bright blue yellow wing accents, small teal scarf, wings at laptop keyboard, expressive playful face"
+  },
+  {
+    "id": "bear-brown",
+    "name": "Медведь-бэкендер",
+    "profession": "Медведь",
+    "kind": "animal",
+    "description": "cute stocky brown bear with round ears, forest-green knit sweater, big gentle paws typing, honey-colored ceramic mug"
+  },
+  {
+    "id": "bear-polar",
+    "name": "Белый архитектор",
+    "profession": "Медведь",
+    "kind": "animal",
+    "description": "cute round polar bear with tiny black nose, navy cardigan and round glasses, large soft paws at laptop, calm smile"
+  },
+  {
+    "id": "deer-spotted",
+    "name": "Олень-стажёр",
+    "profession": "Олень",
+    "kind": "animal",
+    "description": "cute small spotted fawn with modest short branching antlers, huge ears, mint hoodie, front hooves on laptop, curious face"
+  },
+  {
+    "id": "deer-reindeer",
+    "name": "Северный тимлид",
+    "profession": "Олень",
+    "kind": "animal",
+    "description": "cute fluffy reindeer with broad rounded antlers and brown nose, burgundy knit scarf and cream sweater, front hooves typing, wise friendly eyes"
+  }
+]

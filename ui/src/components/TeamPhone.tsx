@@ -19,8 +19,7 @@ import {
 import { usePoll } from '../hooks/api';
 import { ErrorNotice } from './ui';
 import { type TeamPlayerState, type TeamHistory } from './TeamPlayer';
-import bossImage from '../assets/office/boss.png';
-import developerImage from '../assets/office/developer.png';
+import { useEmployeeSprite } from './appearances';
 import './team-phone.css';
 import { TeamMarkdown } from './TeamMarkdown';
 import { TeamMessageInput } from './TeamMessageInput';
@@ -317,16 +316,11 @@ function TeamGoal({ goal, achieved }: { goal: string; achieved: boolean }) {
   );
 }
 
-// ID автора разрешается через реестр команды. Образ Босса берётся из сцены,
-// Разработчик использует свой образ. Прочие авторы получают стабильные инициалы.
+// Выбранная внешность едина для сцены и чата. Если выбора нет, используем
+// исходный образ из реестра команды либо стабильные инициалы автора.
 function MemberAvatar({ id, chat }: { id: string; chat: TeamChat }) {
   const member = chat.members[id];
-  const sprite =
-    member?.avatar === 'boss'
-      ? bossImage
-      : member?.avatar === 'developer'
-        ? developerImage
-        : undefined;
+  const sprite = useEmployeeSprite(id, member?.avatar || '');
   const hash = Array.from(id).reduce(
     (value, letter) => (value * 31 + letter.codePointAt(0)!) >>> 0,
     0,
@@ -337,7 +331,7 @@ function MemberAvatar({ id, chat }: { id: string; chat: TeamChat }) {
       aria-label={`Аватар: ${member?.name || id}`}
       text={member?.name || '?'}
       imgUrl={sprite}
-      className={sprite ? 'team-boss-avatar' : undefined}
+      className={sprite ? 'team-employee-avatar' : undefined}
       theme="normal"
       style={{ backgroundColor: `hsl(${hash % 360} 25% 78%)` }}
     />
