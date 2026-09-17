@@ -117,58 +117,65 @@ export function TeamPhone({
         }
       }}
     >
-      <header className="team-phone-header" {...phoneWindow.move}>
-        <span
-          className="team-phone-move-grip"
-          role="button"
-          tabIndex={0}
-          aria-label="Переместить телефон"
-          title="Перетащите окно или используйте стрелки"
-          onKeyDown={(event) => phoneWindow.keyboard('move', event)}
-        />
-        <span className="team-phone-camera-island" aria-hidden="true">
-          <span className="team-phone-camera-lens" />
-        </span>
-        <Text variant="subheader-2" className="team-phone-title">
-          Чат команды
-        </Text>
-        {historical && (
+      <div className="team-phone-screen">
+        <header className="team-phone-header" {...phoneWindow.move}>
+          <span
+            className="team-phone-move-grip"
+            role="button"
+            tabIndex={0}
+            aria-label="Переместить телефон"
+            title="Перетащите окно или используйте стрелки"
+            onKeyDown={(event) => phoneWindow.keyboard('move', event)}
+          />
+          <span className="team-phone-camera-island" aria-hidden="true">
+            <span className="team-phone-camera-lens" />
+          </span>
+          <Text variant="subheader-2" className="team-phone-title">
+            Чат команды
+          </Text>
+          {historical && (
+            <>
+              <Label theme="info" size="xs">
+                История
+              </Label>
+              <Button
+                view="flat"
+                size="s"
+                aria-label="К текущему чату"
+                title="К текущему чату"
+                onClick={player?.live}
+              >
+                <Icon data={ChevronsRight} size={16} />
+              </Button>
+            </>
+          )}
+          <Button
+            view="flat"
+            size="s"
+            aria-label="Закрыть чат"
+            onClick={onClose}
+          >
+            <Icon data={Xmark} size={16} />
+          </Button>
+        </header>
+        <ErrorNotice error={error || teams?.problems.join('\n')} />
+        {creating ? (
+          <NewTeam cwd={teams?.cwd || ''} onCreated={selectRun} />
+        ) : (
           <>
-            <Label theme="info" size="xs">
-              История
-            </Label>
-            <Button
-              view="flat"
-              size="s"
-              aria-label="К текущему чату"
-              title="К текущему чату"
-              onClick={player?.live}
-            >
-              <Icon data={ChevronsRight} size={16} />
-            </Button>
+            <TeamThread
+              key={run}
+              run={run}
+              historyView={
+                player?.historical && player.view?.runId === run
+                  ? player.view
+                  : undefined
+              }
+              onLive={player?.live}
+            />
           </>
         )}
-        <Button view="flat" size="s" aria-label="Закрыть чат" onClick={onClose}>
-          <Icon data={Xmark} size={16} />
-        </Button>
-      </header>
-      <ErrorNotice error={error || teams?.problems.join('\n')} />
-      {creating ? (
-        <NewTeam cwd={teams?.cwd || ''} onCreated={selectRun} />
-      ) : (
-        <>
-          <TeamThread
-            key={run}
-            run={run}
-            historyView={
-              player?.historical && player.view?.runId === run
-                ? player.view
-                : undefined
-            }
-            onLive={player?.live}
-          />
-        </>
-      )}
+      </div>
       <button
         className="team-phone-resize"
         type="button"
@@ -177,8 +184,8 @@ export function TeamPhone({
         {...phoneWindow.resize}
         onKeyDown={(event) => phoneWindow.keyboard('resize', event)}
       >
-        <svg viewBox="0 0 44 44" aria-hidden="true">
-          <path d="M14.32 39.77A36 36 0 0 0 39.77 14.32" />
+        <svg viewBox="0 0 52 52" aria-hidden="true">
+          <path d="M25.483 46.378A43.5 43.5 0 0 0 46.999 24.098" />
         </svg>
       </button>
     </section>

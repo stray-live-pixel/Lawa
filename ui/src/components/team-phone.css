@@ -7,9 +7,6 @@
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
-  /* Нижний отступ защищает поле ввода от скругления рамки. */
-  padding-bottom: 17px;
   border: 9px solid #28272a;
   border-radius: 48px;
   background: var(--g-color-base-background);
@@ -17,6 +14,17 @@
   box-shadow:
     0 24px 80px var(--g-color-sfx-shadow-heavy),
     inset 0 0 0 1px var(--g-color-line-generic);
+}
+/* Экран обрезает переписку отдельно от корпуса: ручка ресайза может лежать
+   на рамке, сохраняя прежние скругления и нижний отступ содержимого. */
+.team-phone-screen {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  border-radius: 39px;
+  padding-bottom: 17px;
 }
 /* Камера и управление объединены в компактную шапку. Вся её свободная
    площадь, включая остров камеры, служит ручкой перетаскивания. */
@@ -504,14 +512,14 @@
   pointer-events: none;
 }
 
-/* Одна дуга повторяет внутренний контур телефона с отступом 3 px: её центр
-   совпадает с центром скругления рамки (48 px минус бордюр 9 px). */
+/* Дуга лежит посередине рамки: радиус 48 − 9/2 = 43,5 px.
+   Дуга охватывает 41,71°; середина повёрнута на 1° против часовой стрелки. */
 .team-phone-resize {
   position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 44px;
-  height: 44px;
+  right: -6px;
+  bottom: -6px;
+  width: 52px;
+  height: 52px;
   padding: 0;
   border: 0;
   border-radius: 8px;
