@@ -489,14 +489,14 @@
   outline-offset: 3px;
   border-radius: 4px;
 }
-/* Невидимая кнопка сохраняет доступность ручки с клавиатуры. Визуально это
-   только две дуги: короткое движение при наведении подсказывает направление. */
+/* Одна дуга повторяет внутренний контур телефона с отступом 3 px: её центр
+   совпадает с центром скругления рамки (48 px минус бордюр 9 px). */
 .team-phone-resize {
   position: absolute;
-  right: 9px;
-  bottom: 7px;
-  width: 28px;
-  height: 28px;
+  right: 0;
+  bottom: 0;
+  width: 44px;
+  height: 44px;
   padding: 0;
   border: 0;
   border-radius: 8px;
