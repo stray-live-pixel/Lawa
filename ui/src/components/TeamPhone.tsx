@@ -542,11 +542,6 @@ function TeamThread({
                 </Text>
               )}
             </div>
-            {historyView && (
-              <Text as="div" variant="caption-1" color="secondary">
-                Отправка в текущий чат
-              </Text>
-            )}
           </form>
         </>
       ) : (
