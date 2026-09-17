@@ -1,6 +1,7 @@
 import {
   act,
   cleanup,
+  fireEvent,
   renderHook,
   render,
   screen,
@@ -128,7 +129,7 @@ it('воспроизводит и возвращает живой снимок',
   rerender({ data: chat });
   expect(result.current.historical).toBe(false);
 });
-// Настоящий Office и телефон читают один кадр; в прошлом отправка недоступна.
+// Настоящий Office и телефон читают один кадр; отправка всегда относится к текущему чату.
 it('перематывает сцену и телефон вместе без запуска агентов', async () => {
   window.history.replaceState(null, '', '/office?run=order');
   const fetch = vi.fn(async (url: string, options?: RequestInit) => {
@@ -164,9 +165,11 @@ it('перематывает сцену и телефон вместе без з
     screen.getByRole('region', { name: 'Смартфон команды' }),
   );
   expect(phone.queryByText('Игра готова')).not.toBeInTheDocument();
-  expect(
-    phone.queryByRole('textbox', { name: 'Сообщение команде' }),
-  ).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(
+      phone.getByRole('textbox', { name: 'Сообщение команде' }),
+    ).toBeVisible(),
+  );
   expect(
     phone.queryByRole('region', { name: 'Плеер команды' }),
   ).not.toBeInTheDocument();
@@ -245,11 +248,17 @@ it('показывает достигнутую цель в офисе и pin, �
   const phone = within(
     screen.getByRole('region', { name: 'Смартфон команды' }),
   );
-  await waitFor(() => expect(phone.getByText('Цель достигнута')).toBeVisible());
+  await waitFor(() =>
+    expect(phone.getByText('Цель команды').closest('section')).toHaveClass(
+      'team-pin-achieved',
+    ),
+  );
   expect(phone.getByText('Босс отметил цель достигнутой.')).toBeVisible();
-  expect(
-    phone.queryByRole('textbox', { name: 'Сообщение команде' }),
-  ).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(
+      phone.getByRole('textbox', { name: 'Сообщение команде' }),
+    ).toBeVisible(),
+  );
   expect(phone.queryByRole('slider')).not.toBeInTheDocument();
   await user.click(phone.getByRole('button', { name: 'Закрыть чат' }));
   await user.click(screen.getByRole('button', { name: 'Предыдущее событие' }));
@@ -257,4 +266,62 @@ it('показывает достигнутую цель в офисе и pin, �
   expect(
     screen.queryByText('Восстановлено по ходам Codex и сообщениям'),
   ).not.toBeInTheDocument();
+});
+
+// Даже исторический кадр завершённого заказа не блокирует новый вопрос.
+it('отправляет из истории в текущий чат и возвращает live', async () => {
+  window.history.replaceState(null, '', '/office?run=order');
+  const completed = { ...chat, room: { ...chat.room!, achievedAt: date(20) } };
+  const sent: string[] = [];
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string, options?: RequestInit) => {
+      if (options?.method === 'POST') {
+        expect(url).toBe('/api/teams/order/messages');
+        const message = JSON.parse(String(options.body));
+        sent.push(message.text);
+        return new Response(
+          JSON.stringify({ ...message, authorId: 'human', date: date(30) }),
+        );
+      }
+      return new Response(
+        JSON.stringify(
+          url === '/api/teams'
+            ? { teams: [], cwd: '/project', problems: [] }
+            : completed,
+        ),
+      );
+    }),
+  );
+  render(
+    <AppTheme>
+      <Office />
+    </AppTheme>,
+  );
+  await screen.findByText('Цель достигнута');
+  const user = userEvent.setup();
+  await user.click(screen.getByRole('button', { name: 'Предыдущее событие' }));
+  await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));
+  const phone = within(
+    screen.getByRole('region', { name: 'Смартфон команды' }),
+  );
+  await waitFor(() => expect(phone.getByText('История')).toBeVisible());
+  expect(phone.getByRole('button', { name: 'К текущему чату' })).toBeVisible();
+  fireEvent.change(phone.getByRole('textbox', { name: 'Сообщение команде' }), {
+    target: { value: '@developer Как работает прыжок?' },
+  });
+  await user.click(phone.getByRole('button', { name: 'Отправить сообщение' }));
+  await waitFor(() =>
+    expect(phone.queryByText('История')).not.toBeInTheDocument(),
+  );
+  expect(sent).toEqual(['@developer Как работает прыжок?']);
+  expect(phone.getByRole('textbox', { name: 'Сообщение команде' })).toHaveValue(
+    '',
+  );
+});
+
+it('сохраняет прежнюю цель при перемотке после смены pin', () => {
+  const updated = { ...chat, goal: 'Второй уровень' };
+  const frames = historyFrames(chat).map((f) => ({ ...f, goal: 'Игра' }));
+  expect(teamAt(updated, frames, start + 10000).goal).toBe('Игра');
 });

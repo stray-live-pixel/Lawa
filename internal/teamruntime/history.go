@@ -69,6 +69,11 @@ func recoveredFrames(chat runstore.TeamChat, turns map[string][]codex.Historical
 	if len(chat.Messages) == 0 {
 		return nil
 	}
+	// До первого нативного кадра действовала его цель, а не сегодняшняя.
+	goal := chat.Goal
+	if chat.History != nil && len(chat.History.Frames) > 0 && chat.History.Frames[0].Goal != "" {
+		goal = chat.History.Frames[0].Goal
+	}
 	start := chat.Messages[0].Date
 	events := []historyEvent{{at: start, actor: "boss", status: "unknown"}}
 	lastDate := start
@@ -142,7 +147,7 @@ func recoveredFrames(chat runstore.TeamChat, turns map[string][]codex.Historical
 				actors[event.actor] = actor
 			}
 		}
-		frame := runstore.TeamFrame{At: event.at, MessageCount: count, Actors: map[string]runstore.TeamActorView{}}
+		frame := runstore.TeamFrame{Goal: goal, At: event.at, MessageCount: count, Actors: map[string]runstore.TeamActorView{}}
 		for id, actor := range actors {
 			frame.Actors[id] = actor
 		}

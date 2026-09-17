@@ -12,7 +12,7 @@ import (
 	"unicode/utf8"
 )
 
-// TeamChat — общая доска корневого заказа. Цель неизменна, сообщения добавляются
+// TeamChat — общая доска корневого заказа. Текущая цель версионируется кадрами, сообщения добавляются
 // последовательно. Память кубиков остаётся рабочими заметками, чат — общими фактами.
 type TeamChat struct {
 	History  *TeamHistory          `json:"history,omitempty"`
@@ -33,13 +33,16 @@ type TeamMember struct {
 // TeamMessage получает время и автора на стороне Lawa. ID — ключ повтора:
 // потеря сетевого подтверждения не должна удваивать сообщение при retry.
 type TeamMessage struct {
-	To       string    `json:"to,omitempty"`
-	Kind     string    `json:"kind,omitempty"`
-	ReplyTo  string    `json:"replyTo,omitempty"`
-	ID       string    `json:"id"`
-	AuthorID string    `json:"authorId"`
-	Date     time.Time `json:"date"`
-	Text     string    `json:"text"`
+	Goal       string    `json:"goal,omitempty"`
+	NotifyBoss bool      `json:"notifyBoss,omitempty"`
+	To         string    `json:"to,omitempty"`
+	Kind       string    `json:"kind,omitempty"`
+	ReplyToIDs []string  `json:"replyToIds,omitempty"` // Все входы порции, на которые отвечает реплика.
+	ReplyTo    string    `json:"replyTo,omitempty"`
+	ID         string    `json:"id"`
+	AuthorID   string    `json:"authorId"`
+	Date       time.Time `json:"date"`
+	Text       string    `json:"text"`
 }
 
 // newTeam создаёт pin точного входного задания, без ограничения в 50 слов.

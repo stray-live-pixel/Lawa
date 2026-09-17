@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Avatar,
+  Label,
   Button,
   Icon,
   Modal,
@@ -8,9 +9,16 @@ import {
   TextArea,
   TextInput,
 } from '@gravity-ui/uikit';
-import { ArrowUp, Pin, Xmark, CircleCheckFill } from '@gravity-ui/icons';
+import {
+  ArrowUp,
+  Pin,
+  Xmark,
+  CircleCheckFill,
+  ChevronsRight,
+  ChevronDown,
+} from '@gravity-ui/icons';
 import { usePoll } from '../hooks/api';
-import { Choice, ErrorNotice } from './ui';
+import { ErrorNotice } from './ui';
 import { type TeamPlayerState, type TeamHistory } from './TeamPlayer';
 import bossImage from '../assets/office/boss.png';
 import developerImage from '../assets/office/developer.png';
@@ -80,6 +88,8 @@ export function TeamPhone({
   );
   const { data: teams, error } = usePoll<Teams>('/api/teams');
   const [creating, setCreating] = useState(!run);
+  const historical =
+    !creating && player?.historical && player.view?.runId === run;
   function selectRun(id: string) {
     setRun(id);
     onRunChange?.(id);
@@ -100,37 +110,29 @@ export function TeamPhone({
           <span />
         </div>
         <header className="team-phone-header">
-          <div>
-            <Text variant="subheader-2">Команда</Text>
-            <Text as="div" variant="caption-2" color="secondary">
-              Общая база знаний
-            </Text>
-          </div>
+          <Text variant="subheader-2" className="team-phone-title">
+            Чат команды
+          </Text>
+          {historical && (
+            <>
+              <Label theme="info" size="xs">
+                История
+              </Label>
+              <Button
+                view="flat"
+                size="s"
+                aria-label="К текущему чату"
+                title="К текущему чату"
+                onClick={player?.live}
+              >
+                <Icon data={ChevronsRight} size={16} />
+              </Button>
+            </>
+          )}
           <Button view="flat" aria-label="Закрыть чат" onClick={onClose}>
             <Icon data={Xmark} />
           </Button>
         </header>
-        <div className="team-phone-picker">
-          <Choice
-            aria-label="Заказ команды"
-            value={creating ? 'new' : run}
-            onUpdate={(id) =>
-              id === 'new' ? setCreating(true) : selectRun(id)
-            }
-            options={[
-              { value: 'new', content: 'Новая цель' },
-              ...(teams?.teams || []).map((team) => ({
-                value: team.id,
-                content: team.goal.slice(0, 70),
-              })),
-              ...(!creating &&
-              run &&
-              !teams?.teams.some((team) => team.id === run)
-                ? [{ value: run, content: 'Текущий заказ' }]
-                : []),
-            ]}
-          />
-        </div>
         <ErrorNotice error={error || teams?.problems.join('\n')} />
         {creating ? (
           <NewTeam cwd={teams?.cwd || ''} onCreated={selectRun} />
@@ -229,6 +231,41 @@ function NewTeam({
   );
 }
 
+// Карточка занимает две строки до раскрытия; полная цель доступна с клавиатуры.
+// Собственное раскрытие не меняет курсор истории или состояние заказа.
+function TeamGoal({ goal, achieved }: { goal: string; achieved: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <section
+      className={`team-pin ${achieved ? 'team-pin-achieved' : ''} ${expanded ? 'team-pin-expanded' : ''}`}
+    >
+      <Button
+        view="flat"
+        className="team-pin-toggle"
+        aria-label={expanded ? 'Свернуть цель' : 'Развернуть цель'}
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="team-pin-content">
+          <Icon data={achieved ? CircleCheckFill : Pin} size={16} />
+          <span className="team-pin-copy">
+            <Text
+              as="span"
+              variant="caption-2"
+              color={achieved ? 'positive' : 'secondary'}
+            >
+              Цель команды
+            </Text>
+            {!expanded && <span className="team-pin-preview">{goal}</span>}
+          </span>
+          <Icon className="team-pin-chevron" data={ChevronDown} size={14} />
+        </span>
+      </Button>
+      {expanded && <div className="team-pin-details">{goal}</div>}
+    </section>
+  );
+}
+
 // ID автора разрешается через реестр команды. Образ Босса берётся из сцены,
 // Разработчик использует свой образ. Прочие авторы получают стабильные инициалы.
 function MemberAvatar({ id, chat }: { id: string; chat: TeamChat }) {
@@ -307,6 +344,7 @@ function TeamThread({
       pending.current = null;
       follows.current = true;
       setText('');
+      onLive?.();
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -318,23 +356,11 @@ function TeamThread({
       <ErrorNotice error={readError} />
       {chat ? (
         <>
-          <div
-            className={`team-pin ${chat.room?.achievedAt ? 'team-pin-achieved' : ''}`}
-            tabIndex={0}
-          >
-            <Icon
-              data={chat.room?.achievedAt ? CircleCheckFill : Pin}
-              size={16}
-            />
-            <div>
-              <Text variant="caption-2" color="secondary">
-                {chat.room?.achievedAt
-                  ? 'Цель достигнута'
-                  : 'Цель команды · закреплено'}
-              </Text>
-              <p>{chat.goal}</p>
-            </div>
-          </div>
+          <TeamGoal
+            key={chat.goal}
+            goal={chat.goal}
+            achieved={Boolean(chat.room?.achievedAt)}
+          />
           <div
             className="team-messages"
             ref={list}
@@ -352,7 +378,9 @@ function TeamThread({
               </Text>
             )}
             {messages.map((message) =>
-              message.kind === 'system' || message.kind === 'achievement' ? (
+              message.kind === 'system' ||
+              message.kind === 'achievement' ||
+              message.kind === 'goal_updated' ? (
                 <div key={message.id} className="team-system-message">
                   <time dateTime={message.date}>
                     {new Date(message.date).toLocaleTimeString('ru-RU', {
@@ -443,72 +471,57 @@ function TeamThread({
                   )}
                 </div>
               ))}
-          {historyView ? (
-            <div className="team-history-note">
-              <Text variant="caption-2" color="secondary">
-                Просмотр истории
-              </Text>
-              <Button size="s" onClick={onLive}>
-                К текущему чату
+          <form
+            className="team-compose"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void send();
+            }}
+          >
+            <ErrorNotice error={error} />
+            {(liveChat || chat).room && (
+              <TeamRecipients
+                actors={(liveChat || chat).room!.actors}
+                achieved={Boolean((liveChat || chat).room?.achievedAt)}
+                busy={busy}
+                onSelect={(id) =>
+                  setText(
+                    `@${id} ${text.replace(/^@(boss|developer|human)\s*/, '')}`,
+                  )
+                }
+              />
+            )}
+            <div className="team-compose-row">
+              <TextArea
+                controlProps={{ 'aria-label': 'Сообщение команде' }}
+                placeholder={
+                  chat.room ? '@boss Самое важное…' : 'Самое важное…'
+                }
+                value={text}
+                onUpdate={setText}
+                minRows={2}
+                maxRows={4}
+                disabled={busy}
+              />
+              <Button
+                type="submit"
+                view="action"
+                size="l"
+                aria-label="Отправить сообщение"
+                loading={busy}
+                disabled={!text.trim() || wordCount(text) > 50}
+              >
+                <Icon data={ArrowUp} />
               </Button>
             </div>
-          ) : chat.room?.achievedAt ? (
-            <div className="team-history-note">
-              <Text color="positive">
-                Цель достигнута. Команда завершила работу.
-              </Text>
-            </div>
-          ) : (
-            <form
-              className="team-compose"
-              onSubmit={(event) => {
-                event.preventDefault();
-                void send();
-              }}
+            <Text
+              variant="caption-2"
+              color={wordCount(text) > 50 ? 'danger' : 'secondary'}
             >
-              <ErrorNotice error={error} />
-              {chat.room && (
-                <TeamRecipients
-                  actors={chat.room.actors}
-                  busy={busy}
-                  onSelect={(id) =>
-                    setText(
-                      `@${id} ${text.replace(/^@(boss|developer|human)\s*/, '')}`,
-                    )
-                  }
-                />
-              )}
-              <div className="team-compose-row">
-                <TextArea
-                  controlProps={{ 'aria-label': 'Сообщение команде' }}
-                  placeholder={
-                    chat.room ? '@boss Самое важное…' : 'Самое важное…'
-                  }
-                  value={text}
-                  onUpdate={setText}
-                  minRows={2}
-                  maxRows={4}
-                  disabled={busy}
-                />
-                <Button
-                  type="submit"
-                  view="action"
-                  size="l"
-                  aria-label="Отправить сообщение"
-                  loading={busy}
-                  disabled={!text.trim() || wordCount(text) > 50}
-                >
-                  <Icon data={ArrowUp} />
-                </Button>
-              </div>
-              <Text
-                variant="caption-2"
-                color={wordCount(text) > 50 ? 'danger' : 'secondary'}
-              >
-                Чел · {wordCount(text)}/50 слов
-              </Text>
-            </form>
-          )}
+              Чел · {wordCount(text)}/50 слов
+              {historyView ? ' · Отправка в текущий чат' : ''}
+            </Text>
+          </form>
         </>
       ) : (
         !readError && <p className="team-empty">Загрузка чата…</p>
@@ -521,10 +534,12 @@ function TeamThread({
 // зависшим интерфейсом. Сервер остаётся источником времени следующей проверки.
 function TeamRecipients({
   actors,
+  achieved,
   busy,
   onSelect,
 }: {
   actors: Record<string, TeamActor>;
+  achieved?: boolean;
   busy: boolean;
   onSelect: (id: string) => void;
 }) {
@@ -541,13 +556,15 @@ function TeamRecipients({
           Math.ceil((Date.parse(actor.nextCheck) - now) / 1000),
         );
         const status =
-          actor.status === 'working'
-            ? 'Работает'
-            : actor.status === 'blocked'
-              ? 'Нужна помощь'
-              : seconds > 0
-                ? `Проверка через ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
-                : 'Ожидает проверки';
+          achieved || actor.nextCheck.startsWith('0001-')
+            ? 'Ждёт обращения'
+            : actor.status === 'working'
+              ? 'Работает'
+              : actor.status === 'blocked'
+                ? 'Нужна помощь'
+                : seconds > 0
+                  ? `Проверка через ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+                  : 'Ожидает проверки';
         return (
           <div key={id} className="team-recipient">
             <Button

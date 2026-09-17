@@ -81,7 +81,14 @@ it('показывает pin и автора, проверяет 50 слов и 
   );
   expect(await screen.findByText('Начинаем с управления героем')).toBeVisible();
   expect(screen.getByText('Босс')).toBeVisible();
-  expect(screen.getByText('Цель команды · закреплено')).toBeVisible();
+  expect(screen.getByText('Цель команды')).toBeVisible();
+  const pin = screen.getByRole('button', { name: 'Развернуть цель' });
+  expect(pin).toHaveAttribute('aria-expanded', 'false');
+  fireEvent.click(pin);
+  expect(screen.getByRole('button', { name: 'Свернуть цель' })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
   const field = screen.getByRole('textbox', { name: 'Сообщение команде' });
   const send = screen.getByRole('button', { name: 'Отправить сообщение' });
   fireEvent.change(field, { target: { value: 'слово '.repeat(51) } });

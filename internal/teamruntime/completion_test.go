@@ -49,8 +49,11 @@ func TestCompleteGoalStopsTeam(t *testing.T) {
 	if claimed, err := runstore.ClaimTeamDelivery(t.Context(), e.Root, run, "boss", *now); err != nil || claimed {
 		t.Fatal(claimed, err)
 	}
-	if _, err := runstore.PostTeam(t.Context(), e.Root, run, "", "after", "@boss Ещё вопрос"); err == nil {
-		t.Fatal("чат не закрыт")
+	if _, err := runstore.PostTeam(t.Context(), e.Root, run, "", "after", "Заметка без тега"); err != nil {
+		t.Fatal(err)
+	}
+	if readChat(t, e, run).Room.AchievedAt == nil {
+		t.Fatal("заметка разбудила команду")
 	}
 	if _, err := runstore.CompleteTeam(t.Context(), e.Root, run, "developer", "fake", "@human Готово"); err == nil {
 		t.Fatal("не проверена роль")

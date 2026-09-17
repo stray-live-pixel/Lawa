@@ -12,6 +12,7 @@ import { type TeamActor, type TeamChat } from './TeamPhone';
 import './team-player.css';
 
 export interface TeamFrame {
+  goal?: string;
   achievedAt?: string;
   at: string;
   messageCount: number;
@@ -70,6 +71,7 @@ export function teamAt(
   const frame = frames[low - 1];
   return {
     ...chat,
+    goal: frame?.goal || frames[0]?.goal || chat.goal,
     messages: frame ? chat.messages.slice(0, frame.messageCount) : [],
     room: { actors: frame?.actors || {}, achievedAt: frame?.achievedAt },
   };

@@ -16,6 +16,7 @@ type TeamHistory struct {
 // TeamFrame — неизменяемый кадр. MessageCount ссылается на префикс append-only
 // переписки. В кадре нет thread/turn ID, доставки и внутренних рассуждений.
 type TeamFrame struct {
+	Goal         string                   `json:"goal,omitempty"`
 	AchievedAt   *time.Time               `json:"achievedAt,omitempty"`
 	At           time.Time                `json:"at"`
 	MessageCount int                      `json:"messageCount"`
@@ -32,7 +33,7 @@ type TeamActorView struct {
 // CaptureTeamFrame копирует публичные значения, не сохраняя изменяемые указатели
 // на акторов runtime. Поздняя правка личности не меняет исторический кадр.
 func CaptureTeamFrame(chat TeamChat, at time.Time) TeamFrame {
-	frame := TeamFrame{At: at.UTC(), MessageCount: len(chat.Messages), Actors: map[string]TeamActorView{}}
+	frame := TeamFrame{Goal: chat.Goal, At: at.UTC(), MessageCount: len(chat.Messages), Actors: map[string]TeamActorView{}}
 	if chat.Room != nil {
 		if chat.Room.AchievedAt != nil {
 			at := *chat.Room.AchievedAt
@@ -61,7 +62,7 @@ func recordTeamFrame(chat *TeamChat, at time.Time) {
 	frames := chat.History.Frames
 	if len(frames) > 0 {
 		last := frames[len(frames)-1]
-		if frame.MessageCount == last.MessageCount && sameAchievement(frame.AchievedAt, last.AchievedAt) && sameVisibleActors(frame.Actors, last.Actors) {
+		if frame.Goal == last.Goal && frame.MessageCount == last.MessageCount && sameAchievement(frame.AchievedAt, last.AchievedAt) && sameVisibleActors(frame.Actors, last.Actors) {
 			return
 		}
 		if frame.At.Before(last.At) {

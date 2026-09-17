@@ -87,8 +87,8 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 			return previous, nil
 		}
 	}
-	if chat.Room.AchievedAt != nil {
-		return TeamMessage{}, errors.New("цель достигнута; чат доступен только для просмотра")
+	if chat.Room.AchievedAt != nil && author != "human" {
+		return TeamMessage{}, errors.New("цель достигнута; дождись нового обращения Чела")
 	}
 	to, err := addressedTo(text)
 	if err != nil {
@@ -113,8 +113,12 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 			for _, inputID := range actor.Delivery.IDs {
 				if msg.ID == inputID && (msg.AuthorID == to || author == "developer" && msg.AuthorID == "human" && to == "boss") {
 					m.ReplyTo = msg.ID
+					m.ReplyToIDs = append(m.ReplyToIDs, msg.ID)
 				}
 			}
+		}
+		if author == "boss" && to == "human" && pendingHumanRelay(*chat) {
+			return m, errors.New("сначала дождись ответа Разработчика на обращение Чела")
 		}
 		if m.ReplyTo != "" {
 			m.Kind = "reply"
@@ -125,7 +129,9 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 		}
 		actor.Summary = strings.Join(strings.Fields(strings.TrimPrefix(text, "@"+to))[:min(7, len(strings.Fields(strings.TrimPrefix(text, "@"+to))))], " ")
 	}
+	reopenForHuman(chat, &m)
 	chat.Messages = append(chat.Messages, m)
+	wakeForMessage(chat, m)
 	return m, nil
 }
 
@@ -175,7 +181,7 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 			return nil
 		}
 		actor := chat.Room.Actors[actorID]
-		if actor == nil || actor.Delivery != nil || actor.Status == "blocked" || now.Before(actor.NextCheck) {
+		if actor == nil || TeamActorSleeping(actor) || actor.Delivery != nil || actor.Status == "blocked" || now.Before(actor.NextCheck) {
 			return nil
 		}
 		if actor.Cursor < 0 || actor.Cursor > len(chat.Messages) {
@@ -183,7 +189,7 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 		}
 		var ids []string
 		for i := actor.Cursor; i < len(chat.Messages); i++ {
-			if chat.Messages[i].To == actorID {
+			if TeamMessageForActor(chat.Messages[i], actorID) {
 				ids = append(ids, chat.Messages[i].ID)
 			}
 		}
@@ -241,11 +247,16 @@ func (chat TeamChat) validateRoom() error {
 	if chat.Room.Actors["boss"] == nil {
 		return errors.New("в комнате отсутствует Босс")
 	}
-	// Терминальная отметка без двух финальных записей означает повреждение,
-	// а не завершённую цель. Заодно запрещаем доступ к пустому срезу при retry.
+	// После достижения Чел может дописывать заметки. Ищем соответствующий
+	// финал во всей истории, а не считаем последнюю реплику неизменной.
 	if at := chat.Room.AchievedAt; at != nil {
-		n := len(chat.Messages)
-		if at.IsZero() || n < 2 || chat.Messages[n-2].Kind != "achievement" || chat.Messages[n-1].AuthorID != "boss" || chat.Messages[n-1].To != "human" {
+		found := false
+		for i, m := range chat.Messages {
+			if m.Kind == "achievement" && m.Date.Equal(*at) && i+1 < len(chat.Messages) && chat.Messages[i+1].AuthorID == "boss" && chat.Messages[i+1].To == "human" {
+				found = true
+			}
+		}
+		if at.IsZero() || !found {
 			return errors.New("повреждено завершение цели")
 		}
 	}
