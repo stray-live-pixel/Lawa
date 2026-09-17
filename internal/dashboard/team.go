@@ -25,7 +25,7 @@ func teamInput(w http.ResponseWriter, r *http.Request, value any) bool {
 		http.Error(w, "запрос разрешён только из интерфейса Lawa", http.StatusForbidden)
 		return false
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, 128<<10)
+	r.Body = http.MaxBytesReader(w, r.Body, 256<<10)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	if err = decoder.Decode(value); err != nil {
@@ -92,8 +92,9 @@ func (h handler) teams(w http.ResponseWriter, r *http.Request) {
 // Цель не ограничивается длиной сообщения, CWD выбирается человеком.
 func (h handler) createTeam(w http.ResponseWriter, r *http.Request) {
 	var input struct {
-		Goal string `json:"goal"`
-		CWD  string `json:"cwd"`
+		Goal       string                        `json:"goal"`
+		CWD        string                        `json:"cwd"`
+		Characters map[string]workflow.Character `json:"characters"`
 	}
 	if !teamInput(w, r, &input) {
 		return
@@ -102,7 +103,14 @@ func (h handler) createTeam(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "нужны цель (до 64 КБ) и рабочая папка", http.StatusBadRequest)
 		return
 	}
-	definition := workflow.Workflow{ID: "office-boss", Characters: map[string]workflow.Character{"boss": workflow.Boss()}, Steps: []workflow.Step{{ID: "boss", Type: "agent", Character: "boss", Prompt: workflow.BossAssignment, DependsOn: []string{}}}}
+	// nil означает прежний состав; явный пустой реестр — только стандартный Босс.
+	if input.Characters == nil {
+		input.Characters = workflow.DefaultTeamCharacters()
+	}
+	if _, ok := input.Characters["boss"]; !ok {
+		input.Characters["boss"] = workflow.DefaultTeamCharacters()["boss"]
+	}
+	definition := workflow.Workflow{ID: "office-boss", Characters: input.Characters, Steps: []workflow.Step{{ID: "boss", Type: "agent", Character: "boss", Prompt: workflow.BossAssignment, DependsOn: []string{}}}}
 	data, err := json.Marshal(definition)
 	if err != nil {
 		http.Error(w, diagnostic(err), 500)

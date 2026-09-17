@@ -16,7 +16,7 @@ import (
 // появляется до приглашения, финал не опережает реплику внутри той же секунды.
 func TestRecoveredFrames(t *testing.T) {
 	started, completed := int64(100), int64(110)
-	chat := runstore.TeamChat{Messages: []runstore.TeamMessage{
+	chat := runstore.TeamChat{Room: &runstore.TeamRoom{Actors: map[string]*runstore.TeamActor{"boss": {}, "developer": {}}}, Messages: []runstore.TeamMessage{
 		{ID: "goal", AuthorID: "human", Date: time.Unix(99, 0)},
 		{ID: "summon-developer", Kind: "system", Date: time.Unix(102, 0)},
 		{ID: "task", AuthorID: "boss", To: "developer", Text: "@developer Сделай игру", Date: time.Unix(110, 500000000)},

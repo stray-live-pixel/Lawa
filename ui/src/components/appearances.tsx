@@ -21,7 +21,6 @@ export const appearances: Appearance[] = catalog.map((item) => ({
   ...item,
   sprite: sprites[`../assets/office/characters/${item.id}.png`],
 }));
-const defaults: Record<string, string> = { boss, developer };
 // Галерея включает также исходные образы: их ID уже используются в реестре
 // участников. Эти два образа не меняют состав случайного выбора из 40 новых.
 export const characterGallery: Appearance[] = [
@@ -128,6 +127,13 @@ export function useEmployeeSprite(
   const { choices } = useAppearances();
   return (
     appearances.find((item) => item.id === choices[actor])?.sprite ||
-    defaults[fallback]
+    characterGallery.find((item) => item.id === fallback)?.sprite ||
+    // Неизвестный ID внешности не прячет рабочее место. Служебные авторы
+    // human/system сохраняют буквенную аватарку; сотрудник получает базовый образ.
+    (actor !== 'human' && actor !== 'system'
+      ? actor === 'boss'
+        ? boss
+        : developer
+      : undefined)
   );
 }

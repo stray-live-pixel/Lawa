@@ -1,3 +1,4 @@
+import { TeamConfigInput, type TeamCharacters } from './TeamConfigInput';
 import { useEffect, useRef, useState } from 'react';
 import {
   Avatar,
@@ -200,16 +201,20 @@ function NewTeam({
   onCreated: (id: string) => void;
 }) {
   const [goal, setGoal] = useState('');
+  const [characters, setCharacters] = useState<TeamCharacters>();
+  const [configValid, setConfigValid] = useState(true);
   const [directory, setDirectory] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   async function create() {
+    if (!configValid || busy) return;
     setBusy(true);
     setError('');
     try {
       const result = await post<{ runId: string }>('/api/teams', {
         goal,
         cwd: directory ?? cwd,
+        characters,
       });
       onCreated(result.runId);
     } catch (cause) {
@@ -247,13 +252,20 @@ function NewTeam({
         onUpdate={setDirectory}
         disabled={busy}
       />
+      <TeamConfigInput
+        disabled={busy}
+        onChange={(next, valid) => {
+          setCharacters(next);
+          setConfigValid(valid);
+        }}
+      />
       <ErrorNotice error={error} />
       <Button
         type="submit"
         view="action"
         size="l"
         loading={busy}
-        disabled={!goal.trim() || !(directory ?? cwd).trim()}
+        disabled={!configValid || !goal.trim() || !(directory ?? cwd).trim()}
       >
         Закрепить цель
       </Button>
@@ -522,9 +534,7 @@ function TeamThread({
                 achieved={Boolean((liveChat || chat).room?.achievedAt)}
                 busy={busy}
                 onSelect={(id) =>
-                  setText(
-                    `@${id} ${text.replace(/^@(boss|developer|human)\s*/, '')}`,
-                  )
+                  setText(`@${id} ${text.replace(/^@[a-z][a-z0-9_-]*\s*/, '')}`)
                 }
               />
             )}

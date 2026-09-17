@@ -62,6 +62,11 @@ lawa reply <run-id> --task-file answer.md
 после сбоя сообщение автоматически не повторяется: нужно проверить историю
 Codex; `resume` может восстановить подтверждённый новый turn.
 
+В офисе `/office` состав команды можно загрузить из JSON при создании цели.
+[Пример с Дизайнером](examples/office/team.json) задаёт `name`, `history`,
+`instructions` и `avatar` для каждого ID. Босс приглашает нужных сотрудников
+сам; [описание конфигурации и правил чата](docs/team-room.md).
+
 В JSON поле `characters` описывает личности: `name`, `history` (предыстория),
 `instructions` (принципы и границы). Кубик ссылается на личность через `character`.
 Пример — [examples/characters.json](examples/characters.json). Это работает

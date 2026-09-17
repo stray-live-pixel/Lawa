@@ -12,6 +12,7 @@ import (
 // Один ID означает одну личность внутри запуска, но не между заказами человека.
 type Character struct {
 	Name         string `json:"name"`
+	Avatar       string `json:"avatar,omitempty"`
 	History      string `json:"history"`
 	Instructions string `json:"instructions"`
 }

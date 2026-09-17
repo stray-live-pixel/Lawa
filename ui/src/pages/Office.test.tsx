@@ -79,3 +79,50 @@ it('показывает приглашённого Разработчика и 
   expect(screen.getByRole('button', { name: 'Босс: Мониторит' })).toBeVisible();
   expect(screen.getByText('Проверяю прыжок')).toBeVisible();
 });
+
+// Новый ID не требует отдельного компонента. Образ и подпись берутся из конфига,
+// а неприглашённая личность каталога не занимает рабочее место.
+it('показывает произвольного сотрудника с выбранной в конфиге внешностью', async () => {
+  window.history.replaceState(null, '', '/office?run=design');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            runId: 'design',
+            goal: 'Дизайн',
+            messages: [],
+            members: {
+              boss: { name: 'Босс' },
+              designer: { name: 'Лена', avatar: 'pixel-designer' },
+            },
+            room: {
+              catalog: { qa: { name: 'QA' } },
+              actors: {
+                boss: { status: 'idle', nextCheck: '' },
+                designer: {
+                  status: 'working',
+                  summary: 'Подбирает цвета',
+                  nextCheck: '',
+                },
+              },
+            },
+          }),
+        ),
+    ),
+  );
+  render(
+    <AppTheme>
+      <Office />
+    </AppTheme>,
+  );
+  expect(
+    await screen.findByRole('button', { name: 'Лена: Работает' }),
+  ).toBeVisible();
+  expect(screen.getByAltText('Лена за MacBook')).toHaveAttribute(
+    'src',
+    expect.stringContaining('pixel-designer.png'),
+  );
+  expect(screen.queryByAltText('QA за MacBook')).not.toBeInTheDocument();
+});

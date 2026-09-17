@@ -191,6 +191,11 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 		s.Meta.Order = &Order{}
 		s.Meta.Order.Team = in.Team
 	}
+	if in.Team {
+		if err := workflow.ValidateTeamCharacters(w.Characters); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	if in.Team && (!in.Order || in.ParentRunID != "") {
 		return Snapshot{}, errors.New("команда требует корневой заказ Босса")
 	}
@@ -236,7 +241,7 @@ func create(root string, in Input, syncDirectory func(string) error) (_ Snapshot
 	if in.ParentRunID == "" {
 		chat := newTeam(s.Meta.RunID, in.Task)
 		if in.Team {
-			initializeRoom(&chat)
+			initializeRoom(&chat, w.Characters)
 		}
 		team, encodeErr := json.Marshal(chat)
 		if encodeErr != nil {
@@ -473,14 +478,22 @@ func Remove(root, runID string) (err error) {
 	}
 	defer func() { err = errors.Join(err, run.Close()) }()
 	// У комнаты нет долгого coordinator.lock: исполнители владеют отдельными
-	// actor lock. Удаление удерживает оба, чтобы тик другого сервера не начал
+	// actor lock. Удаление удерживает весь каталог, чтобы тик другого сервера не начал
 	// работу между проверкой и RemoveAll. Незавершённую доставку не стираем.
 	snapshot, err := run.Load()
 	if err != nil {
 		return err
 	}
 	if snapshot.Meta.Order != nil && snapshot.Meta.Order.Team {
-		for _, actor := range []string{"boss", "developer"} {
+		catalogChat, readErr := ReadTeam(root, runID)
+		if readErr != nil {
+			return readErr
+		}
+		if catalogChat.Room == nil {
+			return errors.New("у командного заказа отсутствует комната")
+		}
+		// Каталог неизменяем: блокируем и ещё не приглашённых, закрывая гонку summon.
+		for actor := range catalogChat.Room.Catalog {
 			lock, lockErr := LockTeamActor(root, runID, actor)
 			if lockErr != nil {
 				return fmt.Errorf("команда занята: %w", lockErr)

@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // TeamChat — общая доска корневого заказа. Текущая цель версионируется кадрами, сообщения добавляются
@@ -90,6 +92,14 @@ func readTeam(dir *os.Root, s Snapshot) (TeamChat, error) {
 		return TeamChat{}, errors.New("повреждена общая база команды")
 	}
 	if chat.Room != nil {
+		// Legacy-комнаты не имели каталога. Не добавляем им новые роли из конфига:
+		// прежние thread/tools знают только Босса и Разработчика.
+		if chat.Room.Catalog == nil {
+			chat.Room.Catalog = workflow.DefaultTeamCharacters()
+			if boss, ok := s.Workflow.Characters["boss"]; ok {
+				chat.Room.Catalog["boss"] = boss
+			}
+		}
 		if err := chat.validateRoom(); err != nil {
 			return TeamChat{}, err
 		}

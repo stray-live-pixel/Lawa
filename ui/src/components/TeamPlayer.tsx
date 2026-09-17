@@ -35,8 +35,11 @@ export function historyFrames(chat: TeamChat): TeamFrame[] {
   return chat.messages.map((message, index) => {
     previous = Math.max(previous, Date.parse(message.date));
     actors = { ...actors };
-    if (message.kind === 'system' && message.id === 'summon-developer')
-      actors.developer = { status: 'unknown', nextCheck: '' };
+    if (message.kind === 'system' && message.id.startsWith('summon-')) {
+      const id = message.id.slice('summon-'.length);
+      if (chat.room?.actors[id])
+        actors[id] = { status: 'unknown', nextCheck: '' };
+    }
     if (actors[message.authorId])
       actors[message.authorId] = {
         ...actors[message.authorId],

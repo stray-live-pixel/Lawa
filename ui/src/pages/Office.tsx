@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { Button, Icon, Text } from '@gravity-ui/uikit';
 import { Smartphone, CircleCheckFill } from '@gravity-ui/icons';
 import {
@@ -39,7 +39,17 @@ export default function Office() {
   );
   const player = useTeamPlayer(currentChat);
   const chat = player.view;
-  const hasDeveloper = Boolean(chat?.room?.actors.developer);
+  // Порядок событий стабилен при появлении новых сотрудников и перемотке.
+  const invited = (chat?.messages || [])
+    .filter(
+      (message) =>
+        message.kind === 'system' && message.id.startsWith('summon-'),
+    )
+    .map((message) => message.id.slice('summon-'.length));
+  const actors = chat?.room?.actors || { boss: {} };
+  const actorIds = [
+    ...new Set(['boss', ...invited, ...Object.keys(actors)]),
+  ].filter((id) => Object.hasOwn(actors, id));
   return (
     <AppearanceProvider scope={run}>
       <main
@@ -79,7 +89,7 @@ export default function Office() {
         <ErrorNotice error={error} />
         <div className="office-space">
           <div
-            className={`office-scene ${hasDeveloper ? 'office-scene-team' : ''}`}
+            className={`office-scene ${actorIds.length > 2 ? 'office-scene-many' : ''}`}
           >
             <img
               className="office-room-image"
@@ -88,21 +98,25 @@ export default function Office() {
               height="1024"
               alt="Просторный изометрический офис с зоной отдыха, стеллажами и кофейным уголком"
             />
-            <Employee
-              id="boss"
-              name="Босс"
-              actor={chat?.room?.actors.boss}
-              achieved={Boolean(chat?.room?.achievedAt)}
-              onClick={() => setPhoneOpen(true)}
-            />
-            {hasDeveloper && (
+            {actorIds.map((id, index) => (
               <Employee
-                id="developer"
-                name="Разработчик"
-                actor={chat?.room?.actors.developer}
+                key={id}
+                id={id}
+                name={
+                  chat?.members[id]?.name ||
+                  (id === 'boss'
+                    ? 'Босс'
+                    : id === 'developer'
+                      ? 'Разработчик'
+                      : id)
+                }
+                avatar={chat?.members[id]?.avatar}
+                actor={chat?.room?.actors[id]}
+                placement={employeePlacement(index, actorIds.length)}
+                achieved={id === 'boss' && Boolean(chat?.room?.achievedAt)}
                 onClick={() => setPhoneOpen(true)}
               />
-            )}
+            ))}
           </div>
         </div>
         <TeamPlayer player={player} />
@@ -123,17 +137,21 @@ export default function Office() {
 function Employee({
   id,
   name,
+  avatar,
+  placement,
   actor,
   achieved = false,
   onClick,
 }: {
   id: string;
   name: string;
+  avatar?: string;
+  placement: CSSProperties;
   actor?: TeamActor;
   achieved?: boolean;
   onClick: () => void;
 }) {
-  const sprite = useEmployeeSprite(id);
+  const sprite = useEmployeeSprite(id, avatar || id);
   const status = actor?.status || 'idle';
   const label = states[status] || states.idle;
   const message =
@@ -141,7 +159,7 @@ function Employee({
       ? actor?.summary
       : '';
   return (
-    <div className={`office-employee office-${id}`}>
+    <div className={`office-employee office-${id}`} style={placement}>
       <img src={sprite} width="1254" height="1254" alt={`${name} за MacBook`} />
       <div className="office-speech" role="status" aria-atomic="true">
         {achieved ? (
@@ -178,4 +196,27 @@ function Employee({
       </div>
     </div>
   );
+}
+
+// До двух сотрудников сохраняем привычную крупную композицию. Большие команды
+// располагаются на изометрической сетке свободного пола: порядок приглашений
+// стабилен внутри снимка, z-index следует глубине, мебель задней стены свободна.
+export function employeePlacement(index: number, count: number): CSSProperties {
+  if (count === 1) return { left: '50%', top: '46%', width: '16%' };
+  if (count === 2)
+    return {
+      left: index === 0 ? '38%' : '65%',
+      top: index === 0 ? '44%' : '53%',
+      width: '16%',
+    };
+  const columns = count <= 6 ? 3 : count <= 12 ? 4 : 5;
+  const rows = Math.ceil(count / columns);
+  const u = (index % columns) / Math.max(1, columns - 1);
+  const v = Math.floor(index / columns) / Math.max(1, rows - 1);
+  return {
+    left: `${48 + 32 * u - 30 * v}%`,
+    top: `${33 + 20 * u + 22 * v}%`,
+    width: count <= 6 ? '13%' : count <= 12 ? '10%' : '8%',
+    zIndex: Math.round((u + v) * 100),
+  };
 }

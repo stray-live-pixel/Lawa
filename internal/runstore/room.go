@@ -9,6 +9,8 @@ import (
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 const TeamIdleInterval = 5 * time.Minute
@@ -16,6 +18,9 @@ const TeamIdleInterval = 5 * time.Minute
 // TeamRoom включает адресный runtime только для новых командных заказов.
 // Старые фиксированные workflow и их общая база не меняют способ исполнения.
 type TeamRoom struct {
+	// Catalog — снимок доступных личностей из workflow при создании заказа.
+	// Только Actors означает приглашённых сотрудников. Каталог не меняется в ходе заказа.
+	Catalog map[string]workflow.Character `json:"catalog,omitempty"`
 	// AchievedAt останавливает новые поручения; nil сохраняет прежний активный режим.
 	AchievedAt *time.Time            `json:"achievedAt,omitempty"`
 	Actors     map[string]*TeamActor `json:"actors"`
@@ -45,10 +50,10 @@ type TeamDelivery struct {
 
 // initializeRoom создаёт только Босса. Постановка цели является первым явным
 // обращением Чела; полный текст остаётся в pin, краткая реплика запускает анализ.
-func initializeRoom(chat *TeamChat) {
+func initializeRoom(chat *TeamChat, catalog map[string]workflow.Character) {
 	now := time.Now().UTC()
-	chat.Members["boss"] = TeamMember{Name: "Босс", Avatar: "boss"}
-	chat.Room = &TeamRoom{Actors: map[string]*TeamActor{"boss": {NextCheck: now, Status: "idle"}}}
+	chat.Members["boss"] = TeamMember{Name: catalog["boss"].Name, Avatar: catalog["boss"].Avatar}
+	chat.Room = &TeamRoom{Catalog: catalog, Actors: map[string]*TeamActor{"boss": {NextCheck: now, Status: "idle"}}}
 	chat.Messages = append(chat.Messages, TeamMessage{ID: "initial-goal", AuthorID: "human", To: "boss", Kind: "goal", Date: now, Text: "@boss Проанализируй закреплённую цель и организуй выполнение."})
 	recordTeamFrame(chat, now)
 }
@@ -61,8 +66,8 @@ func addressedTo(text string) (string, error) {
 		return "", nil
 	}
 	id := strings.TrimPrefix(words[0], "@")
-	if id != "boss" && id != "developer" && id != "human" {
-		return "", errors.New("используйте @boss, @developer или @human в начале сообщения")
+	if !workflow.ValidTeamID(id) && id != "human" {
+		return "", errors.New("используйте @id сотрудника в начале сообщения")
 	}
 	if len(words) < 2 {
 		return "", errors.New("после @id нужен текст поручения")
@@ -72,7 +77,7 @@ func addressedTo(text string) (string, error) {
 
 // appendRoomMessage — единая маршрутизация под team.lock. Сотрудники пишут
 // только во время адресного поручения; их ответы ссылаются на входящее сообщение.
-// Единственные исключения: Босс делегирует/уточняет, Разработчик передаёт ответ
+// Единственные исключения: Босс делегирует/уточняет, сотрудник передаёт ответ
 // Челу через Босса. Только Босс имеет право адресовать сообщение человеку.
 func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, error) {
 	text = strings.TrimSpace(text)
@@ -111,18 +116,18 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 		}
 		for _, msg := range chat.Messages {
 			for _, inputID := range actor.Delivery.IDs {
-				if msg.ID == inputID && (msg.AuthorID == to || author == "developer" && msg.AuthorID == "human" && to == "boss") {
+				if msg.ID == inputID && (msg.AuthorID == to || author != "boss" && msg.AuthorID == "human" && to == "boss") {
 					m.ReplyTo = msg.ID
 					m.ReplyToIDs = append(m.ReplyToIDs, msg.ID)
 				}
 			}
 		}
 		if author == "boss" && to == "human" && pendingHumanRelay(*chat) {
-			return m, errors.New("сначала дождись ответа Разработчика на обращение Чела")
+			return m, errors.New("сначала дождись ответа сотрудника на обращение Чела")
 		}
 		if m.ReplyTo != "" {
 			m.Kind = "reply"
-		} else if author == "boss" && (to == "developer" || to == "human") {
+		} else if author == "boss" && (chat.Room.Actors[to] != nil || to == "human") {
 			m.Kind = "request"
 		} else {
 			return m, errors.New("можно отвечать только отправителю текущего поручения")
@@ -150,21 +155,30 @@ func PostActor(ctx context.Context, root, run, author, id, text string) (TeamMes
 	return result, err
 }
 
-// SummonDeveloper атомарно добавляет рабочее место и техническую реплику.
-// Повтор summon идемпотентен. Сам призыв не является поручением Разработчику.
+// SummonDeveloper оставляет совместимость с прежними вызовами хранилища.
 func SummonDeveloper(ctx context.Context, root, run, author string) error {
+	return SummonActor(ctx, root, run, author, "developer")
+}
+
+// SummonActor атомарно добавляет рабочее место и событие из сохранённого каталога.
+// Повтор идемпотентен; приглашение само по себе не запускает поручение.
+func SummonActor(ctx context.Context, root, run, author, id string) error {
 	return UpdateTeam(ctx, root, run, func(chat *TeamChat) error {
 		if chat.Room == nil || chat.Room.AchievedAt != nil || author != "boss" || chat.Room.Actors["boss"] == nil || chat.Room.Actors["boss"].Status != "working" {
-			return errors.New("пригласить Разработчика может только работающий Босс")
+			return errors.New("пригласить сотрудника может только работающий Босс")
 		}
-		if chat.Room.Actors["developer"] != nil {
+		character, ok := chat.Room.Catalog[id]
+		if !ok || id == "boss" {
+			return errors.New("сотрудника нет в доступном каталоге")
+		}
+		if chat.Room.Actors[id] != nil {
 			return nil
 		}
 		now := time.Now().UTC()
-		chat.Members["developer"] = TeamMember{Name: "Разработчик", Avatar: "developer"}
+		chat.Members[id] = TeamMember{Name: character.Name, Avatar: character.Avatar}
 		chat.Members["system"] = TeamMember{Name: "Lawa"}
-		chat.Room.Actors["developer"] = &TeamActor{Cursor: len(chat.Messages), NextCheck: now.Add(TeamIdleInterval), Status: "idle"}
-		chat.Messages = append(chat.Messages, TeamMessage{ID: "summon-developer", AuthorID: "system", Kind: "system", Date: now, Text: "Босс пригласил Разработчика (@developer). Рабочее место готово."})
+		chat.Room.Actors[id] = &TeamActor{Cursor: len(chat.Messages), NextCheck: now.Add(TeamIdleInterval), Status: "idle"}
+		chat.Messages = append(chat.Messages, TeamMessage{ID: "summon-" + id, AuthorID: "system", Kind: "system", Date: now, Text: fmt.Sprintf("%s пригласил сотрудника %s (@%s). Рабочее место готово.", chat.Members["boss"].Name, character.Name, id)})
 		return nil
 	})
 }
@@ -209,7 +223,7 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 // LockTeamActor удерживает отдельный flock весь turn. Второй сервер не запускает
 // ту же личность; после аварии ОС освобождает lock для проверки сохранённой доставки.
 func LockTeamActor(root, run, actor string) (*os.File, error) {
-	if actor != "boss" && actor != "developer" {
+	if !workflow.ValidTeamID(actor) {
 		return nil, errors.New("неизвестная личность")
 	}
 	dir, err := openRun(root, run)
@@ -244,6 +258,9 @@ func LockTeamActor(root, run, actor string) (*os.File, error) {
 // validateRoom отклоняет повреждённый курсор/сотрудника до обхода Engine.
 // Ошибка одного файла показывается в API, а не обрушает весь сервер panic-ом.
 func (chat TeamChat) validateRoom() error {
+	if err := workflow.ValidateTeamCharacters(chat.Room.Catalog); err != nil {
+		return err
+	}
 	if chat.Room.Actors["boss"] == nil {
 		return errors.New("в комнате отсутствует Босс")
 	}
@@ -261,7 +278,7 @@ func (chat TeamChat) validateRoom() error {
 		}
 	}
 	for id, actor := range chat.Room.Actors {
-		if (id != "boss" && id != "developer") || actor == nil || actor.Cursor < 0 || actor.Cursor > len(chat.Messages) {
+		if (!workflow.ValidTeamID(id) || chat.Room.Catalog[id].Name == "") || actor == nil || actor.Cursor < 0 || actor.Cursor > len(chat.Messages) {
 			return fmt.Errorf("повреждён сотрудник %q", id)
 		}
 		switch actor.Status {

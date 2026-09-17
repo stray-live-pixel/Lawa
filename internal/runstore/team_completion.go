@@ -45,7 +45,7 @@ func CompleteTeam(ctx context.Context, root, run, author, id, text string) (Team
 			return errors.New("сначала обработай новое обращение Чела или ответ сотрудника")
 		}
 		for _, m := range chat.Messages[boss.Delivery.End:] {
-			if m.AuthorID == "human" && (m.To == "boss" || m.To == "developer") {
+			if m.AuthorID == "human" && chat.Room.Actors[m.To] != nil {
 				return errors.New("сначала обработай новое обращение Чела")
 			}
 		}

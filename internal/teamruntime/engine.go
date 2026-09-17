@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -279,7 +280,7 @@ func (e *Engine) finish(ctx context.Context, run, id string) error {
 			a.NextCheck = now
 		}
 		for _, m := range chat.Messages[end:] {
-			if m.AuthorID == id && m.To == "developer" {
+			if id == "boss" && m.AuthorID == id && m.To != "boss" && chat.Room.Actors[m.To] != nil {
 				a.Status = "monitoring"
 			}
 		}
@@ -345,9 +346,17 @@ func (e *Engine) recover(ctx context.Context, run, id string, a *runstore.TeamAc
 // command даёт модели только инструменты комнаты. Итоговый ответ Codex не
 // становится сообщением автоматически: публикация адресата проверяется сервером.
 func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snapshot) codex.Command {
-	role := "Ты Разработчик: опытный инженер. Исследуй, реализуй и проверяй поручение в границах цели. Отвечай только автору входящего поручения; если это Чел, передай ответ через @boss. Вопрос Челу сначала предложи Боссу, объяснив, что уже проверил."
+	role := "Исследуй, реализуй и проверяй поручение в границах цели. Отвечай только автору входящего поручения; если это Чел, передай ответ через @boss. Вопрос Челу сначала предложи Боссу, объяснив, что уже проверил."
 	if id == "boss" {
-		role = "Ты Босс: отвечаешь за общую цель и качество результата. Доступен только Разработчик (@developer). При необходимости пригласи его через team_summon, затем дай поручение через team_post с @developer. Проверяй результаты. Сам решай вопросы; к @human обращайся только если сам решить не можешь. Не отвечай сотрудникам, которые тебя не тегнули, кроме выдачи новых поручений. Если Чел поставил новую цель, обнови pin через team_set_goal (в старом чате: team_post с /goal <цель>). При обычном вопросе цель не меняй. Если Чел тегнул Разработчика, дождись его ответа через общий чат и передай Челу результат; не дублируй его поручение. Пока ответа нет, заверши ход: ответ сотрудника разбудит тебя. Когда цель достигнута и работа сотрудников завершена, вызови team_complete с итогом для @human: результат, где его найти и как проверено, до 50 слов. Если сохранённый чат не предлагает team_complete, вызови team_post с текстом /complete @human <итог> — это то же явное действие. Это остановит таймеры до нового обращения Чела; затем сразу заверши ход."
+		role = "Ты Босс: отвечаешь за общую цель и качество результата. Доступные личности перечислены ниже. При необходимости пригласи сотрудника через team_summon по его ID, затем дай поручение через team_post с @id. Проверяй результаты. Сам решай вопросы; к @human обращайся только если сам решить не можешь. Не отвечай сотрудникам, которые тебя не тегнули, кроме выдачи новых поручений. Если Чел поставил новую цель, обнови pin через team_set_goal (в старом чате: team_post с /goal <цель>). При обычном вопросе цель не меняй. Если Чел тегнул сотрудника, дождись его ответа через общий чат и передай Челу результат; не дублируй его поручение. Пока ответа нет, заверши ход: ответ сотрудника разбудит тебя. Когда цель достигнута и работа сотрудников завершена, вызови team_complete с итогом для @human: результат, где его найти и как проверено, до 50 слов. Если сохранённый чат не предлагает team_complete, вызови team_post с текстом /complete @human <итог> — это то же явное действие. Это остановит таймеры до нового обращения Чела; затем сразу заверши ход."
+	}
+	// Личность берём из снимка заказа при каждом turn, включая продолжение thread.
+	// Общие правила маршрутизации остаются контрактом runtime, а не правом конфига.
+	character := chat.Room.Catalog[id]
+	role = fmt.Sprintf("Ты %s (@%s).\nПредыстория: %s\nИнструкции личности: %s\nПравила команды: %s", character.Name, id, character.History, character.Instructions, role)
+	if id == "boss" {
+		catalog, _ := json.Marshal(chat.Room.Catalog)
+		role += "\nКаталог доступных личностей (приглашённые указаны в team_read):\n" + string(catalog)
 	}
 	var inputs []runstore.TeamMessage
 	for _, msg := range chat.Messages {
@@ -383,7 +392,19 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 	if id == "boss" {
 		command.DynamicTools = append(command.DynamicTools, codex.DynamicTool{Name: "team_set_goal", Description: "Обновить закреплённую цель по новой постановке Чела.", InputSchema: []byte(`{"type":"object","properties":{"goal":{"type":"string"}},"required":["goal"],"additionalProperties":false}`)})
 		command.DynamicTools = append(command.DynamicTools, codex.DynamicTool{Name: "team_complete", Description: "Отметить проверенную цель достигнутой и отправить последний итог @human. После успеха заверши ход.", InputSchema: []byte(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`)})
-		command.DynamicTools = append(command.DynamicTools, codex.DynamicTool{Name: "team_summon", Description: "Пригласить Разработчика в команду. Поручение отправь отдельно через team_post.", InputSchema: []byte(`{"type":"object","properties":{"id":{"type":"string","enum":["developer"]}},"required":["id"],"additionalProperties":false}`)})
+		// Schema и handler используют один неизменяемый каталог. Пустой каталог
+		// сотрудников означает работу одного Босса: инструмент призыва не нужен.
+		ids := []string{}
+		for actor := range chat.Room.Catalog {
+			if actor != "boss" {
+				ids = append(ids, actor)
+			}
+		}
+		sort.Strings(ids)
+		if len(ids) > 0 {
+			schema, _ := json.Marshal(map[string]any{"type": "object", "properties": map[string]any{"id": map[string]any{"type": "string", "enum": ids}}, "required": []string{"id"}, "additionalProperties": false})
+			command.DynamicTools = append(command.DynamicTools, codex.DynamicTool{Name: "team_summon", Description: "Пригласить сотрудника из каталога. Поручение отправь отдельно через team_post.", InputSchema: schema})
+		}
 	}
 	command.CallDynamicTool = func(ctx context.Context, call codex.DynamicToolCall) (string, error) {
 		var result any
@@ -437,12 +458,12 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 				ID string `json:"id"`
 			}
 			err = json.Unmarshal(call.Arguments, &in, json.RejectUnknownMembers(true))
-			if err == nil && (id != "boss" || in.ID != "developer") {
-				err = errors.New("доступен только призыв Разработчика Боссом")
+			if err == nil && id != "boss" {
+				err = errors.New("приглашать сотрудников может только Босс")
 			}
 			if err == nil {
-				err = runstore.SummonDeveloper(ctx, e.Root, run, id)
-				result = map[string]string{"id": "developer"}
+				err = runstore.SummonActor(ctx, e.Root, run, id, in.ID)
+				result = map[string]string{"id": in.ID}
 			}
 		default:
 			err = fmt.Errorf("неизвестный инструмент %s", call.Tool)
