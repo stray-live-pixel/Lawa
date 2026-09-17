@@ -76,15 +76,16 @@
   flex: 1;
   white-space: nowrap;
 }
-/* Непрозрачная полоса перекрывает всю ширину переписки, включая область
-   за скруглениями карточки: аватары и текст не выглядывают при прокрутке. */
+/* Подложка закрывает сообщения сверху и по бокам карточки. Снизу нет
+   дополнительной полосы: внешний радиус продолжает скругление самого пина. */
 .team-pin-layer {
   position: sticky;
   top: 0;
   z-index: 1;
   flex: none;
-  margin: 0 -12px -6px;
-  padding: 0 12px 6px;
+  margin: 0 -12px;
+  padding: 0 12px;
+  border-radius: 0 0 24px 24px;
   background: var(--g-color-base-background);
 }
 .team-pin {
