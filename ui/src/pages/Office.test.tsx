@@ -10,8 +10,8 @@ afterEach(() => {
   window.history.replaceState(null, '', '/office');
 });
 
-// Пустая комната не выдумывает сотрудников или активность. Label открывает чат.
-it('показывает только ожидающего Босса до создания заказа', async () => {
+// Пустой офис не создаёт заказ: настройки задаются только запуском CLI.
+it('показывает пустой офис без настроек и создания заказа', async () => {
   vi.stubGlobal(
     'fetch',
     vi.fn(
@@ -29,12 +29,17 @@ it('показывает только ожидающего Босса до со�
   expect(
     screen.queryByAltText('Разработчик за MacBook'),
   ).not.toBeInTheDocument();
-  expect(screen.getByRole('status')).toBeEmptyDOMElement();
+  expect(screen.queryByAltText('Босс за MacBook')).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'Внешность сотрудников' }),
+  ).not.toBeInTheDocument();
   await userEvent
     .setup()
-    .click(screen.getByRole('button', { name: 'Босс: Ждёт' }));
+    .click(screen.getByRole('button', { name: 'Открыть чат команды' }));
   expect(
-    await screen.findByRole('textbox', { name: 'Цель команды' }),
+    await screen.findByText(
+      'Нет запущенных команд. Создайте заказ через CLI Lawa.',
+    ),
   ).toBeVisible();
 });
 

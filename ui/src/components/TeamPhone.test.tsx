@@ -129,43 +129,33 @@ it('показывает pin и автора, проверяет 50 слов и 
   expect(onClose).toHaveBeenCalled();
 });
 
-// Создание из пустого телефона отправляет только цель и выбранную папку;
-// дальше открывает чат. Автозапуском Босса занимается сервер, не второй POST.
-it('создаёт заказ из введённой цели и открывает его чат', async () => {
-  const sent: unknown[] = [];
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (url: string, options?: RequestInit) => {
-      if (options?.method === 'POST') {
-        expect(url).toBe('/api/teams');
-        sent.push(JSON.parse(String(options.body)));
-        return response({ runId: 'order' });
-      }
-      return response(
-        url === '/api/teams'
-          ? { teams: [], cwd: '/project', problems: [] }
-          : { ...chat, messages: [] },
-      );
-    }),
-  );
+// Телефон открывает только сохранённые заказы. Выбор из списка не отправляет
+// POST и не меняет конфиг — в UI нет формы создания даже без выбранного run.
+it('открывает существующий заказ без создания команды', async () => {
+  const fetcher = vi.fn(async (url: string, options?: RequestInit) => {
+    expect(options?.method).not.toBe('POST');
+    return response(
+      url === '/api/teams'
+        ? { teams: [{ id: 'order', goal: chat.goal }], problems: [] }
+        : { ...chat, messages: [] },
+    );
+  });
+  vi.stubGlobal('fetch', fetcher);
   render(
     <AppTheme>
       <TeamPhone onClose={() => {}} />
     </AppTheme>,
   );
-  await waitFor(() =>
-    expect(screen.getByRole('textbox', { name: 'Папка проекта' })).toHaveValue(
-      '/project',
-    ),
-  );
-  fireEvent.change(screen.getByRole('textbox', { name: 'Цель команды' }), {
-    target: { value: chat.goal },
-  });
-  fireEvent.click(screen.getByRole('button', { name: 'Закрепить цель' }));
+  fireEvent.click(await screen.findByRole('button', { name: chat.goal }));
   expect(
     await screen.findByRole('textbox', { name: 'Сообщение команде' }),
   ).toBeVisible();
-  expect(sent).toEqual([{ goal: chat.goal, cwd: '/project' }]);
+  expect(
+    screen.queryByRole('button', { name: 'Закрепить цель' }),
+  ).not.toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'Загрузить состав команды' }),
+  ).not.toBeInTheDocument();
   expect(window.location.search).toBe('?run=order');
 });
 

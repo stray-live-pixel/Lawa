@@ -11,11 +11,7 @@ import { ErrorNotice } from '../components/ui';
 import { usePoll } from '../hooks/api';
 import { TeamPlayer, useTeamPlayer } from '../components/TeamPlayer';
 import room from '../assets/office/room-large-selected.png';
-import {
-  AppearanceProvider,
-  useEmployeeSprite,
-} from '../components/appearances';
-import { AppearancePicker } from '../components/AppearancePicker';
+import { useEmployeeSprite } from '../components/appearances';
 import { CharacterGallery } from '../components/CharacterGallery';
 import './office.css';
 
@@ -46,89 +42,69 @@ export default function Office() {
         message.kind === 'system' && message.id.startsWith('summon-'),
     )
     .map((message) => message.id.slice('summon-'.length));
-  const actors = chat?.room?.actors || { boss: {} };
+  const actors = chat?.room?.actors || {};
   const actorIds = [
     ...new Set(['boss', ...invited, ...Object.keys(actors)]),
   ].filter((id) => Object.hasOwn(actors, id));
   return (
-    <AppearanceProvider scope={run}>
-      <main
-        className={`office ${chat?.room ? 'office-with-player' : ''}`}
-        aria-label="Офис агентов"
-      >
-        <div className="office-toolbar">
-          <CharacterGallery />
-          <AppearancePicker
-            members={Object.fromEntries(
-              Object.keys(currentChat?.room?.actors || { boss: {} }).map(
-                (id) => [
-                  id,
-                  {
-                    name:
-                      currentChat?.members[id]?.name ||
-                      (id === 'boss'
-                        ? 'Босс'
-                        : id === 'developer'
-                          ? 'Разработчик'
-                          : id),
-                  },
-                ],
-              ),
-            )}
+    <main
+      className={`office ${chat?.room ? 'office-with-player' : ''}`}
+      aria-label="Офис агентов"
+    >
+      <div className="office-toolbar">
+        <CharacterGallery />
+        <Button
+          view="flat"
+          onClick={() => setPhoneOpen(true)}
+          aria-label="Открыть чат команды"
+          title="Чат команды"
+        >
+          <Icon data={Smartphone} />
+        </Button>
+        <ThemePicker />
+      </div>
+      <ErrorNotice error={error} />
+      <div className="office-space">
+        <div
+          className={`office-scene ${actorIds.length > 2 ? 'office-scene-many' : ''}`}
+        >
+          <img
+            className="office-room-image"
+            src={room}
+            width="1536"
+            height="1024"
+            alt="Просторный изометрический офис с зоной отдыха, стеллажами и кофейным уголком"
           />
-          <Button
-            view="flat"
-            onClick={() => setPhoneOpen(true)}
-            aria-label="Открыть чат команды"
-            title="Чат команды"
-          >
-            <Icon data={Smartphone} />
-          </Button>
-          <ThemePicker />
-        </div>
-        <ErrorNotice error={error} />
-        <div className="office-space">
-          <div
-            className={`office-scene ${actorIds.length > 2 ? 'office-scene-many' : ''}`}
-          >
-            <img
-              className="office-room-image"
-              src={room}
-              width="1536"
-              height="1024"
-              alt="Просторный изометрический офис с зоной отдыха, стеллажами и кофейным уголком"
+          {actorIds.map((id, index) => (
+            <Employee
+              key={id}
+              id={id}
+              name={
+                chat?.members[id]?.name ||
+                (id === 'boss'
+                  ? 'Босс'
+                  : id === 'developer'
+                    ? 'Разработчик'
+                    : id)
+              }
+              avatar={chat?.members[id]?.avatar}
+              actor={chat?.room?.actors[id]}
+              placement={employeePlacement(index, actorIds.length)}
+              achieved={id === 'boss' && Boolean(chat?.room?.achievedAt)}
+              onClick={() => setPhoneOpen(true)}
             />
-            {actorIds.map((id, index) => (
-              <Employee
-                key={id}
-                id={id}
-                name={
-                  chat?.members[id]?.name ||
-                  (id === 'boss'
-                    ? 'Босс'
-                    : id === 'developer'
-                      ? 'Разработчик'
-                      : id)
-                }
-                avatar={chat?.members[id]?.avatar}
-                actor={chat?.room?.actors[id]}
-                placement={employeePlacement(index, actorIds.length)}
-                achieved={id === 'boss' && Boolean(chat?.room?.achievedAt)}
-                onClick={() => setPhoneOpen(true)}
-              />
-            ))}
-          </div>
+          ))}
         </div>
-        <TeamPlayer player={player} />
-        {phoneOpen && (
-          <TeamPhone
-            onClose={() => setPhoneOpen(false)}
-            onRunChange={setRun}
-            player={player}
-          />
-        )}
-      </main>
-    </AppearanceProvider>
+      </div>
+      <TeamPlayer player={player} />
+      {phoneOpen && (
+        <TeamPhone
+          onClose={() => setPhoneOpen(false)}
+          onRunChange={setRun}
+          player={player}
+        />
+      )}
+    </main>
   );
 }
 

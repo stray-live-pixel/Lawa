@@ -108,7 +108,6 @@ func Handler(root string) http.Handler {
 	mux.HandleFunc("GET /preview", serveUI)
 	mux.HandleFunc("GET /office", serveUI)
 	mux.HandleFunc("GET /api/teams", h.teams)
-	mux.HandleFunc("POST /api/teams", h.createTeam)
 	mux.HandleFunc("GET /api/teams/{run}", h.team)
 	mux.HandleFunc("POST /api/teams/{run}/history/recover", h.recoverTeamHistory)
 	mux.HandleFunc("POST /api/teams/{run}/messages", h.postTeam)
@@ -1017,6 +1016,13 @@ func diagnostic(err error) string {
 // отмене контекста. HTTP завершает короткие запросы, командный runtime прерывает
 // собственные turn и сохраняет известные результаты перед выходом.
 func Serve(ctx context.Context, root, address string) error {
+	return ServeWithStartup(ctx, root, address, nil)
+}
+
+// ServeWithStartup выполняет CLI-инициализацию один раз, после захвата порта и
+// настройки capacity, но до запуска Engine. Занятый порт не оставляет новый заказ,
+// который мог бы неожиданно подхватить другой сервер. HTTP этот callback не вызывает.
+func ServeWithStartup(ctx context.Context, root, address string, startup func() error) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -1028,6 +1034,16 @@ func Serve(ctx context.Context, root, address string) error {
 	if err != nil {
 		listener.Close()
 		return err
+	}
+	if startup != nil {
+		if err := ctx.Err(); err != nil {
+			listener.Close()
+			return err
+		}
+		if err := startup(); err != nil {
+			listener.Close()
+			return err
+		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	done := make(chan struct{})

@@ -1,4 +1,3 @@
-import { TeamConfigInput, type TeamCharacters } from './TeamConfigInput';
 import { useEffect, useRef, useState } from 'react';
 import {
   Avatar,
@@ -7,8 +6,6 @@ import {
   Button,
   Icon,
   Text,
-  TextArea,
-  TextInput,
 } from '@gravity-ui/uikit';
 import {
   Pin,
@@ -53,7 +50,6 @@ export interface TeamChat {
 }
 interface Teams {
   teams: { id: string; goal: string }[];
-  cwd: string;
   problems: string[];
 }
 
@@ -91,13 +87,10 @@ export function TeamPhone({
     () => new URLSearchParams(window.location.search).get('run') || '',
   );
   const { data: teams, error } = usePoll<Teams>('/api/teams');
-  const [creating, setCreating] = useState(!run);
-  const historical =
-    !creating && player?.historical && player.view?.runId === run;
+  const historical = player?.historical && player.view?.runId === run;
   function selectRun(id: string) {
     setRun(id);
     onRunChange?.(id);
-    setCreating(false);
     const url = new URL(window.location.href);
     url.searchParams.set('run', id);
     window.history.replaceState(null, '', url);
@@ -159,8 +152,23 @@ export function TeamPhone({
           </Button>
         </header>
         <ErrorNotice error={error || teams?.problems.join('\n')} />
-        {creating ? (
-          <NewTeam cwd={teams?.cwd || ''} onCreated={selectRun} />
+        {!run ? (
+          <div className="team-new">
+            <Text color="secondary">
+              {teams?.teams.length
+                ? 'Выберите существующий заказ'
+                : 'Нет запущенных команд. Создайте заказ через CLI Lawa.'}
+            </Text>
+            {teams?.teams.map((team) => (
+              <Button
+                key={team.id}
+                view="outlined"
+                onClick={() => selectRun(team.id)}
+              >
+                {team.goal}
+              </Button>
+            ))}
+          </div>
         ) : (
           <>
             <TeamThread
@@ -189,90 +197,6 @@ export function TeamPhone({
         </svg>
       </button>
     </section>
-  );
-}
-
-// Цель закрепляется целиком; лимит сообщения к постановке не применяется.
-function NewTeam({
-  cwd,
-  onCreated,
-}: {
-  cwd: string;
-  onCreated: (id: string) => void;
-}) {
-  const [goal, setGoal] = useState('');
-  const [characters, setCharacters] = useState<TeamCharacters>();
-  const [configValid, setConfigValid] = useState(true);
-  const [directory, setDirectory] = useState<string>();
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
-  async function create() {
-    if (!configValid || busy) return;
-    setBusy(true);
-    setError('');
-    try {
-      const result = await post<{ runId: string }>('/api/teams', {
-        goal,
-        cwd: directory ?? cwd,
-        characters,
-      });
-      onCreated(result.runId);
-    } catch (cause) {
-      setError(
-        `${String(cause)}. Перед повтором проверьте список заказов: сохранение могло завершиться.`,
-      );
-    } finally {
-      setBusy(false);
-    }
-  }
-  return (
-    <form
-      className="team-new"
-      onSubmit={(event) => {
-        event.preventDefault();
-        void create();
-      }}
-    >
-      <Text variant="header-1">С чего начнём?</Text>
-      <Text color="secondary">
-        Закрепите цель, ради которой собирается команда.
-      </Text>
-      <TextArea
-        controlProps={{ 'aria-label': 'Цель команды' }}
-        placeholder="Какого результата хотим достичь?"
-        value={goal}
-        onUpdate={setGoal}
-        minRows={5}
-        disabled={busy}
-      />
-      <TextInput
-        label="Папка проекта"
-        aria-label="Папка проекта"
-        value={directory ?? cwd}
-        onUpdate={setDirectory}
-        disabled={busy}
-      />
-      <TeamConfigInput
-        disabled={busy}
-        onChange={(next, valid) => {
-          setCharacters(next);
-          setConfigValid(valid);
-        }}
-      />
-      <ErrorNotice error={error} />
-      <Button
-        type="submit"
-        view="action"
-        size="l"
-        loading={busy}
-        disabled={!configValid || !goal.trim() || !(directory ?? cwd).trim()}
-      >
-        Закрепить цель
-      </Button>
-      <Text variant="caption-2" color="secondary">
-        Босс сразу начнёт работу в выбранной папке.
-      </Text>
-    </form>
   );
 }
 
