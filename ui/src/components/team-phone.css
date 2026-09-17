@@ -503,7 +503,6 @@
   background: transparent;
   color: var(--g-color-text-secondary);
   opacity: 0;
-  transition: opacity 160ms ease;
   cursor: nwse-resize;
   touch-action: none;
 }
@@ -513,42 +512,19 @@
   height: 100%;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.5;
+  stroke-width: 2.5;
   stroke-linecap: round;
 }
 .team-phone:hover .team-phone-resize,
 .team-phone-resize:focus-visible {
   opacity: 1;
 }
-.team-phone:hover .team-phone-resize svg {
-  animation: team-phone-resize-hint 700ms ease-in-out 2;
-}
 .team-phone-resize:focus-visible {
   outline: 2px solid var(--g-color-line-focus);
-}
-.team-phone-resize:active svg {
-  animation: none;
-}
-@keyframes team-phone-resize-hint {
-  0%,
-  100% {
-    transform: translate(0, 0);
-  }
-  50% {
-    transform: translate(2px, 2px);
-  }
 }
 /* На сенсорном экране нет hover; ручка остаётся заметной без анимации. */
 @media (hover: none) {
   .team-phone-resize {
     opacity: 0.65;
-  }
-}
-@media (prefers-reduced-motion: reduce), (hover: none) {
-  .team-phone-resize {
-    transition: none;
-  }
-  .team-phone:hover .team-phone-resize svg {
-    animation: none;
   }
 }

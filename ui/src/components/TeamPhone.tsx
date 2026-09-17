@@ -181,7 +181,7 @@ export function TeamPhone({
         onKeyDown={(event) => phoneWindow.keyboard('resize', event)}
       >
         <svg viewBox="0 0 44 44" aria-hidden="true">
-          <path d="M5 41a36 36 0 0 0 36-36" />
+          <path d="M14.32 39.77A36 36 0 0 0 39.77 14.32" />
         </svg>
       </button>
     </section>
