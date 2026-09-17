@@ -10,7 +10,7 @@ import { ThemePicker } from '../components/Theme';
 import { ErrorNotice } from '../components/ui';
 import { usePoll } from '../hooks/api';
 import { TeamPlayer, useTeamPlayer } from '../components/TeamPlayer';
-import room from '../assets/office/room-transparent.png';
+import room from '../assets/office/room-large-selected.png';
 import boss from '../assets/office/boss.png';
 import developer from '../assets/office/developer.png';
 import './office.css';
@@ -62,7 +62,7 @@ export default function Office() {
             src={room}
             width="1536"
             height="1024"
-            alt="Изометрическая комната с диваном, окном и растениями"
+            alt="Просторный изометрический офис с зоной отдыха, стеллажами и кофейным уголком"
           />
           <Employee
             id="boss"
