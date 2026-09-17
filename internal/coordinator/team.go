@@ -29,7 +29,7 @@ func addTeamTools(root, runID, stepID string, command *codex.Command) {
 			if err = json.Unmarshal(call.Arguments, &input, json.RejectUnknownMembers(true)); err != nil {
 				return "", err
 			}
-			result, err = runstore.ReadTeam(root, runID)
+			result, err = runstore.ReadTeamForAgent(root, runID)
 		case "team_post":
 			var input struct {
 				Text string `json:"text"`

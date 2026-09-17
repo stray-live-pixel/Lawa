@@ -286,7 +286,7 @@ func fakeServer(scenario string) {
 			}
 			turns := []any{}
 			if turnStatus != "" {
-				turn := map[string]any{"id": "turn-1", "status": turnStatus, "items": []any{}}
+				turn := map[string]any{"id": "turn-1", "status": turnStatus, "startedAt": 100, "completedAt": 110, "items": []any{}}
 				if turnStatus == "failed" {
 					turn["error"] = map[string]any{"message": "failed"}
 				}

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -50,7 +51,7 @@ func TestTeamConcurrentChildrenAndRetry(t *testing.T) {
 	}
 	old := first.Messages[0]
 	repeated, err := PostTeam(t.Context(), root, child.Meta.RunID, "work", old.ID, old.Text)
-	if err != nil || repeated != old {
+	if err != nil || !reflect.DeepEqual(repeated, old) {
 		t.Fatalf("retry: %+v %v", repeated, err)
 	}
 	if _, err = PostTeam(t.Context(), root, parent.Meta.RunID, "", old.ID, old.Text); err == nil {

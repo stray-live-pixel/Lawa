@@ -12,9 +12,10 @@ import (
 	"unicode/utf8"
 )
 
-// TeamChat — общая доска корневого заказа. Цель неизменна, сообщения добавляются
+// TeamChat — общая доска корневого заказа. Текущая цель версионируется кадрами, сообщения добавляются
 // последовательно. Память кубиков остаётся рабочими заметками, чат — общими фактами.
 type TeamChat struct {
+	History  *TeamHistory          `json:"history,omitempty"`
 	Room     *TeamRoom             `json:"room,omitempty"`
 	RunID    string                `json:"runId"`
 	Goal     string                `json:"goal"`
@@ -32,13 +33,16 @@ type TeamMember struct {
 // TeamMessage получает время и автора на стороне Lawa. ID — ключ повтора:
 // потеря сетевого подтверждения не должна удваивать сообщение при retry.
 type TeamMessage struct {
-	To       string    `json:"to,omitempty"`
-	Kind     string    `json:"kind,omitempty"`
-	ReplyTo  string    `json:"replyTo,omitempty"`
-	ID       string    `json:"id"`
-	AuthorID string    `json:"authorId"`
-	Date     time.Time `json:"date"`
-	Text     string    `json:"text"`
+	Goal       string    `json:"goal,omitempty"`
+	NotifyBoss bool      `json:"notifyBoss,omitempty"`
+	To         string    `json:"to,omitempty"`
+	Kind       string    `json:"kind,omitempty"`
+	ReplyToIDs []string  `json:"replyToIds,omitempty"` // Все входы порции, на которые отвечает реплика.
+	ReplyTo    string    `json:"replyTo,omitempty"`
+	ID         string    `json:"id"`
+	AuthorID   string    `json:"authorId"`
+	Date       time.Time `json:"date"`
+	Text       string    `json:"text"`
 }
 
 // newTeam создаёт pin точного входного задания, без ограничения в 50 слов.
@@ -105,6 +109,14 @@ func ReadTeam(root, runID string) (TeamChat, error) {
 	}
 	defer dir.Close()
 	return readTeam(dir, s)
+}
+
+// ReadTeamForAgent сохраняет контракт общей памяти без кадров UI: история
+// визуальных состояний не должна раздувать контекст каждого team_read.
+func ReadTeamForAgent(root, runID string) (TeamChat, error) {
+	chat, err := ReadTeam(root, runID)
+	chat.History = nil
+	return chat, err
 }
 
 // PostTeam связывает автора с реальным кубиком sourceRun. Пустой stepID означает
@@ -198,6 +210,12 @@ func UpdateTeam(ctx context.Context, root, runID string, update func(*TeamChat) 
 		return statErr
 	}
 	lock, err := dir.OpenFile("team.lock", os.O_CREATE|os.O_RDWR|syscall.O_NONBLOCK, 0o600)
+	// macOS иногда возвращает ENOENT для O_CREATE, когда соседний процесс уже
+	// создал тот же файл. Открываем существующий inode без создания; если файл
+	// действительно отсутствует, ошибка сохранится. Lock никогда не удаляем.
+	if errors.Is(err, os.ErrNotExist) {
+		lock, err = dir.OpenFile("team.lock", os.O_RDWR|syscall.O_NONBLOCK, 0)
+	}
 	if err != nil {
 		return err
 	}
@@ -230,9 +248,15 @@ func UpdateTeam(ctx context.Context, root, runID string, update func(*TeamChat) 
 	if err != nil {
 		return err
 	}
+	// Старой комнате сначала сохраняем достоверную точку «сейчас». Более
+	// ранние состояния восстанавливаются отдельно, без догадок при обычном GET.
+	if chat.Room != nil && chat.History == nil {
+		recordTeamFrame(&chat, time.Now())
+	}
 	if err = update(&chat); err != nil {
 		return err
 	}
+	recordTeamFrame(&chat, time.Now())
 	data, err := json.Marshal(chat)
 	if err != nil {
 		return err

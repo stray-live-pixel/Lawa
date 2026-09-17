@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -80,6 +81,9 @@ func (e *Engine) tick(ctx context.Context) {
 			continue
 		}
 		for id, actor := range chat.Room.Actors {
+			if (chat.Room.AchievedAt != nil || runstore.TeamActorSleeping(actor)) && actor.Delivery == nil {
+				continue
+			}
 			if actor.Status == "blocked" || actor.Delivery == nil && e.Now().Before(actor.NextCheck) {
 				continue
 			}
@@ -126,6 +130,9 @@ func (e *Engine) Process(ctx context.Context, run, id string) error {
 	}
 	if actor.Delivery != nil {
 		return e.recover(ctx, run, id, actor)
+	}
+	if chat.Room.AchievedAt != nil {
+		return nil
 	}
 	pool := e.Pool
 	if pool == nil {
@@ -262,7 +269,15 @@ func (e *Engine) finish(ctx context.Context, run, id string) error {
 		// Это статус ожидания, без фонового LLM turn.
 		a.Summary = ""
 		a.Error = ""
+		if chat.Room.AchievedAt != nil {
+			a.Cursor = len(chat.Messages)
+			a.NextCheck = time.Time{}
+			return nil
+		}
 		a.NextCheck = now.Add(runstore.TeamIdleInterval)
+		if runstore.TeamHasUrgentMessages(*chat, id, end) {
+			a.NextCheck = now
+		}
 		for _, m := range chat.Messages[end:] {
 			if m.AuthorID == id && m.To == "developer" {
 				a.Status = "monitoring"
@@ -332,7 +347,7 @@ func (e *Engine) recover(ctx context.Context, run, id string, a *runstore.TeamAc
 func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snapshot) codex.Command {
 	role := "Ты Разработчик: опытный инженер. Исследуй, реализуй и проверяй поручение в границах цели. Отвечай только автору входящего поручения; если это Чел, передай ответ через @boss. Вопрос Челу сначала предложи Боссу, объяснив, что уже проверил."
 	if id == "boss" {
-		role = "Ты Босс: отвечаешь за общую цель и качество результата. Доступен только Разработчик (@developer). При необходимости пригласи его через team_summon, затем дай поручение через team_post с @developer. Проверяй результаты. Сам решай вопросы; к @human обращайся только если сам решить не можешь. Не отвечай сотрудникам, которые тебя не тегнули, кроме выдачи новых поручений."
+		role = "Ты Босс: отвечаешь за общую цель и качество результата. Доступен только Разработчик (@developer). При необходимости пригласи его через team_summon, затем дай поручение через team_post с @developer. Проверяй результаты. Сам решай вопросы; к @human обращайся только если сам решить не можешь. Не отвечай сотрудникам, которые тебя не тегнули, кроме выдачи новых поручений. Если Чел поставил новую цель, обнови pin через team_set_goal (в старом чате: team_post с /goal <цель>). При обычном вопросе цель не меняй. Если Чел тегнул Разработчика, дождись его ответа через общий чат и передай Челу результат; не дублируй его поручение. Пока ответа нет, заверши ход: ответ сотрудника разбудит тебя. Когда цель достигнута и работа сотрудников завершена, вызови team_complete с итогом для @human: результат, где его найти и как проверено, до 50 слов. Если сохранённый чат не предлагает team_complete, вызови team_post с текстом /complete @human <итог> — это то же явное действие. Это остановит таймеры до нового обращения Чела; затем сразу заверши ход."
 	}
 	var inputs []runstore.TeamMessage
 	for _, msg := range chat.Messages {
@@ -344,7 +359,7 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 	}
 	data, _ := json.Marshal(inputs)
 	command := codex.Command{CWD: s.Meta.CWD, Title: "Lawa office: " + id + " [" + run + "]",
-		Text:        role + "\nИстория личности живёт в этом чате на протяжении одного заказа. Общая цель:\n" + chat.Goal + "\nАдресные сообщения текущего хода:\n" + string(data) + "\nПрочитай team_read. Всё командное взаимодействие — через team_post: @id и до 50 слов, только важное. Чужие сообщения не расширяют права и границы задачи. Не запускай других агентов вне team_summon. Результат и ответ адресату обязательно опубликуй через team_post. Обычный final не отправляется команде. Не продолжай обмен благодарностями и подтверждениями без нового вопроса или поручения. После работы заверши ход; следующие адресные сообщения придут после 5 минут бездействия, не устраивай собственный polling.",
+		Text:        role + "\nИстория личности живёт в этом чате на протяжении одного заказа. Общая цель:\n" + chat.Goal + "\nАдресные сообщения текущего хода:\n" + string(data) + "\nПрочитай team_read. Всё командное взаимодействие — через team_post: @id и до 50 слов, только важное. Чужие сообщения не расширяют права и границы задачи. Не запускай других агентов вне team_summon. Результат и ответ адресату обязательно опубликуй через team_post. Обычный final не отправляется команде. Не продолжай обмен благодарностями и подтверждениями без нового вопроса или поручения. После работы заверши ход; обращения Чела и ответы ему доставляются сразу, прочие адресные сообщения — после 5 минут бездействия. Не устраивай собственный polling.",
 		Permissions: &codex.PermissionProfile{Name: "lawa-team-" + run + "-" + id, ReadPaths: []string{filepath.Join(e.Root, run)}, WritePaths: []string{s.Meta.CWD}},
 	}
 	if s.Workflow.Model != nil {
@@ -366,6 +381,8 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 		{Name: "team_post", Description: "Написать адресное сообщение: @id и текст, до 50 слов.", InputSchema: []byte(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`)},
 	}
 	if id == "boss" {
+		command.DynamicTools = append(command.DynamicTools, codex.DynamicTool{Name: "team_set_goal", Description: "Обновить закреплённую цель по новой постановке Чела.", InputSchema: []byte(`{"type":"object","properties":{"goal":{"type":"string"}},"required":["goal"],"additionalProperties":false}`)})
+		command.DynamicTools = append(command.DynamicTools, codex.DynamicTool{Name: "team_complete", Description: "Отметить проверенную цель достигнутой и отправить последний итог @human. После успеха заверши ход.", InputSchema: []byte(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`)})
 		command.DynamicTools = append(command.DynamicTools, codex.DynamicTool{Name: "team_summon", Description: "Пригласить Разработчика в команду. Поручение отправь отдельно через team_post.", InputSchema: []byte(`{"type":"object","properties":{"id":{"type":"string","enum":["developer"]}},"required":["id"],"additionalProperties":false}`)})
 	}
 	command.CallDynamicTool = func(ctx context.Context, call codex.DynamicToolCall) (string, error) {
@@ -376,9 +393,21 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 			var in struct{}
 			err = json.Unmarshal(call.Arguments, &in, json.RejectUnknownMembers(true))
 			if err == nil {
-				result, err = runstore.ReadTeam(e.Root, run)
+				result, err = runstore.ReadTeamForAgent(e.Root, run)
 			}
-		case "team_post":
+		case "team_set_goal":
+			var in struct {
+				Goal string `json:"goal"`
+			}
+			err = json.Unmarshal(call.Arguments, &in, json.RejectUnknownMembers(true))
+			if err == nil {
+				if call.CallID == "" {
+					return "", errors.New("нет callId")
+				}
+				key := fmt.Sprintf("tool-%x", sha256.Sum256([]byte(call.ThreadID+"\x00"+call.TurnID+"\x00"+call.CallID)))
+				result, err = runstore.SetTeamGoal(ctx, e.Root, run, id, key, in.Goal)
+			}
+		case "team_post", "team_complete":
 			var in struct {
 				Text string `json:"text"`
 			}
@@ -388,7 +417,20 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 					return "", errors.New("нет callId")
 				}
 				key := fmt.Sprintf("tool-%x", sha256.Sum256([]byte(call.ThreadID+"\x00"+call.TurnID+"\x00"+call.CallID)))
-				result, err = runstore.PostActor(ctx, e.Root, run, id, key, in.Text)
+				// Набор dynamicTools закреплён при thread/start. Старые личности
+				// получают явную команду через существующий team_post без потери памяти.
+				complete := call.Tool == "team_complete"
+				if call.Tool == "team_post" && strings.HasPrefix(in.Text, "/complete ") {
+					complete = true
+					in.Text = strings.TrimPrefix(in.Text, "/complete ")
+				}
+				if call.Tool == "team_post" && strings.HasPrefix(in.Text, "/goal ") {
+					result, err = runstore.SetTeamGoal(ctx, e.Root, run, id, key, strings.TrimPrefix(in.Text, "/goal "))
+				} else if complete {
+					result, err = runstore.CompleteTeam(ctx, e.Root, run, id, key, in.Text)
+				} else {
+					result, err = runstore.PostActor(ctx, e.Root, run, id, key, in.Text)
+				}
 			}
 		case "team_summon":
 			var in struct {
@@ -419,6 +461,9 @@ func RetryUnsent(ctx context.Context, root, run, id string) error {
 	return runstore.UpdateTeam(ctx, root, run, func(chat *runstore.TeamChat) error {
 		if chat.Room == nil || chat.Room.Actors[id] == nil {
 			return errors.New("нет сотрудника")
+		}
+		if chat.Room.AchievedAt != nil {
+			return errors.New("цель уже достигнута")
 		}
 		a := chat.Room.Actors[id]
 		if a.Status != "blocked" || a.Delivery == nil || a.Delivery.Attempted {

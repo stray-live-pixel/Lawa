@@ -16,7 +16,9 @@ const TeamIdleInterval = 5 * time.Minute
 // TeamRoom включает адресный runtime только для новых командных заказов.
 // Старые фиксированные workflow и их общая база не меняют способ исполнения.
 type TeamRoom struct {
-	Actors map[string]*TeamActor `json:"actors"`
+	// AchievedAt останавливает новые поручения; nil сохраняет прежний активный режим.
+	AchievedAt *time.Time            `json:"achievedAt,omitempty"`
+	Actors     map[string]*TeamActor `json:"actors"`
 }
 
 // TeamActor — личность на весь заказ, с одним Codex thread и последовательными
@@ -48,6 +50,7 @@ func initializeRoom(chat *TeamChat) {
 	chat.Members["boss"] = TeamMember{Name: "Босс", Avatar: "boss"}
 	chat.Room = &TeamRoom{Actors: map[string]*TeamActor{"boss": {NextCheck: now, Status: "idle"}}}
 	chat.Messages = append(chat.Messages, TeamMessage{ID: "initial-goal", AuthorID: "human", To: "boss", Kind: "goal", Date: now, Text: "@boss Проанализируй закреплённую цель и организуй выполнение."})
+	recordTeamFrame(chat, now)
 }
 
 // addressedTo распознаёт ровно один явный адрес в начале сообщения. Вложения,
@@ -84,6 +87,9 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 			return previous, nil
 		}
 	}
+	if chat.Room.AchievedAt != nil && author != "human" {
+		return TeamMessage{}, errors.New("цель достигнута; дождись нового обращения Чела")
+	}
 	to, err := addressedTo(text)
 	if err != nil {
 		return TeamMessage{}, err
@@ -107,8 +113,12 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 			for _, inputID := range actor.Delivery.IDs {
 				if msg.ID == inputID && (msg.AuthorID == to || author == "developer" && msg.AuthorID == "human" && to == "boss") {
 					m.ReplyTo = msg.ID
+					m.ReplyToIDs = append(m.ReplyToIDs, msg.ID)
 				}
 			}
+		}
+		if author == "boss" && to == "human" && pendingHumanRelay(*chat) {
+			return m, errors.New("сначала дождись ответа Разработчика на обращение Чела")
 		}
 		if m.ReplyTo != "" {
 			m.Kind = "reply"
@@ -119,7 +129,9 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 		}
 		actor.Summary = strings.Join(strings.Fields(strings.TrimPrefix(text, "@"+to))[:min(7, len(strings.Fields(strings.TrimPrefix(text, "@"+to))))], " ")
 	}
+	reopenForHuman(chat, &m)
 	chat.Messages = append(chat.Messages, m)
+	wakeForMessage(chat, m)
 	return m, nil
 }
 
@@ -142,7 +154,7 @@ func PostActor(ctx context.Context, root, run, author, id, text string) (TeamMes
 // Повтор summon идемпотентен. Сам призыв не является поручением Разработчику.
 func SummonDeveloper(ctx context.Context, root, run, author string) error {
 	return UpdateTeam(ctx, root, run, func(chat *TeamChat) error {
-		if chat.Room == nil || author != "boss" || chat.Room.Actors["boss"] == nil || chat.Room.Actors["boss"].Status != "working" {
+		if chat.Room == nil || chat.Room.AchievedAt != nil || author != "boss" || chat.Room.Actors["boss"] == nil || chat.Room.Actors["boss"].Status != "working" {
 			return errors.New("пригласить Разработчика может только работающий Босс")
 		}
 		if chat.Room.Actors["developer"] != nil {
@@ -165,8 +177,11 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 		if chat.Room == nil {
 			return errors.New("нет комнаты")
 		}
+		if chat.Room.AchievedAt != nil {
+			return nil
+		}
 		actor := chat.Room.Actors[actorID]
-		if actor == nil || actor.Delivery != nil || actor.Status == "blocked" || now.Before(actor.NextCheck) {
+		if actor == nil || TeamActorSleeping(actor) || actor.Delivery != nil || actor.Status == "blocked" || now.Before(actor.NextCheck) {
 			return nil
 		}
 		if actor.Cursor < 0 || actor.Cursor > len(chat.Messages) {
@@ -174,7 +189,7 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 		}
 		var ids []string
 		for i := actor.Cursor; i < len(chat.Messages); i++ {
-			if chat.Messages[i].To == actorID {
+			if TeamMessageForActor(chat.Messages[i], actorID) {
 				ids = append(ids, chat.Messages[i].ID)
 			}
 		}
@@ -231,6 +246,19 @@ func LockTeamActor(root, run, actor string) (*os.File, error) {
 func (chat TeamChat) validateRoom() error {
 	if chat.Room.Actors["boss"] == nil {
 		return errors.New("в комнате отсутствует Босс")
+	}
+	// После достижения Чел может дописывать заметки. Ищем соответствующий
+	// финал во всей истории, а не считаем последнюю реплику неизменной.
+	if at := chat.Room.AchievedAt; at != nil {
+		found := false
+		for i, m := range chat.Messages {
+			if m.Kind == "achievement" && m.Date.Equal(*at) && i+1 < len(chat.Messages) && chat.Messages[i+1].AuthorID == "boss" && chat.Messages[i+1].To == "human" {
+				found = true
+			}
+		}
+		if at.IsZero() || !found {
+			return errors.New("повреждено завершение цели")
+		}
 	}
 	for id, actor := range chat.Room.Actors {
 		if (id != "boss" && id != "developer") || actor == nil || actor.Cursor < 0 || actor.Cursor > len(chat.Messages) {

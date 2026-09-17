@@ -4,6 +4,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -13,6 +14,7 @@ import { TeamPhone, wordCount, type TeamChat } from './TeamPhone';
 afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   window.history.replaceState(null, '', '/office');
 });
 const chat: TeamChat = {
@@ -81,7 +83,34 @@ it('показывает pin и автора, проверяет 50 слов и 
   );
   expect(await screen.findByText('Начинаем с управления героем')).toBeVisible();
   expect(screen.getByText('Босс')).toBeVisible();
-  expect(screen.getByText('Цель команды · закреплено')).toBeVisible();
+  expect(screen.getByText('Цель команды')).toBeVisible();
+  const pin = screen.getByRole('button', { name: 'Развернуть цель' });
+  expect(pin).toHaveAttribute('aria-expanded', 'false');
+  fireEvent.click(pin);
+  expect(screen.getByRole('button', { name: 'Свернуть цель' })).toHaveAttribute(
+    'aria-expanded',
+    'true',
+  );
+  expect(
+    within(screen.getByRole('log')).getByRole('button', {
+      name: 'Свернуть цель',
+    }),
+  ).toBeVisible();
+  // Клик по полному тексту сворачивает карточку; копирование не меняет её вид.
+  fireEvent.click(screen.getByText(chat.goal));
+  expect(
+    screen.getByRole('button', { name: 'Развернуть цель' }),
+  ).toHaveAttribute('aria-expanded', 'false');
+  const copy = vi.fn().mockResolvedValue(undefined);
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: copy },
+  });
+  fireEvent.click(screen.getByRole('button', { name: 'Скопировать цель' }));
+  await waitFor(() => expect(copy).toHaveBeenCalledWith(chat.goal));
+  expect(
+    screen.getByRole('button', { name: 'Развернуть цель' }),
+  ).toHaveAttribute('aria-expanded', 'false');
   const field = screen.getByRole('textbox', { name: 'Сообщение команде' });
   const send = screen.getByRole('button', { name: 'Отправить сообщение' });
   fireEvent.change(field, { target: { value: 'слово '.repeat(51) } });
@@ -200,4 +229,114 @@ it('подставляет тег и показывает приглашение
   expect(field).toHaveValue('@developer Проверь прыжок');
   fireEvent.click(screen.getByRole('button', { name: '@boss' }));
   expect(field).toHaveValue('@boss Проверь прыжок');
+});
+
+// Лейбл относится к следующей проверке, а не к работе модели. После достижения
+// даже устаревшие даты не должны показывать таймер; статус остаётся доступным по title.
+it.each([false, true])(
+  'показывает точки и только действующие таймеры: достигнута=%s',
+  async (achieved) => {
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+    const nextCheck = new Date(now + 300000).toISOString();
+    window.history.replaceState(null, '', '/office?run=order');
+    const data: TeamChat = {
+      ...chat,
+      room: {
+        achievedAt: achieved ? new Date(now).toISOString() : undefined,
+        actors: {
+          boss: { status: 'monitoring', nextCheck },
+          developer: { status: 'working', nextCheck },
+          waiting: { status: 'idle', nextCheck: '0001-01-01T00:00:00Z' },
+          blocked: { status: 'blocked', nextCheck },
+        },
+      },
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string) =>
+        response(
+          url === '/api/teams'
+            ? { teams: [], cwd: '/project', problems: [] }
+            : data,
+        ),
+      ),
+    );
+    render(
+      <AppTheme>
+        <TeamPhone onClose={() => {}} />
+      </AppTheme>,
+    );
+    const boss = await screen.findByRole('button', { name: '@boss' });
+    expect(boss.querySelector('.team-recipient-dot')).toHaveClass(
+      achieved ? 'team-recipient-dot_idle' : 'team-recipient-dot_monitoring',
+    );
+    expect(
+      screen
+        .getByRole('button', { name: '@developer' })
+        .querySelector('.team-recipient-dot'),
+    ).toHaveClass(
+      achieved ? 'team-recipient-dot_idle' : 'team-recipient-dot_working',
+    );
+    expect(screen.queryAllByText('5:00')).toHaveLength(achieved ? 0 : 1);
+    expect(screen.getByRole('button', { name: '@waiting' })).toHaveAttribute(
+      'title',
+      'Ждёт обращения',
+    );
+    expect(screen.getByRole('button', { name: '@blocked' })).toHaveAttribute(
+      'title',
+      achieved ? 'Ждёт обращения' : 'Нужна помощь',
+    );
+    const field = screen.getByRole('textbox', { name: 'Сообщение команде' });
+    const hint = screen.getByText('Агенты отвечают только на явный @тег');
+    expect(
+      field.compareDocumentPosition(hint) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  },
+);
+
+// Немодальное окно не захватывает фон. Геометрия меняется без пересоздания
+// чата: черновик и его фокус сохраняются при движении и изменении размера.
+it('показывает плавающее окно с доступным фоном, перемещением и ресайзом', async () => {
+  window.history.replaceState(null, '', '/office?run=order');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) =>
+      response(
+        url === '/api/teams'
+          ? { teams: [], cwd: '/project', problems: [] }
+          : chat,
+      ),
+    ),
+  );
+  const outside = vi.fn();
+  const close = vi.fn();
+  render(
+    <AppTheme>
+      <button onClick={outside}>Плеер</button>
+      <TeamPhone onClose={close} />
+    </AppTheme>,
+  );
+  const field = await screen.findByRole('textbox', {
+    name: 'Сообщение команде',
+  });
+  fireEvent.change(field, { target: { value: 'Черновик' } });
+  const phone = screen.getByRole('dialog', { name: 'Чат команды' });
+  expect(phone).not.toHaveAttribute('aria-modal', 'true');
+  const left = parseFloat(phone.style.left);
+  const width = parseFloat(phone.style.width);
+  fireEvent.keyDown(
+    screen.getByRole('button', { name: 'Переместить телефон' }),
+    { key: 'ArrowLeft' },
+  );
+  expect(parseFloat(phone.style.left)).toBe(left - 10);
+  fireEvent.keyDown(
+    screen.getByRole('button', { name: 'Изменить размер телефона' }),
+    { key: 'ArrowRight', shiftKey: true },
+  );
+  expect(parseFloat(phone.style.width)).toBe(width + 40);
+  expect(field).toHaveValue('Черновик');
+  fireEvent.click(screen.getByRole('button', { name: 'Плеер' }));
+  expect(outside).toHaveBeenCalledOnce();
+  expect(close).not.toHaveBeenCalled();
 });

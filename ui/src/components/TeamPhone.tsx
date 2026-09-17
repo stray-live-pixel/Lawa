@@ -1,19 +1,31 @@
 import { useEffect, useRef, useState } from 'react';
 import {
   Avatar,
+  ClipboardButton,
+  Label,
   Button,
   Icon,
-  Modal,
   Text,
   TextArea,
   TextInput,
 } from '@gravity-ui/uikit';
-import { ArrowUp, Pin, Xmark } from '@gravity-ui/icons';
+import {
+  Pin,
+  Xmark,
+  CircleCheckFill,
+  ChevronsRight,
+  ChevronDown,
+} from '@gravity-ui/icons';
 import { usePoll } from '../hooks/api';
-import { Choice, ErrorNotice } from './ui';
+import { ErrorNotice } from './ui';
+import { type TeamPlayerState, type TeamHistory } from './TeamPlayer';
 import bossImage from '../assets/office/boss.png';
 import developerImage from '../assets/office/developer.png';
 import './team-phone.css';
+import { TeamMarkdown } from './TeamMarkdown';
+import { TeamMessageInput } from './TeamMessageInput';
+import { usePhoneWindow } from './usePhoneWindow';
+import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 
 export interface TeamMessage {
   id: string;
@@ -25,18 +37,19 @@ export interface TeamMessage {
   replyTo?: string;
 }
 export interface TeamActor {
-  status: 'idle' | 'working' | 'monitoring' | 'blocked';
+  status: 'idle' | 'working' | 'monitoring' | 'blocked' | 'unknown';
   summary?: string;
   error?: string;
   nextCheck: string;
   delivery?: { attempted: boolean };
 }
 export interface TeamChat {
+  history?: TeamHistory;
   runId: string;
   goal: string;
   members: Record<string, { name: string; avatar?: string }>;
   messages: TeamMessage[];
-  room?: { actors: Record<string, TeamActor> };
+  room?: { actors: Record<string, TeamActor>; achievedAt?: string };
 }
 interface Teams {
   teams: { id: string; goal: string }[];
@@ -67,15 +80,20 @@ async function post<T>(url: string, input: unknown): Promise<T> {
 export function TeamPhone({
   onClose,
   onRunChange,
+  player,
 }: {
   onClose: () => void;
   onRunChange?: (run: string) => void;
+  player?: TeamPlayerState;
 }) {
+  const phoneWindow = usePhoneWindow();
   const [run, setRun] = useState(
     () => new URLSearchParams(window.location.search).get('run') || '',
   );
   const { data: teams, error } = usePoll<Teams>('/api/teams');
   const [creating, setCreating] = useState(!run);
+  const historical =
+    !creating && player?.historical && player.view?.runId === run;
   function selectRun(id: string) {
     setRun(id);
     onRunChange?.(id);
@@ -85,59 +103,92 @@ export function TeamPhone({
     window.history.replaceState(null, '', url);
   }
   return (
-    <Modal
-      open
-      onClose={onClose}
+    <section
+      ref={phoneWindow.panel}
+      className="team-phone"
+      role="dialog"
       aria-label="Чат команды"
-      contentClassName="team-phone-modal"
+      tabIndex={-1}
+      style={phoneWindow.bounds}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && !event.defaultPrevented) {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
     >
-      <section className="team-phone" aria-label="Смартфон команды">
-        <div className="team-phone-hardware" aria-hidden="true">
-          <span />
-        </div>
-        <header className="team-phone-header">
-          <div>
-            <Text variant="subheader-2">Команда</Text>
-            <Text as="div" variant="caption-2" color="secondary">
-              Общая база знаний
-            </Text>
-          </div>
-          <Button view="flat" aria-label="Закрыть чат" onClick={onClose}>
-            <Icon data={Xmark} />
+      <div className="team-phone-screen">
+        <header className="team-phone-header" {...phoneWindow.move}>
+          <span
+            className="team-phone-move-grip"
+            role="button"
+            tabIndex={0}
+            aria-label="Переместить телефон"
+            title="Перетащите окно или используйте стрелки"
+            onKeyDown={(event) => phoneWindow.keyboard('move', event)}
+          />
+          <span className="team-phone-camera-island" aria-hidden="true">
+            <span className="team-phone-camera-lens" />
+          </span>
+          <Text variant="subheader-2" className="team-phone-title">
+            Чат команды
+          </Text>
+          {historical && (
+            <>
+              <Label theme="info" size="xs">
+                История
+              </Label>
+              <Button
+                view="flat"
+                size="s"
+                aria-label="К текущему чату"
+                title="К текущему чату"
+                onClick={player?.live}
+              >
+                <Icon data={ChevronsRight} size={16} />
+              </Button>
+            </>
+          )}
+          <Button
+            view="flat"
+            size="s"
+            aria-label="Закрыть чат"
+            onClick={onClose}
+          >
+            <Icon data={Xmark} size={16} />
           </Button>
         </header>
-        <div className="team-phone-picker">
-          <Choice
-            aria-label="Заказ команды"
-            value={creating ? 'new' : run}
-            onUpdate={(id) =>
-              id === 'new' ? setCreating(true) : selectRun(id)
-            }
-            options={[
-              { value: 'new', content: 'Новая цель' },
-              ...(teams?.teams || []).map((team) => ({
-                value: team.id,
-                content: team.goal.slice(0, 70),
-              })),
-              ...(!creating &&
-              run &&
-              !teams?.teams.some((team) => team.id === run)
-                ? [{ value: run, content: 'Текущий заказ' }]
-                : []),
-            ]}
-          />
-        </div>
         <ErrorNotice error={error || teams?.problems.join('\n')} />
         {creating ? (
           <NewTeam cwd={teams?.cwd || ''} onCreated={selectRun} />
         ) : (
-          <TeamThread key={run} run={run} />
+          <>
+            <TeamThread
+              key={run}
+              run={run}
+              historyView={
+                player?.historical && player.view?.runId === run
+                  ? player.view
+                  : undefined
+              }
+              onLive={player?.live}
+            />
+          </>
         )}
-        <div className="team-phone-home" aria-hidden="true">
-          <span />
-        </div>
-      </section>
-    </Modal>
+      </div>
+      <button
+        className="team-phone-resize"
+        type="button"
+        aria-label="Изменить размер телефона"
+        title="Потяните за угол или используйте стрелки"
+        {...phoneWindow.resize}
+        onKeyDown={(event) => phoneWindow.keyboard('resize', event)}
+      >
+        <svg viewBox="0 0 64 64" aria-hidden="true">
+          <path d="M33.344 54.138A54 54 0 0 0 55.028 31.683" />
+        </svg>
+      </button>
+    </section>
   );
 }
 
@@ -214,6 +265,58 @@ function NewTeam({
   );
 }
 
+// Карточка занимает две строки до раскрытия; полная цель доступна с клавиатуры.
+// Собственное раскрытие не меняет курсор истории или состояние заказа.
+function TeamGoal({ goal, achieved }: { goal: string; achieved: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <section
+      className={`team-pin ${achieved ? 'team-pin-achieved' : ''} ${expanded ? 'team-pin-expanded' : ''}`}
+    >
+      <Button
+        view="flat"
+        className="team-pin-toggle"
+        aria-label={expanded ? 'Свернуть цель' : 'Развернуть цель'}
+        aria-expanded={expanded}
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="team-pin-heading">
+          <Icon data={achieved ? CircleCheckFill : Pin} size={16} />
+          <Text
+            as="span"
+            variant="caption-2"
+            color={achieved ? 'positive' : 'secondary'}
+          >
+            Цель команды
+          </Text>
+          <Icon className="team-pin-chevron" data={ChevronDown} size={14} />
+        </span>
+        <span className={expanded ? 'team-pin-details' : 'team-pin-preview'}>
+          {goal}
+        </span>
+      </Button>
+      <ClipboardButton
+        className="team-pin-clipboard"
+        view="flat"
+        size="s"
+        text={goal}
+        aria-label="Скопировать цель"
+        tooltipInitialText="Скопировать цель"
+        tooltipSuccessText="Цель скопирована"
+        onCopy={(_, copied) => {
+          if (!copied)
+            toaster.add({
+              name: 'copy-team-goal',
+              title: 'Не удалось скопировать цель',
+              theme: 'danger',
+              autoHiding: 2500,
+            });
+        }}
+      />
+    </section>
+  );
+}
+
 // ID автора разрешается через реестр команды. Образ Босса берётся из сцены,
 // Разработчик использует свой образ. Прочие авторы получают стабильные инициалы.
 function MemberAvatar({ id, chat }: { id: string; chat: TeamChat }) {
@@ -244,9 +347,18 @@ function MemberAvatar({ id, chat }: { id: string; chat: TeamChat }) {
 // Polling получает новые реплики, локально подтверждённые записи защищены от
 // запоздавшего GET. Порядок задаёт серверная запись, а не часы браузера.
 // Скролл следует за новыми сообщениями только у нижнего края.
-function TeamThread({ run }: { run: string }) {
+function TeamThread({
+  run,
+  historyView,
+  onLive,
+}: {
+  run: string;
+  historyView?: TeamChat;
+  onLive?: () => void;
+}) {
   const url = `/api/teams/${encodeURIComponent(run)}`;
-  const { data: chat, error: readError } = usePoll<TeamChat>(url);
+  const { data: liveChat, error: readError } = usePoll<TeamChat>(url);
+  const chat = historyView || liveChat;
   const [text, setText] = useState('');
   const [confirmed, setConfirmed] = useState<TeamMessage[]>([]);
   const [busy, setBusy] = useState(false);
@@ -256,16 +368,15 @@ function TeamThread({ run }: { run: string }) {
   const follows = useRef(true);
   const messages = [
     ...new Map(
-      [...(chat?.messages || []), ...confirmed].map((message) => [
-        message.id,
-        message,
-      ]),
+      [...(chat?.messages || []), ...(historyView ? [] : confirmed)].map(
+        (message) => [message.id, message],
+      ),
     ).values(),
   ];
   useEffect(() => {
     if (follows.current && list.current)
       list.current.scrollTop = list.current.scrollHeight;
-  }, [messages.length]);
+  }, [messages.length, historyView]);
   async function send() {
     if (busy || !text.trim() || wordCount(text) > 50) return;
     setBusy(true);
@@ -284,6 +395,7 @@ function TeamThread({ run }: { run: string }) {
       pending.current = null;
       follows.current = true;
       setText('');
+      onLive?.();
     } catch (cause) {
       setError(String(cause));
     } finally {
@@ -295,15 +407,6 @@ function TeamThread({ run }: { run: string }) {
       <ErrorNotice error={readError} />
       {chat ? (
         <>
-          <div className="team-pin" tabIndex={0}>
-            <Icon data={Pin} size={16} />
-            <div>
-              <Text variant="caption-2" color="secondary">
-                Цель команды · закреплено
-              </Text>
-              <p>{chat.goal}</p>
-            </div>
-          </div>
           <div
             className="team-messages"
             ref={list}
@@ -315,13 +418,22 @@ function TeamThread({ run }: { run: string }) {
                 el.scrollHeight - el.scrollTop - el.clientHeight < 48;
             }}
           >
+            <div className="team-pin-layer">
+              <TeamGoal
+                key={chat.goal}
+                goal={chat.goal}
+                achieved={Boolean(chat.room?.achievedAt)}
+              />
+            </div>
             {!messages.length && (
               <Text className="team-empty" color="secondary">
                 Здесь — самое важное для всей команды.
               </Text>
             )}
             {messages.map((message) =>
-              message.kind === 'system' ? (
+              message.kind === 'system' ||
+              message.kind === 'achievement' ||
+              message.kind === 'goal_updated' ? (
                 <div key={message.id} className="team-system-message">
                   <time dateTime={message.date}>
                     {new Date(message.date).toLocaleTimeString('ru-RU', {
@@ -329,7 +441,16 @@ function TeamThread({ run }: { run: string }) {
                       minute: '2-digit',
                     })}
                   </time>
-                  <span>{message.text}</span>
+                  <span>
+                    {message.kind === 'achievement' && (
+                      <Icon
+                        data={CircleCheckFill}
+                        size={14}
+                        className="team-achievement-icon"
+                      />
+                    )}{' '}
+                    {message.text}
+                  </span>
                 </div>
               ) : (
                 <article
@@ -356,24 +477,15 @@ function TeamThread({ run }: { run: string }) {
                       </time>
                     </div>
                     <div className="team-message-bubble">
-                      {message.to &&
-                      message.text.startsWith(`@${message.to} `) ? (
-                        <>
-                          <strong className="team-mention">
-                            @{message.to}
-                          </strong>
-                          {message.text.slice(message.to.length + 1)}
-                        </>
-                      ) : (
-                        message.text
-                      )}
+                      <TeamMarkdown text={message.text} to={message.to} />
                     </div>
                   </div>
                 </article>
               ),
             )}
           </div>
-          {chat.room &&
+          {!historyView &&
+            chat.room &&
             Object.entries(chat.room.actors)
               .filter(([, actor]) => actor.error)
               .map(([id, actor]) => (
@@ -410,9 +522,10 @@ function TeamThread({ run }: { run: string }) {
             }}
           >
             <ErrorNotice error={error} />
-            {chat.room && (
+            {(liveChat || chat).room && (
               <TeamRecipients
-                actors={chat.room.actors}
+                actors={(liveChat || chat).room!.actors}
+                achieved={Boolean((liveChat || chat).room?.achievedAt)}
                 busy={busy}
                 onSelect={(id) =>
                   setText(
@@ -421,35 +534,40 @@ function TeamThread({ run }: { run: string }) {
                 }
               />
             )}
-            <div className="team-compose-row">
-              <TextArea
-                controlProps={{ 'aria-label': 'Сообщение команде' }}
-                placeholder={
-                  chat.room ? '@boss Самое важное…' : 'Самое важное…'
-                }
-                value={text}
-                onUpdate={setText}
-                minRows={2}
-                maxRows={4}
-                disabled={busy}
-              />
-              <Button
-                type="submit"
-                view="action"
-                size="l"
-                aria-label="Отправить сообщение"
-                loading={busy}
-                disabled={!text.trim() || wordCount(text) > 50}
+            <TeamMessageInput
+              value={text}
+              onUpdate={setText}
+              employees={Object.keys((liveChat || chat).room?.actors || {}).map(
+                (id) => ({
+                  id,
+                  name: (liveChat || chat).members[id]?.name || id,
+                }),
+              )}
+              renderAvatar={(id) => (
+                <MemberAvatar id={id} chat={liveChat || chat} />
+              )}
+              busy={busy}
+              canSend={Boolean(text.trim()) && wordCount(text) <= 50}
+              placeholder={chat.room ? '@boss Самое важное…' : 'Самое важное…'}
+            />
+            <div className="team-compose-meta">
+              <Text
+                className="team-compose-count"
+                variant="caption-2"
+                color={wordCount(text) > 50 ? 'danger' : 'secondary'}
               >
-                <Icon data={ArrowUp} />
-              </Button>
+                Чел · {wordCount(text)}/50 слов
+              </Text>
+              {(liveChat || chat).room && (
+                <Text
+                  className="team-compose-hint"
+                  variant="caption-1"
+                  color="secondary"
+                >
+                  Агенты отвечают только на явный @тег
+                </Text>
+              )}
             </div>
-            <Text
-              variant="caption-2"
-              color={wordCount(text) > 50 ? 'danger' : 'secondary'}
-            >
-              Чел · {wordCount(text)}/50 слов
-            </Text>
           </form>
         </>
       ) : (
@@ -463,10 +581,12 @@ function TeamThread({ run }: { run: string }) {
 // зависшим интерфейсом. Сервер остаётся источником времени следующей проверки.
 function TeamRecipients({
   actors,
+  achieved,
   busy,
   onSelect,
 }: {
   actors: Record<string, TeamActor>;
+  achieved?: boolean;
   busy: boolean;
   onSelect: (id: string) => void;
 }) {
@@ -482,33 +602,56 @@ function TeamRecipients({
           0,
           Math.ceil((Date.parse(actor.nextCheck) - now) / 1000),
         );
-        const status =
-          actor.status === 'working'
-            ? 'Работает'
-            : actor.status === 'blocked'
-              ? 'Нужна помощь'
-              : seconds > 0
-                ? `Проверка через ${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
-                : 'Ожидает проверки';
+        const state = achieved ? 'idle' : actor.status;
+        const status = {
+          idle: 'Ждёт обращения',
+          working: 'Работает',
+          monitoring: 'Мониторит',
+          blocked: 'Нужна помощь',
+          unknown: 'Статус не записан',
+        }[state];
+        // nextCheck занятого/остановленного сотрудника не является отсчётом.
+        // После достижения таймер скрыт даже при устаревшем серверном времени.
+        const countdown =
+          !achieved &&
+          (state === 'idle' || state === 'monitoring') &&
+          seconds > 0
+            ? `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`
+            : undefined;
+        const description = countdown
+          ? `${status}. Проверка через ${countdown}`
+          : status;
         return (
           <div key={id} className="team-recipient">
             <Button
-              size="s"
-              view="flat-secondary"
+              size="m"
+              view="outlined"
               disabled={busy}
+              title={description}
+              aria-description={description}
               onClick={() => onSelect(id)}
             >
-              @{id}
+              <span className="team-recipient-content">
+                <span
+                  className={`team-recipient-dot team-recipient-dot_${state}`}
+                  aria-hidden="true"
+                />
+                @{id}
+              </span>
             </Button>
-            <Text variant="caption-1" color="secondary">
-              {status}
-            </Text>
+            {countdown && (
+              <Label
+                className="team-recipient-timer"
+                size="xs"
+                theme="normal"
+                aria-hidden="true"
+              >
+                {countdown}
+              </Label>
+            )}
           </div>
         );
       })}
-      <Text variant="caption-1" color="secondary">
-        Агенты отвечают только на явный @тег
-      </Text>
     </div>
   );
 }

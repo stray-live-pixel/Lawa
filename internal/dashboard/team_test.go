@@ -42,6 +42,13 @@ func TestTeamAPI(t *testing.T) {
 		t.Fatalf("заказ запущен или не создан: %+v %v", s.Meta, err)
 	}
 	path := "/api/teams/" + created.RunID
+	// Чужой сайт не должен запускать даже read-only App Server.
+	if w = request("POST", path+"/history/recover", `{}`, "https://foreign.test"); w.Code != 403 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w = request("POST", path+"/history/recover", `{"threadId":"foreign"}`, "http://localhost"); w.Code != 400 {
+		t.Fatal(w.Code, w.Body.String())
+	}
 	if w = request("POST", path+"/messages", `{"id":"one","text":"Готово","authorId":"boss"}`, "http://localhost"); w.Code != 400 {
 		t.Fatal("подмена автора", w.Code)
 	}

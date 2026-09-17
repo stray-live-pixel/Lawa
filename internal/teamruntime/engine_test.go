@@ -86,7 +86,7 @@ func start(t *testing.T, c codex.Command, thread, turn string) {
 	}
 }
 
-// Первый ход немедленный; последующие — лишь после личного покоя. Сообщение,
+// Обращение Чела срочное; внутренние поручения ждут личного таймера. Сообщение,
 // пришедшее во время turn, не теряется при продвижении курсора текущей порции.
 func TestTeamLifecycleAndHumanRelay(t *testing.T) {
 	e, run, client, now := teamEngine(t)
@@ -142,16 +142,12 @@ func TestTeamLifecycleAndHumanRelay(t *testing.T) {
 	}
 	process(t, e, run, "developer")
 	chat = readChat(t, e, run)
-	if got := chat.Room.Actors["developer"].NextCheck; !got.Equal(now.Add(5 * time.Minute)) {
-		t.Fatal("таймер не от завершения", got)
+	if got := chat.Room.Actors["developer"].NextCheck; !got.Equal(*now) {
+		t.Fatal("новый запрос Чела не готов немедленно", got)
 	}
 	last := chat.Messages[len(chat.Messages)-1]
 	if last.To != "boss" || last.ReplyTo != "direct" {
 		t.Fatal(last)
-	}
-	process(t, e, run, "developer")
-	if client.calls != 2 {
-		t.Fatal("turn во время личного таймера")
 	}
 	*now = chat.Room.Actors["developer"].NextCheck
 	client.observed = codex.Observation{ThreadStatus: "idle", LatestTurnID: "dev-1", LatestTurnStatus: "completed"}
