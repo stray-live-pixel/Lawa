@@ -524,21 +524,27 @@ function TeamThread({
                 <Icon data={ArrowUp} />
               </Button>
             </div>
-            <Text
-              variant="caption-2"
-              color={wordCount(text) > 50 ? 'danger' : 'secondary'}
-            >
-              Чел · {wordCount(text)}/50 слов
-              {historyView ? ' · Отправка в текущий чат' : ''}
-            </Text>
-            {(liveChat || chat).room && (
+            <div className="team-compose-meta">
               <Text
-                as="div"
-                className="team-compose-hint"
-                variant="caption-1"
-                color="secondary"
+                className="team-compose-count"
+                variant="caption-2"
+                color={wordCount(text) > 50 ? 'danger' : 'secondary'}
               >
-                Агенты отвечают только на явный @тег
+                Чел · {wordCount(text)}/50 слов
+              </Text>
+              {(liveChat || chat).room && (
+                <Text
+                  className="team-compose-hint"
+                  variant="caption-1"
+                  color="secondary"
+                >
+                  Агенты отвечают только на явный @тег
+                </Text>
+              )}
+            </div>
+            {historyView && (
+              <Text as="div" variant="caption-1" color="secondary">
+                Отправка в текущий чат
               </Text>
             )}
           </form>

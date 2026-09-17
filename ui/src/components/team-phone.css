@@ -204,7 +204,7 @@
   transform-origin: 42% 19%;
 }
 .team-compose {
-  padding: 12px 14px 4px;
+  padding: 10px 14px 2px;
   border-top: 1px solid var(--g-color-line-generic);
   flex: none;
 }
@@ -212,7 +212,7 @@
   display: flex;
   gap: 8px;
   align-items: flex-end;
-  margin-bottom: 5px;
+  margin-bottom: 3px;
 }
 .team-compose-row > .g-text-area {
   flex: 1;
@@ -252,13 +252,24 @@
   overflow-x: auto;
   scrollbar-width: none;
   padding: 7px 5px 3px 1px;
-  margin-bottom: 7px;
+  margin-bottom: 5px;
 }
 .team-recipients::-webkit-scrollbar {
   display: none;
 }
+.team-compose-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.team-compose-count {
+  flex: none;
+  white-space: nowrap;
+}
 .team-compose-hint {
-  margin-top: 3px;
+  min-width: 0;
+  text-align: right;
 }
 .team-actor-error {
   max-height: 110px;
@@ -271,8 +282,14 @@
   position: relative;
   flex: none;
 }
+/* Flex на обёртке UIKit убирает смещение inline-контента относительно baseline. */
+.team-recipient > .g-button .g-button__text {
+  display: flex;
+  align-items: center;
+}
 .team-recipient-content {
-  display: inline-flex;
+  display: flex;
+  line-height: var(--g-text-body-1-line-height);
   align-items: center;
   gap: 6px;
 }
