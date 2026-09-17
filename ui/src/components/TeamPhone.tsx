@@ -15,7 +15,6 @@ import {
   CircleCheckFill,
   ChevronsRight,
   ChevronDown,
-  ArrowDownRight,
 } from '@gravity-ui/icons';
 import { usePoll } from '../hooks/api';
 import { ErrorNotice } from './ui';
@@ -173,17 +172,18 @@ export function TeamPhone({
       <div className="team-phone-home" aria-hidden="true">
         <span />
       </div>
-      <Button
+      <button
         className="team-phone-resize"
-        view="flat"
-        size="s"
+        type="button"
         aria-label="Изменить размер телефона"
         title="Потяните за угол или используйте стрелки"
         {...phoneWindow.resize}
         onKeyDown={(event) => phoneWindow.keyboard('resize', event)}
       >
-        <Icon data={ArrowDownRight} size={16} />
-      </Button>
+        <svg viewBox="0 0 32 32" aria-hidden="true">
+          <path d="M5 23a18 18 0 0 0 18-18M11 27a16 16 0 0 0 16-16" />
+        </svg>
+      </button>
     </section>
   );
 }
