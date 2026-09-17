@@ -839,6 +839,18 @@ python3 scripts/code-report.py
 Для обработки результатов: `python3 scripts/code-report.py --json`.
 Проверка самого счётчика: `python3 -B -m unittest discover -s scripts -p 'test_code_report.py'`.
 
+Полный статический анализ качества:
+
+```sh
+python3 scripts/analyze.py --install # Первый запуск: установка инструментов и анализ.
+python3 scripts/analyze.py           # Следующие запуски.
+```
+
+Результат — отдельная папка `reports/analysis/<дата>/` с `report.md`, `report.json`
+и подробными диагностиками. Отчёт показывает ошибки Go/UI, сложность функций,
+неиспользуемый код, дублирование, зависимости и известные уязвимости.
+Он ничего не исправляет. [Правила оценки, сравнение запусков и зависимости](docs/static-analysis.md).
+
 Основные пакеты:
 
 ```text

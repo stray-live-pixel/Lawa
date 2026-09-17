@@ -10,3 +10,8 @@
 # Зависимости и локальные отчёты frontend; web-сборка для go:embed хранится в Git.
 /ui/node_modules/
 /ui/coverage/
+
+# Инструменты и результаты статического анализа не входят в приложение.
+/tools/analysis/node_modules/
+/reports/analysis/
+__pycache__/

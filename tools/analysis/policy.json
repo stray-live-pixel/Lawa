@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "go_tools": {
+    "golangci-lint": "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2",
+    "govulncheck": "golang.org/x/vuln/cmd/govulncheck@v1.8.0"
+  },
+  "metrics": {
+    "go_issues": { "label": "Go: замечания линтеров", "fail_above": 0 },
+    "go_complexity": {
+      "label": "Go: замечания к сложности функций",
+      "warn_above": 0
+    },
+    "ui_errors": { "label": "UI: ошибки ESLint", "fail_above": 0 },
+    "ui_warnings": { "label": "UI: предупреждения ESLint", "warn_above": 0 },
+    "ui_complexity": {
+      "label": "UI: функции со сложностью >15",
+      "warn_above": 0
+    },
+    "type_errors": {
+      "label": "UI: ошибки компилятора TypeScript",
+      "fail_above": 0
+    },
+    "unused": { "label": "UI: замечания Knip", "warn_above": 0 },
+    "duplication": {
+      "label": "Повторяющиеся строки, % по jscpd",
+      "warn_above": 5,
+      "fail_above": 10
+    },
+    "dependency_violations": {
+      "label": "UI: нарушения зависимостей",
+      "fail_above": 0
+    },
+    "go_vulnerabilities": {
+      "label": "Go: вызываемые известные уязвимости",
+      "fail_above": 0
+    },
+    "npm_high": { "label": "npm: high + critical уязвимости", "fail_above": 0 },
+    "npm_other": { "label": "npm: остальные уязвимости", "warn_above": 0 }
+  }
+}

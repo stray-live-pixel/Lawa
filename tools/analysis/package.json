@@ -1,0 +1,19 @@
+{
+  "name": "lawa-analysis",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "dependency-cruiser": "18.3.1",
+    "eslint": "10.10.0",
+    "eslint-plugin-react-hooks": "7.1.1",
+    "jscpd": "4.3.0",
+    "knip": "6.36.0",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.70.0"
+  }
+}
