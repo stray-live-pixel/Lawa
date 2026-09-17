@@ -4,7 +4,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronsRight,
-  PlayFill,
+  TriangleRightFill,
   PauseFill,
 } from '@gravity-ui/icons';
 import { Choice, ErrorNotice } from './ui';
@@ -212,7 +212,10 @@ export function TeamPlayer({ player }: { player: TeamPlayerState }) {
           onClick={player.toggle}
           disabled={!player.frames.length}
         >
-          <Icon data={player.playing ? PauseFill : PlayFill} size={16} />
+          <Icon
+            data={player.playing ? PauseFill : TriangleRightFill}
+            size={16}
+          />
         </Button>
         <Button
           view="outlined"
@@ -222,6 +225,15 @@ export function TeamPlayer({ player }: { player: TeamPlayerState }) {
           disabled={!player.frames.length}
         >
           <Icon data={ChevronRight} size={16} />
+        </Button>
+        <Button
+          size="s"
+          view="outlined"
+          aria-label="К текущему"
+          title="К текущему"
+          onClick={player.live}
+        >
+          <Icon data={ChevronsRight} size={16} />
         </Button>
         <Text variant="caption-2" className="team-player-time">
           {player.historical ? timeLabel(player.at) : 'Сейчас'}
@@ -235,15 +247,6 @@ export function TeamPlayer({ player }: { player: TeamPlayerState }) {
             content: `${value}×`,
           }))}
         />
-        <Button
-          size="s"
-          view="outlined"
-          aria-label="К текущему"
-          title="К текущему"
-          onClick={player.live}
-        >
-          <Icon data={ChevronsRight} size={16} />
-        </Button>
       </div>
       <Slider<number>
         aria-label="Момент истории"
