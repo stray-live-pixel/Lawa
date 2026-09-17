@@ -237,15 +237,24 @@
 }
 .team-mention-option.g-button {
   display: flex;
+  align-items: center;
   width: 100%;
   height: 40px;
 }
+/* Выбор клавиатурой использует ту же заливку, что и hover Gravity UI. */
+.team-mention-option[aria-selected='true'] {
+  --g-button-background-color: var(--g-color-base-simple-hover);
+}
 .team-mention-option .g-button__text {
+  display: flex;
+  align-items: center;
   width: 100%;
 }
 .team-mention-content {
   display: flex;
   align-items: center;
+  width: 100%;
+  line-height: var(--g-text-body-1-line-height);
   gap: 8px;
 }
 .team-mention-id {

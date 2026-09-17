@@ -78,7 +78,7 @@ export function TeamMessageInput({
               aria-selected={index === selected}
               aria-label={`${name} @${id}`}
               tabIndex={-1}
-              view={index === selected ? 'flat-secondary' : 'flat'}
+              view="flat"
               className="team-mention-option"
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => choose(id)}
