@@ -204,7 +204,7 @@
   transform-origin: 42% 19%;
 }
 .team-compose {
-  padding: 8px 14px 2px;
+  padding: 6px 14px 2px;
   border-top: 1px solid var(--g-color-line-generic);
   flex: none;
 }
