@@ -294,3 +294,49 @@ it.each([false, true])(
     ).toBeTruthy();
   },
 );
+
+// Немодальное окно не захватывает фон. Геометрия меняется без пересоздания
+// чата: черновик и его фокус сохраняются при движении и изменении размера.
+it('показывает плавающее окно с доступным фоном, перемещением и ресайзом', async () => {
+  window.history.replaceState(null, '', '/office?run=order');
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (url: string) =>
+      response(
+        url === '/api/teams'
+          ? { teams: [], cwd: '/project', problems: [] }
+          : chat,
+      ),
+    ),
+  );
+  const outside = vi.fn();
+  const close = vi.fn();
+  render(
+    <AppTheme>
+      <button onClick={outside}>Плеер</button>
+      <TeamPhone onClose={close} />
+    </AppTheme>,
+  );
+  const field = await screen.findByRole('textbox', {
+    name: 'Сообщение команде',
+  });
+  fireEvent.change(field, { target: { value: 'Черновик' } });
+  const phone = screen.getByRole('dialog', { name: 'Чат команды' });
+  expect(phone).not.toHaveAttribute('aria-modal', 'true');
+  const left = parseFloat(phone.style.left);
+  const width = parseFloat(phone.style.width);
+  fireEvent.keyDown(
+    screen.getByRole('button', { name: 'Переместить телефон' }),
+    { key: 'ArrowLeft' },
+  );
+  expect(parseFloat(phone.style.left)).toBe(left - 10);
+  fireEvent.keyDown(
+    screen.getByRole('button', { name: 'Изменить размер телефона' }),
+    { key: 'ArrowRight', shiftKey: true },
+  );
+  expect(parseFloat(phone.style.width)).toBe(width + 40);
+  expect(field).toHaveValue('Черновик');
+  fireEvent.click(screen.getByRole('button', { name: 'Плеер' }));
+  expect(outside).toHaveBeenCalledOnce();
+  expect(close).not.toHaveBeenCalled();
+});

@@ -1,12 +1,9 @@
-/* Физическая рамка — реквизит сцены. Экран, поля и сообщения используют
-   общую тему Lawa; Modal UIKit отвечает за focus trap и закрытие по Escape. */
-.team-phone-modal {
-  background: transparent;
-  border-radius: 48px;
-}
+/* Плавающий телефон оставляет офис интерактивным; фон и контролы берутся
+   из общей темы. Геометрией и доступностью управления занимается usePhoneWindow. */
 .team-phone {
-  width: min(390px, calc(100vw - 40px));
-  height: min(760px, calc(100dvh - 40px));
+  position: fixed;
+  z-index: 100;
+  outline: none;
   box-sizing: border-box;
   display: flex;
   flex-direction: column;
@@ -455,4 +452,26 @@
 }
 .team-message-bubble a {
   overflow-wrap: anywhere;
+}
+
+/* В шапке перетаскиваются свободная область и заголовок, но не кнопки. */
+.team-phone-header {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+.team-phone-header:active {
+  cursor: grabbing;
+}
+.team-phone-title:focus-visible {
+  outline: 2px solid var(--g-color-line-focus);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.team-phone-resize.g-button {
+  position: absolute;
+  right: 12px;
+  bottom: 6px;
+  cursor: nwse-resize;
+  touch-action: none;
 }

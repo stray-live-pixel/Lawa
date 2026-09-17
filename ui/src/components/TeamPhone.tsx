@@ -5,7 +5,6 @@ import {
   Label,
   Button,
   Icon,
-  Modal,
   Text,
   TextArea,
   TextInput,
@@ -16,6 +15,7 @@ import {
   CircleCheckFill,
   ChevronsRight,
   ChevronDown,
+  ArrowDownRight,
 } from '@gravity-ui/icons';
 import { usePoll } from '../hooks/api';
 import { ErrorNotice } from './ui';
@@ -25,6 +25,7 @@ import developerImage from '../assets/office/developer.png';
 import './team-phone.css';
 import { TeamMarkdown } from './TeamMarkdown';
 import { TeamMessageInput } from './TeamMessageInput';
+import { usePhoneWindow } from './usePhoneWindow';
 import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 
 export interface TeamMessage {
@@ -86,6 +87,7 @@ export function TeamPhone({
   onRunChange?: (run: string) => void;
   player?: TeamPlayerState;
 }) {
+  const phoneWindow = usePhoneWindow();
   const [run, setRun] = useState(
     () => new URLSearchParams(window.location.search).get('run') || '',
   );
@@ -102,62 +104,87 @@ export function TeamPhone({
     window.history.replaceState(null, '', url);
   }
   return (
-    <Modal
-      open
-      onClose={onClose}
+    <section
+      ref={phoneWindow.panel}
+      className="team-phone"
+      role="dialog"
       aria-label="Чат команды"
-      contentClassName="team-phone-modal"
+      tabIndex={-1}
+      style={phoneWindow.bounds}
+      onKeyDown={(event) => {
+        if (event.key === 'Escape' && !event.defaultPrevented) {
+          event.stopPropagation();
+          onClose();
+        }
+      }}
     >
-      <section className="team-phone" aria-label="Смартфон команды">
-        <div className="team-phone-hardware" aria-hidden="true">
-          <span />
-        </div>
-        <header className="team-phone-header">
-          <Text variant="subheader-2" className="team-phone-title">
-            Чат команды
-          </Text>
-          {historical && (
-            <>
-              <Label theme="info" size="xs">
-                История
-              </Label>
-              <Button
-                view="flat"
-                size="s"
-                aria-label="К текущему чату"
-                title="К текущему чату"
-                onClick={player?.live}
-              >
-                <Icon data={ChevronsRight} size={16} />
-              </Button>
-            </>
-          )}
-          <Button view="flat" aria-label="Закрыть чат" onClick={onClose}>
-            <Icon data={Xmark} />
-          </Button>
-        </header>
-        <ErrorNotice error={error || teams?.problems.join('\n')} />
-        {creating ? (
-          <NewTeam cwd={teams?.cwd || ''} onCreated={selectRun} />
-        ) : (
+      <div className="team-phone-hardware" aria-hidden="true">
+        <span />
+      </div>
+      <header className="team-phone-header" {...phoneWindow.move}>
+        <Text
+          variant="subheader-2"
+          className="team-phone-title"
+          role="button"
+          tabIndex={0}
+          aria-label="Переместить телефон"
+          title="Перетащите окно или используйте стрелки"
+          onKeyDown={(event) => phoneWindow.keyboard('move', event)}
+        >
+          Чат команды
+        </Text>
+        {historical && (
           <>
-            <TeamThread
-              key={run}
-              run={run}
-              historyView={
-                player?.historical && player.view?.runId === run
-                  ? player.view
-                  : undefined
-              }
-              onLive={player?.live}
-            />
+            <Label theme="info" size="xs">
+              История
+            </Label>
+            <Button
+              view="flat"
+              size="s"
+              aria-label="К текущему чату"
+              title="К текущему чату"
+              onClick={player?.live}
+            >
+              <Icon data={ChevronsRight} size={16} />
+            </Button>
           </>
         )}
-        <div className="team-phone-home" aria-hidden="true">
-          <span />
-        </div>
-      </section>
-    </Modal>
+        <Button view="flat" aria-label="Закрыть чат" onClick={onClose}>
+          <Icon data={Xmark} />
+        </Button>
+      </header>
+      <ErrorNotice error={error || teams?.problems.join('\n')} />
+      {creating ? (
+        <NewTeam cwd={teams?.cwd || ''} onCreated={selectRun} />
+      ) : (
+        <>
+          <TeamThread
+            key={run}
+            run={run}
+            historyView={
+              player?.historical && player.view?.runId === run
+                ? player.view
+                : undefined
+            }
+            onLive={player?.live}
+          />
+        </>
+      )}
+      <div className="team-phone-home" aria-hidden="true">
+        <span />
+      </div>
+      <Button
+        className="team-phone-resize"
+        view="flat"
+        size="s"
+        aria-label="Изменить размер телефона"
+        title="Потяните за угол или используйте стрелки"
+        {...phoneWindow.resize}
+        onKeyDown={(event) => phoneWindow.keyboard('resize', event)}
+      >
+        <Icon data={ArrowDownRight} size={16} />
+      </Button>
+    </section>
   );
 }
 

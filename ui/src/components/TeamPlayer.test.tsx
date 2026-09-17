@@ -161,9 +161,7 @@ it('перематывает сцену и телефон вместе без з
   ).toBeVisible();
   expect(screen.getByText('Создаёт платформы')).toBeVisible();
   await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));
-  const phone = within(
-    screen.getByRole('region', { name: 'Смартфон команды' }),
-  );
+  const phone = within(screen.getByRole('dialog', { name: 'Чат команды' }));
   expect(phone.queryByText('Игра готова')).not.toBeInTheDocument();
   await waitFor(() =>
     expect(
@@ -180,9 +178,7 @@ it('перематывает сцену и телефон вместе без з
   ).not.toBeInTheDocument();
   await user.click(screen.getByRole('button', { name: 'К текущему' }));
   await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));
-  const livePhone = within(
-    screen.getByRole('region', { name: 'Смартфон команды' }),
-  );
+  const livePhone = within(screen.getByRole('dialog', { name: 'Чат команды' }));
   expect(await livePhone.findByText('Игра готова')).toBeVisible();
   expect(
     livePhone.getByRole('textbox', { name: 'Сообщение команде' }),
@@ -245,9 +241,7 @@ it('показывает достигнутую цель в офисе и pin, �
   await screen.findByText('Цель достигнута');
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));
-  const phone = within(
-    screen.getByRole('region', { name: 'Смартфон команды' }),
-  );
+  const phone = within(screen.getByRole('dialog', { name: 'Чат команды' }));
   await waitFor(() =>
     expect(phone.getByText('Цель команды').closest('section')).toHaveClass(
       'team-pin-achieved',
@@ -302,9 +296,7 @@ it('отправляет из истории в текущий чат и воз�
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: 'Предыдущее событие' }));
   await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));
-  const phone = within(
-    screen.getByRole('region', { name: 'Смартфон команды' }),
-  );
+  const phone = within(screen.getByRole('dialog', { name: 'Чат команды' }));
   await waitFor(() => expect(phone.getByText('История')).toBeVisible());
   expect(phone.getByRole('button', { name: 'К текущему чату' })).toBeVisible();
   fireEvent.change(phone.getByRole('textbox', { name: 'Сообщение команде' }), {
