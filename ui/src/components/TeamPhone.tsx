@@ -119,6 +119,9 @@ export function TeamPhone({
       }}
     >
       <header className="team-phone-header" {...phoneWindow.move}>
+        <span className="team-phone-camera-island" aria-hidden="true">
+          <span className="team-phone-camera-lens" />
+        </span>
         <Text
           variant="subheader-2"
           className="team-phone-title"
@@ -411,11 +414,13 @@ function TeamThread({
                 el.scrollHeight - el.scrollTop - el.clientHeight < 48;
             }}
           >
-            <TeamGoal
-              key={chat.goal}
-              goal={chat.goal}
-              achieved={Boolean(chat.room?.achievedAt)}
-            />
+            <div className="team-pin-layer">
+              <TeamGoal
+                key={chat.goal}
+                goal={chat.goal}
+                achieved={Boolean(chat.room?.achievedAt)}
+              />
+            </div>
             {!messages.length && (
               <Text className="team-empty" color="secondary">
                 Здесь — самое важное для всей команды.

@@ -16,18 +16,46 @@
     0 24px 80px var(--g-color-sfx-shadow-heavy),
     inset 0 0 0 1px var(--g-color-line-generic);
 }
-/* Шапка занимает бывшую декоративную верхнюю область телефона целиком.
-   Вся её свободная площадь служит ручкой, кнопки сохраняют обычные действия. */
+/* Камера и управление объединены в компактную шапку. Вся её свободная
+   площадь, включая остров камеры, служит ручкой перетаскивания. */
 .team-phone-header {
+  position: relative;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 18px 8px;
+  padding: 24px 18px 8px;
   gap: 6px;
   flex: none;
   cursor: grab;
   touch-action: none;
   user-select: none;
+}
+.team-phone-camera-island {
+  position: absolute;
+  top: 4px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 60px;
+  height: 14px;
+  border-radius: 10px;
+  background: #171719;
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 8px;
+  box-sizing: border-box;
+}
+.team-phone-camera-lens {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle at 35% 30%,
+    #6c8195 0 12%,
+    #253544 25%,
+    #0b1017 65%
+  );
+  box-shadow: 0 0 0 1px #30323a;
 }
 .team-phone .g-alert {
   margin: 4px 12px;
@@ -48,13 +76,19 @@
   flex: 1;
   white-space: nowrap;
 }
-/* Карточка принадлежит области переписки. Sticky сохраняет её поверх
-   прокручиваемых сообщений, не увеличивая высоту шапки телефона. */
-.team-pin {
+/* Непрозрачная полоса перекрывает всю ширину переписки, включая область
+   за скруглениями карточки: аватары и текст не выглядывают при прокрутке. */
+.team-pin-layer {
   position: sticky;
   top: 0;
   z-index: 1;
   flex: none;
+  margin: 0 -12px -6px;
+  padding: 0 12px 6px;
+  background: var(--g-color-base-background);
+}
+.team-pin {
+  position: relative;
   border: 1px solid var(--g-color-line-generic);
   border-radius: 12px;
   background: var(--g-color-base-background);
