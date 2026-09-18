@@ -1,4 +1,4 @@
-import { useState, type CSSProperties } from 'react';
+import { useMemo, useState, type CSSProperties } from 'react';
 import { Button, Icon, Text } from '@gravity-ui/uikit';
 import { Smartphone, CircleCheckFill } from '@gravity-ui/icons';
 import {
@@ -13,6 +13,8 @@ import { TeamPlayer, useTeamPlayer } from '../components/TeamPlayer';
 import room from '../assets/office/room-large-selected.png';
 import { useEmployeeSprite } from '../components/appearances';
 import { CharacterGallery } from '../components/CharacterGallery';
+import { OfficeMap } from '../components/OfficeMap';
+import { officeLayout, officeSpriteFrame } from './officeLayout';
 import './office.css';
 
 const states = {
@@ -46,6 +48,7 @@ export default function Office() {
   const actorIds = [
     ...new Set(['boss', ...invited, ...Object.keys(actors)]),
   ].filter((id) => Object.hasOwn(actors, id));
+  const seats = useMemo(() => officeLayout(actorIds.length), [actorIds.length]);
   return (
     <main
       className={`office ${chat?.room ? 'office-with-player' : ''}`}
@@ -64,9 +67,15 @@ export default function Office() {
         <ThemePicker />
       </div>
       <ErrorNotice error={error} />
-      <div className="office-space">
+      <OfficeMap>
         <div
-          className={`office-scene ${actorIds.length > 2 ? 'office-scene-many' : ''}`}
+          style={
+            {
+              '--office-sprite-width': officeSpriteFrame.width,
+              '--office-sprite-left': officeSpriteFrame.left,
+            } as CSSProperties
+          }
+          className={`office-scene ${actorIds.length > 12 ? 'office-scene-dense' : ''}`}
         >
           <img
             className="office-room-image"
@@ -78,6 +87,7 @@ export default function Office() {
           {actorIds.map((id, index) => (
             <Employee
               key={id}
+              compact={actorIds.length > 12}
               id={id}
               name={
                 chat?.members[id]?.name ||
@@ -89,13 +99,18 @@ export default function Office() {
               }
               avatar={chat?.members[id]?.avatar}
               actor={chat?.room?.actors[id]}
-              placement={employeePlacement(index, actorIds.length)}
+              placement={{
+                left: `${seats[index].left}%`,
+                top: `${seats[index].top}%`,
+                width: `${seats[index].width}%`,
+                zIndex: Math.round(seats[index].top * 100),
+              }}
               achieved={id === 'boss' && Boolean(chat?.room?.achievedAt)}
               onClick={() => setPhoneOpen(true)}
             />
           ))}
         </div>
-      </div>
+      </OfficeMap>
       <TeamPlayer player={player} />
       {phoneOpen && (
         <TeamPhone
@@ -111,6 +126,7 @@ export default function Office() {
 // Облачко показывает короткое публичное действие, а не внутренние рассуждения.
 // Текст статуса доступен скринридеру: цвет точки не единственный сигнал.
 function Employee({
+  compact,
   id,
   name,
   avatar,
@@ -119,6 +135,7 @@ function Employee({
   achieved = false,
   onClick,
 }: {
+  compact: boolean;
   id: string;
   name: string;
   avatar?: string;
@@ -136,7 +153,14 @@ function Employee({
       : '';
   return (
     <div className={`office-employee office-${id}`} style={placement}>
-      <img src={sprite} width="1254" height="1254" alt={`${name} за MacBook`} />
+      <div className="office-sprite">
+        <img
+          src={sprite}
+          width="1254"
+          height="1254"
+          alt={`${name} за MacBook`}
+        />
+      </div>
       <div className="office-speech" role="status" aria-atomic="true">
         {achieved ? (
           <Text
@@ -155,10 +179,10 @@ function Employee({
       </div>
       <div className="office-nameplate">
         <Button
-          view="raised"
+          view={compact ? 'flat' : 'raised'}
           size="s"
           aria-label={`${name}: ${label}`}
-          title={`${label}. Открыть общий чат`}
+          title={`${name}: ${label}. Открыть общий чат`}
           onClick={onClick}
         >
           <span className="office-nameplate-content">
@@ -166,33 +190,10 @@ function Employee({
               className={`office-status-dot office-status-dot_${status === 'blocked' || status === 'unknown' ? 'idle' : status}`}
               aria-hidden="true"
             />
-            {name}
+            <span className="office-nameplate-text">{name}</span>
           </span>
         </Button>
       </div>
     </div>
   );
-}
-
-// До двух сотрудников сохраняем привычную крупную композицию. Большие команды
-// располагаются на изометрической сетке свободного пола: порядок приглашений
-// стабилен внутри снимка, z-index следует глубине, мебель задней стены свободна.
-export function employeePlacement(index: number, count: number): CSSProperties {
-  if (count === 1) return { left: '50%', top: '46%', width: '16%' };
-  if (count === 2)
-    return {
-      left: index === 0 ? '38%' : '65%',
-      top: index === 0 ? '44%' : '53%',
-      width: '16%',
-    };
-  const columns = count <= 6 ? 3 : count <= 12 ? 4 : 5;
-  const rows = Math.ceil(count / columns);
-  const u = (index % columns) / Math.max(1, columns - 1);
-  const v = Math.floor(index / columns) / Math.max(1, rows - 1);
-  return {
-    left: `${48 + 32 * u - 30 * v}%`,
-    top: `${33 + 20 * u + 22 * v}%`,
-    width: count <= 6 ? '13%' : count <= 12 ? '10%' : '8%',
-    zIndex: Math.round((u + v) * 100),
-  };
 }
