@@ -11,8 +11,8 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
-// TestDefinitionExample проверяет реальный цикл без runstore: старт, оба возврата,
-// terminal outcomes, лимиты и раскрытый вложенный шаблон остаются в снимке.
+// TestDefinitionExample проверяет реальный цикл без runstore: порядок проверок,
+// возвраты, исходы, лимиты и раскрытый шаблон остаются в снимке.
 func TestDefinitionExample(t *testing.T) {
 	path := filepath.Join("..", "..", "examples", "development-cycle.json")
 	raw, err := os.ReadFile(path)
@@ -30,7 +30,7 @@ func TestDefinitionExample(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &graph); err != nil {
 		t.Fatal(err)
 	}
-	if !graph.Definition || graph.Version != 2 || graph.ID != "" || len(graph.Executions) != 0 || len(graph.Nodes) != 3 || len(graph.Edges) != 4 {
+	if !graph.Definition || graph.Version != 2 || graph.ID != "" || len(graph.Executions) != 0 || len(graph.Nodes) != 4 || len(graph.Edges) != 6 {
 		t.Fatalf("неверный граф: %+v", graph)
 	}
 	for i, node := range graph.Nodes {
@@ -41,10 +41,10 @@ func TestDefinitionExample(t *testing.T) {
 			t.Fatal(node.Routes)
 		}
 	}
-	if !strings.Contains(strings.Join(graph.Nodes[2].Routes, "\n"), "passed → finish:succeeded") {
-		t.Fatal(graph.Nodes[2].Routes)
+	if !strings.Contains(strings.Join(graph.Nodes[3].Routes, "\n"), "passed → finish:succeeded") {
+		t.Fatal(graph.Nodes[3].Routes)
 	}
-	for _, edge := range []graphEdge{{"reviewer", "developer", "changes_requested"}, {"qa", "developer", "failed"}} {
+	for _, edge := range []graphEdge{{"reviewer", "qa_frontend", "approve"}, {"qa_frontend", "qa", "passed"}, {"reviewer", "developer", "changes_requested"}, {"qa_frontend", "developer", "changes_requested"}, {"qa", "developer", "failed"}} {
 		found := false
 		for _, actual := range graph.Edges {
 			if actual == edge {
@@ -52,7 +52,7 @@ func TestDefinitionExample(t *testing.T) {
 			}
 		}
 		if !found {
-			t.Fatalf("нет возврата %+v", edge)
+			t.Fatalf("нет перехода %+v", edge)
 		}
 	}
 	response = httptest.NewRecorder()
@@ -61,7 +61,7 @@ func TestDefinitionExample(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &source); err != nil {
 		t.Fatal(err)
 	}
-	if len(source.Documents) != 3 || !strings.Contains(source.Documents[0].Content, "После каждого посещения") || !json.Valid(source.JSON) {
+	if len(source.Documents) != 4 || !strings.Contains(source.Documents[0].Content, "После каждого посещения") || !json.Valid(source.JSON) {
 		t.Fatal("исходники не раскрыты")
 	}
 }
