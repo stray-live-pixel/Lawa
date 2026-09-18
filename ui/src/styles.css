@@ -982,3 +982,49 @@ pre {
 .visit-pagination > .g-button {
   flex-shrink: 0;
 }
+
+/* Определение читают до запуска: инструкция получает половину экрана,
+   служебные сведения раскрываются отдельно и не оттесняют основной текст. */
+.definition-graph .cube-details-content {
+  padding: 16px 24px;
+}
+.definition-graph .markdown-document {
+  margin-top: 20px;
+}
+.definition-graph .result-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.definition-graph .result-toolbar h3 {
+  flex: 1;
+  margin: 0;
+  min-width: 140px;
+}
+.definition-graph .markdown {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.definition-graph .markdown pre,
+.definition-graph .markdown table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.definition-graph textarea {
+  min-height: 360px;
+}
+.definition-disclosure {
+  border-top: 1px solid var(--line);
+  padding: 14px 0;
+}
+.definition-disclosure summary {
+  cursor: pointer;
+  font-weight: 500;
+}
+@media (max-width: 760px) {
+  .definition-graph .cube-details-content {
+    padding: 16px;
+  }
+}

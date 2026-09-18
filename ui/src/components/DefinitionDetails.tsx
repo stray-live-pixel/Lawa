@@ -15,8 +15,7 @@ export function DefinitionDetails({
 }) {
   const details = selected?.Definition;
   const character = details?.Character;
-  const inherited =
-    'Из конфигурации Codex при запуске; значение пока неизвестно';
+  const inherited = 'Из Codex · пока неизвестно';
   return (
     <>
       <div className="graph-heading">
@@ -35,11 +34,6 @@ export function DefinitionDetails({
             content: `${node.Definition?.Character?.name || node.ID}${node.Definition?.Start ? ' · Старт' : ''}`,
           }))}
         />
-        <h2>{character?.name || selected?.ID}</h2>
-        <p>
-          {selected?.ID}
-          {details?.Start ? ' · Стартовый шаг' : ''}
-        </p>
         <h3>Переходы и остановки</h3>
         <ul>
           {(selected?.Routes || []).map((route) => (
@@ -51,64 +45,88 @@ export function DefinitionDetails({
           .map((edge) => (
             <p key={edge.From}>Зависит от: {edge.From}</p>
           ))}
-        {graph.Version === 1 && (
-          <p className="muted">
-            Шаг ждёт успешного завершения зависимостей. Workflow завершается
-            после выполнения всех шагов; ошибка шага останавливает зависимые
-            шаги.
-          </p>
-        )}
-        {graph.Version === 2 && (
-          <p className="muted">
-            after ждёт завершения источника; именованный переход выбирает агент.
-            finish завершает workflow, maxVisits ограничивает посещения, onLimit
-            задаёт итог при превышении лимита. Без finish workflow завершается
-            после исчерпания работы.
-          </p>
-        )}
-        <h3>Настройки запуска</h3>
-        <dl className="visit-facts">
-          <dt>Модель</dt>
-          <dd>
-            {details?.Model
-              ? `${details.Model} · ${details.ModelSource === 'step.model' ? 'задана в шаге' : 'унаследована из workflow.model'}`
-              : inherited}
-          </dd>
-          <dt>Усилие рассуждения</dt>
-          <dd>
-            {details?.Effort ? `${details.Effort} · задано в шаге` : inherited}
-          </dd>
-          <dt>Скорость</dt>
-          <dd>
-            {details?.Speed ? `${details.Speed} · задана в шаге` : inherited}
-          </dd>
-        </dl>
-        {character ? (
-          <>
-            <h3>Личность · {details?.CharacterID}</h3>
-            <h4>Предыстория</h4>
-            <MarkdownDocument
-              text={character.history}
-              label="Предыстория личности"
-            />
-            <h4>Принципы и границы</h4>
-            <MarkdownDocument
-              text={character.instructions}
-              label="Инструкции личности"
-            />
-          </>
-        ) : (
-          <p className="muted">Личность не задана.</p>
-        )}
-        <h3>Инструкция шага</h3>
+        <details className="definition-disclosure">
+          <summary>Правила переходов</summary>
+          {graph.Version === 1 && (
+            <p className="muted">
+              Шаг ждёт успешного завершения зависимостей. Workflow завершается
+              после выполнения всех шагов; ошибка шага останавливает зависимые
+              шаги.
+            </p>
+          )}
+          {graph.Version === 2 && (
+            <p className="muted">
+              after ждёт завершения источника; именованный переход выбирает
+              агент. finish завершает workflow, maxVisits ограничивает
+              посещения, onLimit задаёт итог при превышении лимита. Без finish
+              workflow завершается после исчерпания работы.
+            </p>
+          )}
+        </details>
         <MarkdownDocument
+          key={selected?.ID}
           text={selected?.Prompt || ''}
-          label="Эффективная инструкция шага"
+          label="Инструкция шага"
+          reader
         />
-        <p className="muted">
-          Markdown и шаблоны раскрыты. Задача, память и сведения о посещении
-          добавляются только при исполнении.
-        </p>
+        <details className="definition-disclosure">
+          <summary>Настройки и сведения о шаге</summary>
+          <p>
+            Шаг: {selected?.ID}
+            {details?.Start ? ' · Стартовый' : ''}
+          </p>
+          <p className="muted">
+            Незаданные настройки берутся из конфигурации Codex при запуске; их
+            значения пока неизвестны.
+          </p>
+
+          <p className="muted">
+            В инструкции раскрыты Markdown-файлы и шаблоны. Задача, память и
+            сведения о посещении добавляются при исполнении.
+          </p>
+          <dl className="visit-facts">
+            <dt>Модель</dt>
+            <dd>
+              {details?.Model
+                ? `${details.Model} · ${details.ModelSource === 'step.model' ? 'задана в шаге' : 'унаследована из workflow.model'}`
+                : inherited}
+            </dd>
+            <dt>Усилие рассуждения</dt>
+            <dd>
+              {details?.Effort
+                ? `${details.Effort} · задано в шаге`
+                : inherited}
+            </dd>
+            <dt>Скорость</dt>
+            <dd>
+              {details?.Speed ? `${details.Speed} · задана в шаге` : inherited}
+            </dd>
+          </dl>
+        </details>
+        <details className="definition-disclosure">
+          <summary>
+            Личность{character ? ` · ${character.name}` : ' не задана'}
+          </summary>
+          {character ? (
+            <>
+              <h3>Личность · {details?.CharacterID}</h3>
+              <h4>Предыстория</h4>
+              <MarkdownDocument
+                text={character.history}
+                label="Предыстория личности"
+                reader
+              />
+              <h4>Принципы и границы</h4>
+              <MarkdownDocument
+                text={character.instructions}
+                label="Инструкции личности"
+                reader
+              />
+            </>
+          ) : (
+            <p className="muted">Личность не задана.</p>
+          )}
+        </details>
       </div>
     </>
   );

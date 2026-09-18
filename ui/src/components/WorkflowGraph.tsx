@@ -2,7 +2,7 @@ import { DefinitionDetails } from './DefinitionDetails';
 import { StatusIcon } from './StatusIcon';
 import { CopyIdentity } from './CopyIdentity';
 import { ResizableRunList } from './ResizableRunList';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { displayVisit } from './displayVisit';
 import {
   BaseEdge,
@@ -11,6 +11,10 @@ import {
   Background,
   Panel,
   useReactFlow,
+  useStore,
+  useNodesInitialized,
+  getViewportForBounds,
+  type Rect,
   Handle,
   MarkerType,
   Position,
@@ -21,6 +25,7 @@ import {
 } from '@xyflow/react';
 import { Card, Icon, Tooltip, useThemeValue } from '@gravity-ui/uikit';
 import { Plus, Minus, ArrowsExpand, FileText } from '@gravity-ui/icons';
+import { visibleSelection } from './graphViewport';
 import { graphLayout, type RoutedEdge } from './graphLayout';
 import '@xyflow/react/dist/style.css';
 import type { Graph, GraphEdge, GraphNode } from '../types';
@@ -100,19 +105,71 @@ function Cube({ data, selected }: NodeProps<CubeNode>) {
 const nodeTypes = { cube: Cube, workflowGroup: WorkflowGroup };
 
 // Контролы Gravity работают внутри провайдера React Flow, сохраняя pan/zoom API.
-function GraphControls() {
-  const { zoomIn, zoomOut, fitView } = useReactFlow();
+function GraphControls({
+  bounds,
+  selected,
+}: {
+  bounds: Rect;
+  selected?: string;
+}) {
+  const { zoomIn, zoomOut, getViewport, setViewport, getNode } = useReactFlow();
+  const width = useStore((state) => state.width);
+  const height = useStore((state) => state.height);
+  const initialized = useNodesInitialized();
+  const started = useRef(false);
+  // Только реальная смена размеров/выбора может поправить камеру. Polling,
+  // тема и ручное перемещение не запускают fit и не сбрасывают масштаб.
+  useEffect(() => {
+    if (!initialized || !width || !height) return;
+    const timer = window.setTimeout(() => {
+      if (!started.current) {
+        started.current = true;
+        void setViewport(
+          getViewportForBounds(bounds, width, height, 0.1, 1, 0.15),
+        );
+        return;
+      }
+      const node = selected ? getNode(selected) : undefined;
+      if (!node) return;
+      const viewport = getViewport();
+      const next = visibleSelection(viewport, node.position, width, height);
+      if (next) void setViewport(next);
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [
+    width,
+    height,
+    selected,
+    initialized,
+    bounds,
+    getNode,
+    getViewport,
+    setViewport,
+  ]);
   return (
     <Panel position="bottom-left" className="graph-controls">
-      <Button aria-label="Приблизить" onClick={() => void zoomIn()}>
+      <Button
+        aria-label="Приблизить"
+        title="Приблизить"
+        onClick={() => void zoomIn()}
+      >
         <Icon data={Plus} />
       </Button>
-      <Button aria-label="Отдалить" onClick={() => void zoomOut()}>
+      <Button
+        aria-label="Отдалить"
+        title="Отдалить"
+        onClick={() => void zoomOut()}
+      >
         <Icon data={Minus} />
       </Button>
       <Button
         aria-label="Показать весь граф"
-        onClick={() => void fitView({ padding: 0.15, maxZoom: 1 })}
+        title="Показать весь граф"
+        onClick={() =>
+          void setViewport(
+            getViewportForBounds(bounds, width, height, 0.1, 1, 0.15),
+          )
+        }
       >
         <Icon data={ArrowsExpand} />
       </Button>
@@ -208,6 +265,29 @@ function GraphView({
       edges,
     );
   }, [topology]);
+  // Границы включают возвраты и подписи: стандартный fitView учитывает лишь узлы.
+  const bounds = useMemo(() => {
+    const boxes = [
+      ...[...geometry.positions.values()].map((p) => ({
+        ...p,
+        width: 220,
+        height: 80,
+      })),
+      ...geometry.groups,
+      ...geometry.edges.flatMap((edge) => [
+        ...edge.points.map((p) => ({ ...p, width: 1, height: 1 })),
+        { x: edge.label.x - 68, y: edge.label.y - 40, width: 136, height: 80 },
+      ]),
+    ];
+    const x = Math.min(0, ...boxes.map((box) => box.x));
+    const y = Math.min(0, ...boxes.map((box) => box.y));
+    return {
+      x,
+      y,
+      width: Math.max(1, ...boxes.map((box) => box.x + box.width)) - x,
+      height: Math.max(1, ...boxes.map((box) => box.y + box.height)) - y,
+    };
+  }, [geometry]);
   const nodes: CubeNode[] = (graph.Nodes || []).map((node) => {
     // Для выбранного кубика цвет, подпись и детали используют один visit.
     // Остальные узлы автоматически показывают актуальную реальную работу.
@@ -264,9 +344,12 @@ function GraphView({
     onSelectionChange?.(step, visit);
   };
   return (
-    <section className="workflow-graph" aria-label="Граф workflow">
+    <section
+      className={`workflow-graph ${graph.Definition ? 'definition-graph' : ''}`}
+      aria-label="Граф workflow"
+    >
       <ErrorNotice error={error} />
-      <ResizableRunList side="right">
+      <ResizableRunList side="right" definition={!!graph.Definition}>
         <div className="graph-area">
           <ReactFlow
             nodes={[...groups, ...nodes]}
@@ -277,8 +360,6 @@ function GraphView({
             nodesConnectable={false}
             minZoom={0.1}
             maxZoom={2}
-            fitView
-            fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
             onNodeClick={(_, node) => {
               if (node.type === 'cube') select(node.id);
             }}
@@ -297,7 +378,7 @@ function GraphView({
             aria-label="Интерактивная схема workflow"
           >
             <Background gap={20} size={1} />
-            <GraphControls />
+            <GraphControls bounds={bounds} selected={selected?.ID} />
           </ReactFlow>
         </div>
         <aside className="cube-details" aria-label="Информация о кубике">

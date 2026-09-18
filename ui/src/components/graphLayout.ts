@@ -144,7 +144,8 @@ export function graphLayout(nodes: GraphNode[], edges: GraphEdge[]) {
     if (back) {
       const source = positions.get(e.from)!;
       const target = positions.get(e.to)!;
-      const x = right + 55 + lane++ * 55;
+      // Подпись шириной 135px не заходит на соседнюю полосу или узел.
+      const x = right + 95 + lane++ * 155;
       return {
         ...e,
         feedback: true,

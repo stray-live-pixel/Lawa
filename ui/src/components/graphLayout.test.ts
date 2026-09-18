@@ -66,3 +66,21 @@ describe('структурная раскладка', () => {
     expect(graphLayout([], []).positions.size).toBe(0);
   });
 });
+
+// Несколько возвратов раньше имели полосы уже собственных подписей.
+it('разводит подписи возвратов на отдельных полосах', () => {
+  const result = graphLayout(nodes, [
+    { From: 'start', To: 'a', Label: 'ready' },
+    { From: 'a', To: 'b', Label: 'ready' },
+    { From: 'b', To: 'join', Label: 'ready' },
+    { From: 'a', To: 'start', Label: 'retry' },
+    { From: 'b', To: 'start', Label: 'retry' },
+    { From: 'join', To: 'start', Label: 'retry' },
+  ]);
+  const labels = result.edges
+    .filter((edge) => edge.feedback)
+    .map((edge) => edge.label);
+  expect(labels).toHaveLength(3);
+  for (let i = 1; i < labels.length; i++)
+    expect(Math.abs(labels[i].x - labels[i - 1].x)).toBeGreaterThan(135);
+});

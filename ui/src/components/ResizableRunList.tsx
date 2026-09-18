@@ -2,23 +2,31 @@ import { useState, type CSSProperties, type ReactNode } from 'react';
 
 // Обе панели хранят долю своего контейнера. Для правой панели движение
 // влево увеличивает ширину; настройки независимы и не читают старые пиксели.
+// Определению нужно больше места для инструкции, чем панели результата запуска.
 export function ResizableRunList({
   children,
   side = 'left',
+  definition = false,
 }: {
   children: ReactNode;
   side?: 'left' | 'right';
+  definition?: boolean;
 }) {
   const right = side === 'right';
-  const storageKey = right
-    ? 'lawa-cube-details-width-percent'
-    : 'lawa-run-list-width-percent';
+  const defaultWidth = definition ? 52 : 25;
+  const storageKey = definition
+    ? 'lawa-definition-details-width-percent'
+    : right
+      ? 'lawa-cube-details-width-percent'
+      : 'lawa-run-list-width-percent';
   const [width, setWidth] = useState(() => {
     try {
       const saved = Number(localStorage.getItem(storageKey));
-      return Number.isFinite(saved) && saved >= 2 && saved <= 98 ? saved : 25;
+      return Number.isFinite(saved) && saved >= 2 && saved <= 98
+        ? saved
+        : defaultWidth;
     } catch {
-      return 25;
+      return defaultWidth;
     }
   });
   const update = (value: number) => {
@@ -49,7 +57,7 @@ export function ResizableRunList({
         aria-valuetext={`${width}%`}
         tabIndex={0}
         title="Потяните для изменения ширины. Двойной клик — сброс."
-        onDoubleClick={() => update(25)}
+        onDoubleClick={() => update(defaultWidth)}
         onKeyDown={(event) => {
           if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
             event.preventDefault();
