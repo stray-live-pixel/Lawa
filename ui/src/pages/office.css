@@ -22,6 +22,7 @@
 }
 .office-scene {
   position: relative;
+  container-type: inline-size;
   width: min(100%, 1100px, calc((100dvh - 80px) * 1.5));
 }
 .office-room-image {
@@ -33,9 +34,6 @@
    с мебелью на фоне; столы остаются на открытом полу на любом размере экрана. */
 .office-employee {
   position: absolute;
-  left: 50%;
-  top: 46%;
-  width: 16%;
   transform: translateX(-50%);
 }
 .office-employee > img {
@@ -45,17 +43,19 @@
 }
 .office-nameplate {
   position: absolute;
-  left: 60%;
-  top: 20%;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  max-width: 100%;
 }
 .office-nameplate-content {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: min(6px, 0.6cqw);
 }
 .office-status-dot {
-  width: 7px;
-  height: 7px;
+  width: min(7px, 0.8cqw);
+  height: min(7px, 0.8cqw);
   flex: none;
   border-radius: 50%;
 }
@@ -96,20 +96,54 @@
   border-top-color: var(--g-color-base-float);
 }
 
-/* В большой команде длинные имена не закрывают соседние рабочие места. */
-.office-scene-many .office-nameplate {
-  left: 50%;
-  top: 85%;
-  transform: translateX(-50%);
-  max-width: 130%;
-}
-.office-scene-many .office-nameplate-content {
+/* Подпись ограничена шириной места, включая внутренний текст Gravity Button.
+   Полное имя раскрывается при наведении/фокусе; aria-label всегда полон. */
+.office-nameplate .g-button {
   max-width: 100%;
+  --g-button-height: min(24px, 2.2cqw);
+  --g-button-padding: min(8px, 0.6cqw);
+  --g-button-font-size: min(13px, 1.3cqw);
+}
+.office-nameplate .g-button__text,
+.office-nameplate-content {
+  display: flex;
+  min-width: 0;
+  max-width: 100%;
+}
+.office-nameplate-text {
   overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-.office-scene-many .office-status-dot {
-  flex-shrink: 0;
+.office-employee:hover,
+.office-employee:focus-within {
+  /* Выбранный сотрудник и его реплика поверх всех рядов. */
+  z-index: 10000 !important;
+}
+.office-employee:hover .office-nameplate,
+.office-employee:focus-within .office-nameplate {
+  max-width: none;
+}
+.office-employee:hover .office-nameplate-text,
+.office-employee:focus-within .office-nameplate-text {
+  overflow: visible;
+}
+/* На плотной карте остаются статусы. Имена и реплики раскрываются у выбранного
+   сотрудника, иначе десятки текстовых облаков закрыли бы всю команду. */
+.office-scene-dense .office-nameplate-text {
+  display: none;
+}
+.office-scene-dense .office-speech {
+  opacity: 0;
+  pointer-events: none;
+}
+.office-scene-dense .office-employee:hover .office-nameplate-text,
+.office-scene-dense .office-employee:focus-within .office-nameplate-text {
+  display: inline;
+}
+.office-scene-dense .office-employee:hover .office-speech,
+.office-scene-dense .office-employee:focus-within .office-speech {
+  opacity: 1;
 }
 
 .office-with-player .office-scene {
@@ -124,4 +158,32 @@
 .office-speech-achieved svg {
   flex: none;
   color: var(--g-color-text-positive);
+}
+
+/* В плотной раскладке кликабелен весь спрайт, а не крошечная точка. Прозрачная
+   кнопка не закрывает стол; подложка имени появляется только при выборе. */
+.office-scene-dense .office-nameplate {
+  width: 100%;
+  height: 100%;
+}
+.office-scene-dense .office-nameplate .g-button {
+  width: 100%;
+  height: 100%;
+  --g-button-padding: 0;
+}
+.office-scene-dense .office-nameplate .g-button__text {
+  justify-content: center;
+  overflow: visible;
+}
+.office-scene-dense .office-nameplate-content {
+  position: absolute;
+  bottom: 0;
+  max-width: none;
+}
+.office-scene-dense .office-employee:hover .office-nameplate-content,
+.office-scene-dense .office-employee:focus-within .office-nameplate-content {
+  background: var(--g-color-base-float);
+  border-radius: var(--g-border-radius-s);
+  padding: 2px 6px;
+  box-shadow: 0 2px 8px var(--g-color-sfx-shadow);
 }
