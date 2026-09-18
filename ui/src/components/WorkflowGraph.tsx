@@ -1,3 +1,4 @@
+import { DefinitionDetails } from './DefinitionDetails';
 import { StatusIcon } from './StatusIcon';
 import { CopyIdentity } from './CopyIdentity';
 import { ResizableRunList } from './ResizableRunList';
@@ -124,18 +125,20 @@ export function WorkflowGraph({
   stepID,
   visitID,
   preview,
+  definition,
   onSelectionChange,
 }: {
   runID: string;
   stepID?: string;
   visitID?: string;
   preview?: Graph;
+  definition?: Graph;
   onSelectionChange?: (step: string, visit?: string) => void;
 }) {
   const { data, error } = usePoll<Graph>(
-    preview ? null : `/api/graph/${encodeURIComponent(runID)}`,
+    preview || definition ? null : `/api/graph/${encodeURIComponent(runID)}`,
   );
-  const graph = preview || data;
+  const graph = definition || preview || data;
   if (!graph)
     return (
       <div className="loading">
@@ -181,8 +184,10 @@ function GraphView({
     source: `${initialStep}/${initialVisit}`,
   });
   const source = `${initialStep}/${initialVisit}`;
+  // В определении URL полностью управляет выбором: back на пустой step
+  // не должен восстанавливать устаревший локальный выбор до первого перехода.
   const current =
-    choice.source === source
+    !graph.Definition && choice.source === source
       ? choice
       : { step: initialStep || '', visit: initialVisit || '', source };
   const selected =
@@ -218,8 +223,12 @@ function GraphView({
       position: geometry.positions.get(node.ID)!,
       selected: selected?.ID === node.ID,
       data: {
-        label: node.ID,
-        state: shown?.State || 'not_started',
+        label: node.Definition?.Character?.name || node.ID,
+        state: graph.Definition
+          ? node.Definition?.Start
+            ? 'Старт'
+            : 'Шаг'
+          : shown?.State || 'not_started',
         visit: shown ? shown.Visit || 1 : undefined,
       },
     };
@@ -292,155 +301,168 @@ function GraphView({
           </ReactFlow>
         </div>
         <aside className="cube-details" aria-label="Информация о кубике">
-          <div className="graph-heading">
-            <StatusIcon state={graph.State} entity="workflow" />
-            <CopyIdentity
-              text={graph.ID}
-              label="Скопировать runId"
-              success="runId скопирован"
-              infoIcon
+          {graph.Definition ? (
+            <DefinitionDetails
+              graph={graph}
+              selected={selected}
+              onSelect={select}
             />
-            <div className="graph-identity">
-              <h1>
+          ) : (
+            <>
+              <div className="graph-heading">
+                <StatusIcon state={graph.State} entity="workflow" />
                 <CopyIdentity
-                  text={graph.Name}
-                  label="Скопировать название workflow"
-                  success="Название workflow скопировано"
-                />
-              </h1>
-            </div>
-          </div>
-
-          <div className="cube-details-content">
-            {!preview && <ImageExport runID={graph.ID} />}
-            <div className="cube-title-row">
-              <StatusIcon
-                state={execution?.State || 'not_started'}
-                entity="cube"
-              />
-              {selected && (
-                <CopyIdentity
-                  text={selected.ID}
-                  label="Скопировать Cube ID"
-                  success="Cube ID скопирован"
-                  tooltipPrefix="Cube ID: "
+                  text={graph.ID}
+                  label="Скопировать runId"
+                  success="runId скопирован"
                   infoIcon
                 />
-              )}
-              <Tooltip
-                content={
-                  execution?.TraceURL ? 'Сообщения и действия' : 'Логов нет'
-                }
-              >
-                <span className="run-id-trigger">
-                  <Button
-                    className="run-id-info"
-                    view="flat"
-                    size="s"
-                    aria-label="Сообщения и действия"
-                    disabled={!execution?.TraceURL}
-                    onClick={() => setMessagesOpen(true)}
-                  >
-                    <Icon data={FileText} size={18} />
-                  </Button>
-                </span>
-              </Tooltip>
-              <h2>
-                {selected ? (
-                  <CopyIdentity
-                    text={selected.ID}
-                    label="Скопировать название кубика"
-                    success="Название кубика скопировано"
+                <div className="graph-identity">
+                  <h1>
+                    <CopyIdentity
+                      text={graph.Name}
+                      label="Скопировать название workflow"
+                      success="Название workflow скопировано"
+                    />
+                  </h1>
+                </div>
+              </div>
+
+              <div className="cube-details-content">
+                {!preview && <ImageExport runID={graph.ID} />}
+                <div className="cube-title-row">
+                  <StatusIcon
+                    state={execution?.State || 'not_started'}
+                    entity="cube"
                   />
-                ) : (
-                  'Нет кубиков'
-                )}
-              </h2>
-              {executions.length > 1 && (
-                <nav className="visit-pagination" aria-label="Итерации кубика">
-                  {[...executions]
-                    .sort((a, b) => (a.Visit || 1) - (b.Visit || 1))
-                    .map((entry) => (
+                  {selected && (
+                    <CopyIdentity
+                      text={selected.ID}
+                      label="Скопировать Cube ID"
+                      success="Cube ID скопирован"
+                      tooltipPrefix="Cube ID: "
+                      infoIcon
+                    />
+                  )}
+                  <Tooltip
+                    content={
+                      execution?.TraceURL ? 'Сообщения и действия' : 'Логов нет'
+                    }
+                  >
+                    <span className="run-id-trigger">
                       <Button
-                        key={entry.Key}
+                        className="run-id-info"
                         view="flat"
                         size="s"
-                        selected={entry.Key === execution?.Key}
-                        aria-current={
-                          entry.Key === execution?.Key ? 'page' : undefined
-                        }
-                        aria-label={`Посещение ${entry.Visit || 1}`}
-                        title={`${statusNames[entry.State] || entry.State}${entry.Trigger ? ` · ${entry.Trigger}` : ''}`}
-                        onClick={() => select(selected!.ID, entry.Key)}
+                        aria-label="Сообщения и действия"
+                        disabled={!execution?.TraceURL}
+                        onClick={() => setMessagesOpen(true)}
                       >
-                        #{entry.Visit || 1}
+                        <Icon data={FileText} size={18} />
                       </Button>
-                    ))}
-                </nav>
-              )}
-            </div>
-            {execution?.Result && (
-              <MarkdownDocument
-                text={execution.Result}
-                label="Результат работы"
-                copyLabel="Скопировать результат"
-                compact
-              />
-            )}
-            {(execution?.Note || !execution) && (
-              <p className="note">
-                {execution?.Note || 'Кубик ещё не запускался.'}
-              </p>
-            )}
-            {/* Факты выбранного посещения не смешиваем со статическими маршрутами:
+                    </span>
+                  </Tooltip>
+                  <h2>
+                    {selected ? (
+                      <CopyIdentity
+                        text={selected.ID}
+                        label="Скопировать название кубика"
+                        success="Название кубика скопировано"
+                      />
+                    ) : (
+                      'Нет кубиков'
+                    )}
+                  </h2>
+                  {executions.length > 1 && (
+                    <nav
+                      className="visit-pagination"
+                      aria-label="Итерации кубика"
+                    >
+                      {[...executions]
+                        .sort((a, b) => (a.Visit || 1) - (b.Visit || 1))
+                        .map((entry) => (
+                          <Button
+                            key={entry.Key}
+                            view="flat"
+                            size="s"
+                            selected={entry.Key === execution?.Key}
+                            aria-current={
+                              entry.Key === execution?.Key ? 'page' : undefined
+                            }
+                            aria-label={`Посещение ${entry.Visit || 1}`}
+                            title={`${statusNames[entry.State] || entry.State}${entry.Trigger ? ` · ${entry.Trigger}` : ''}`}
+                            onClick={() => select(selected!.ID, entry.Key)}
+                          >
+                            #{entry.Visit || 1}
+                          </Button>
+                        ))}
+                    </nav>
+                  )}
+                </div>
+                {execution?.Result && (
+                  <MarkdownDocument
+                    text={execution.Result}
+                    label="Результат работы"
+                    copyLabel="Скопировать результат"
+                    compact
+                  />
+                )}
+                {(execution?.Note || !execution) && (
+                  <p className="note">
+                    {execution?.Note || 'Кубик ещё не запускался.'}
+                  </p>
+                )}
+                {/* Факты выбранного посещения не смешиваем со статическими маршрутами:
               возможные маршруты доступны на диаграмме и во вкладке «Описание». */}
-            {(execution?.Decision ||
-              execution?.Trigger ||
-              graph.StopReason) && (
-              <dl className="visit-facts">
-                {execution?.Decision && (
-                  <>
-                    <dt>Решение посещения</dt>
-                    <dd>{execution.Decision}</dd>
-                  </>
+                {(execution?.Decision ||
+                  execution?.Trigger ||
+                  graph.StopReason) && (
+                  <dl className="visit-facts">
+                    {execution?.Decision && (
+                      <>
+                        <dt>Решение посещения</dt>
+                        <dd>{execution.Decision}</dd>
+                      </>
+                    )}
+                    {execution?.Trigger && (
+                      <>
+                        <dt>Причина перехода</dt>
+                        <dd>{execution.Trigger}</dd>
+                      </>
+                    )}
+                    {graph.StopReason && (
+                      <>
+                        <dt>Причина остановки workflow</dt>
+                        <dd>{graph.StopReason}</dd>
+                      </>
+                    )}
+                  </dl>
                 )}
-                {execution?.Trigger && (
-                  <>
-                    <dt>Причина перехода</dt>
-                    <dd>{execution.Trigger}</dd>
-                  </>
+                {execution?.MemoryURL && (
+                  <div className="actions">
+                    <Button onClick={() => setMemoryOpen(true)}>
+                      Память кубика
+                    </Button>
+                  </div>
                 )}
-                {graph.StopReason && (
-                  <>
-                    <dt>Причина остановки workflow</dt>
-                    <dd>{graph.StopReason}</dd>
-                  </>
-                )}
-              </dl>
-            )}
-            {execution?.MemoryURL && (
-              <div className="actions">
-                <Button onClick={() => setMemoryOpen(true)}>
-                  Память кубика
-                </Button>
               </div>
-            )}
-          </div>
-          <MemoryDialog
-            key={`memory/${execution?.Key}`}
-            url={execution?.MemoryURL}
-            open={memoryOpen}
-            onOpenChange={setMemoryOpen}
-          />
-          <Dialog
-            open={messagesOpen}
-            onOpenChange={setMessagesOpen}
-            title={`Сообщения и действия · ${selected?.ID || ''}`}
-          >
-            {messagesOpen && (
-              <Trace key={execution?.Key} url={execution?.TraceURL} />
-            )}
-          </Dialog>
+              <MemoryDialog
+                key={`memory/${execution?.Key}`}
+                url={execution?.MemoryURL}
+                open={memoryOpen}
+                onOpenChange={setMemoryOpen}
+              />
+              <Dialog
+                open={messagesOpen}
+                onOpenChange={setMessagesOpen}
+                title={`Сообщения и действия · ${selected?.ID || ''}`}
+              >
+                {messagesOpen && (
+                  <Trace key={execution?.Key} url={execution?.TraceURL} />
+                )}
+              </Dialog>
+            </>
+          )}
         </aside>
       </ResizableRunList>
     </section>

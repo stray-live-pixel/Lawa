@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // sourceView отдаётся только по запросу открытой вкладки. Prompt-файлы уже
@@ -27,8 +28,15 @@ func (h handler) workflowSource(w http.ResponseWriter, r *http.Request) {
 	view := sourceView{JSON: snapshot.WorkflowJSON,
 		Note: "Сохранённый JSON запуска. Markdown-файлы и шаблоны раскрыты в prompt; исходные имена файлов отдельно не сохранены."}
 	view.Documents = append(view.Documents, sourceDocument{Name: "task.md", Content: snapshot.Task})
-	for _, step := range snapshot.Workflow.Steps {
-		view.Documents = append(view.Documents, sourceDocument{Name: "Инструкция · " + step.ID, Content: step.Prompt})
-	}
+	view.Documents = append(view.Documents, instructionDocuments(snapshot.Workflow)...)
 	writeJSON(w, view)
+}
+
+// instructionDocuments одинаково показывает раскрытые prompt в run и определении.
+func instructionDocuments(definition workflow.Workflow) []sourceDocument {
+	documents := make([]sourceDocument, 0, len(definition.Steps))
+	for _, step := range definition.Steps {
+		documents = append(documents, sourceDocument{Name: "Инструкция · " + step.ID, Content: step.Prompt})
+	}
+	return documents
 }

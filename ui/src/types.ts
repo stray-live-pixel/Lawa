@@ -108,7 +108,18 @@ export interface Dashboard {
     Visible: boolean;
   };
 }
+// Definition содержит только данные до исполнения; отсутствует у графа run.
+export interface StepDefinition {
+  Start: boolean;
+  CharacterID: string;
+  Character: { name: string; history: string; instructions: string } | null;
+  Model: string;
+  ModelSource: string;
+  Effort: string;
+  Speed: string;
+}
 export interface GraphNode {
+  Definition?: StepDefinition;
   ID: string;
   Prompt: string;
   Routes: string[] | null;
@@ -133,6 +144,8 @@ export interface Execution {
   Attempt: number;
 }
 export interface Graph {
+  Definition?: boolean;
+  Version?: number;
   ID: string;
   Name: string;
   State: string;

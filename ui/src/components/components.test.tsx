@@ -11,7 +11,7 @@ import {
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '@gravity-ui/uikit';
 import type { ReactNode } from 'react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useNavigate } from 'react-router-dom';
 import type { Dashboard, Graph, Run } from '../types';
 import { usePoll } from '../hooks/api';
 import { MarkdownDocument } from './MarkdownDocument';
@@ -683,4 +683,126 @@ it('показывает тост вместо строки при копиро�
   expect(writeText).toHaveBeenCalledWith('Полный результат');
   expect(screen.queryByText('Скопировано.')).not.toBeInTheDocument();
   add.mockRestore();
+});
+
+// Определение использует тот же граф, но не выдумывает результаты и runtime API.
+// Выбор узла, исходники и back возвращают пользователя к нужной инструкции.
+it('opens workflow definition and navigates steps without run APIs', async () => {
+  const definition: Graph = {
+    ID: '',
+    Name: 'До запуска',
+    State: '',
+    StopReason: '',
+    Prompt: '',
+    Definition: true,
+    Version: 2,
+    Nodes: [
+      {
+        ID: 'developer',
+        Prompt: 'Раскрытая **инструкция программиста**',
+        Routes: ['maxVisits=5 · onLimit=failed'],
+        Definition: {
+          Start: true,
+          CharacterID: 'developer',
+          Character: {
+            name: 'Программист',
+            history: 'Опыт разработки',
+            instructions: 'Пиши понятно',
+          },
+          Model: 'shared',
+          ModelSource: 'workflow.model',
+          Effort: '',
+          Speed: '',
+        },
+      },
+      {
+        ID: 'qa',
+        Prompt: 'Проверь пользовательские сценарии',
+        Routes: ['passed → finish:succeeded'],
+        Definition: {
+          Start: false,
+          CharacterID: '',
+          Character: null,
+          Model: 'own',
+          ModelSource: 'step.model',
+          Effort: 'high',
+          Speed: 'fast',
+        },
+      },
+    ],
+    Edges: [{ From: 'developer', To: 'qa', Label: 'ready' }],
+    Executions: null,
+  };
+  const fetch = vi.fn((url: string) => {
+    if (url === '/api/definition') return response(definition);
+    if (url === '/api/definition/source')
+      return response({
+        JSON: { id: 'До запуска' },
+        Documents: [
+          { Name: 'Инструкция · developer', Content: 'Раскрытая инструкция' },
+        ],
+        Note: 'Снимок определения',
+      });
+    throw new Error(`Неожиданный API: ${url}`);
+  });
+  vi.stubGlobal('fetch', fetch);
+  // Навигация имитирует браузерные back/forward, сохраняя реальные URL страницы.
+  function Navigation() {
+    const navigate = useNavigate();
+    return (
+      <>
+        <button onClick={() => navigate(-1)}>Назад по истории</button>
+        <button onClick={() => navigate(1)}>Вперёд по истории</button>
+      </>
+    );
+  }
+  render(
+    <MemoryRouter initialEntries={['/view']}>
+      <Navigation />
+      <App />
+    </MemoryRouter>,
+  );
+  expect(
+    await screen.findByText('инструкция программиста'),
+  ).toBeInTheDocument();
+  expect(screen.getByText('Опыт разработки')).toBeInTheDocument();
+  expect(
+    screen.getByText('shared · унаследована из workflow.model'),
+  ).toBeInTheDocument();
+  expect(
+    screen.queryByText('Кубик ещё не запускался.'),
+  ).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Скопировать runId')).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'qa' }));
+  expect(
+    await screen.findByText('Проверь пользовательские сценарии'),
+  ).toBeInTheDocument();
+  expect(screen.getByText('passed → finish:succeeded')).toBeInTheDocument();
+  expect(screen.getByText('own · задана в шаге')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Назад по истории' }));
+  expect(
+    await screen.findByText('инструкция программиста'),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Вперёд по истории' }));
+  expect(
+    await screen.findByText('Проверь пользовательские сценарии'),
+  ).toBeInTheDocument();
+  await choose('Шаг workflow', 'Программист · Старт');
+  expect(
+    await screen.findByText('инструкция программиста'),
+  ).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('tab', { name: 'Исходники' }));
+  expect(await screen.findByLabelText('JSON workflow')).toHaveValue(
+    JSON.stringify({ id: 'До запуска' }, null, 2),
+  );
+  await choose('Файл workflow', 'Инструкция · developer');
+  expect(await screen.findByText('Раскрытая инструкция')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('tab', { name: 'Схема и инструкции' }));
+  expect(
+    await screen.findByText('инструкция программиста'),
+  ).toBeInTheDocument();
+  expect(fetch.mock.calls.map((call) => call[0]).sort()).toEqual([
+    '/api/definition',
+    '/api/definition/source',
+  ]);
 });

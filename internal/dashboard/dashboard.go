@@ -789,8 +789,8 @@ func formatDecisionDestination(decision runstore.DecisionRecord) string {
 	return strings.Join(decision.To, ", ")
 }
 
-// formatRouteDestination нужен только полнотекстовому индексу неизменяемого
-// workflow и одинаково представляет ветвление к шагам и terminal outcome.
+// formatRouteDestination одинаково описывает переходы в поисковом индексе,
+// графе запуска и просмотрщике определения workflow.
 func formatRouteDestination(route workflow.Route) string {
 	if route.Finish != nil {
 		return "finish:" + string(*route.Finish)

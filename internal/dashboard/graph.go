@@ -6,11 +6,14 @@ import (
 	"strings"
 
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // graphView разделяет неизменяемую схему workflow и историю её исполнений.
 // Поэтому ещё не посещённый кубик виден, а цикл не затирает предыдущий результат.
 type graphView struct {
+	Definition                          bool `json:",omitempty"`
+	Version                             int  `json:",omitempty"`
 	ID, Name, State, StopReason, Prompt string
 	Nodes                               []graphNode
 	Edges                               []graphEdge
@@ -18,6 +21,7 @@ type graphView struct {
 }
 
 type graphNode struct {
+	Definition *stepDefinition `json:",omitempty"`
 	ID, Prompt string
 	Routes     []string
 }
@@ -57,25 +61,11 @@ func (h handler) loadGraph(runID string) (graphView, error) {
 	}
 	node := makeRunNode(h.root, snapshot)
 	view := graphView{ID: runID, Name: node.Name, State: node.State, StopReason: node.StopReason, Prompt: continuationPrompt(root, snapshot, "", "")}
-	for _, step := range snapshot.Workflow.Steps {
-		item := graphNode{ID: step.ID, Prompt: continuationPrompt(root, snapshot, step.ID, "")}
-		for _, source := range append(append([]string{}, step.DependsOn...), step.After...) {
-			// Направление зависимости уже показывает стрелка. Подписи нужны только
-			// именованным решениям, в том числе если сам маршрут назван «после».
-			view.Edges = append(view.Edges, graphEdge{From: source, To: step.ID})
-		}
-		for _, key := range sortedRouteKeys(step.Decisions) {
-			route := step.Decisions[key]
-			item.Routes = append(item.Routes, key+" → "+formatRouteDestination(route))
-			for _, target := range route.To {
-				view.Edges = append(view.Edges, graphEdge{From: step.ID, To: target, Label: key})
-			}
-		}
-		if limit := formatVisitLimit(step); limit != "" {
-			item.Routes = append(item.Routes, limit)
-		}
-		view.Nodes = append(view.Nodes, item)
+	view.Nodes, view.Edges = definitionTopology(snapshot.Workflow)
+	for i := range view.Nodes {
+		view.Nodes[i].Prompt = continuationPrompt(root, snapshot, view.Nodes[i].ID, "")
 	}
+
 	events, eventErr := runstore.ReadEvents(h.root, runID)
 	// Один проход по журналу вместо полного сканирования для каждого кубика.
 	// Префиксы не дают legacy stepID столкнуться с visitID другой версии.
@@ -159,4 +149,29 @@ func nonemptyStrings(values ...string) []string {
 		}
 	}
 	return result
+}
+
+// definitionTopology — общий источник рёбер и маршрутов для определения и run.
+// История исполнения добавляется отдельно и не меняет структуру workflow.
+func definitionTopology(definition workflow.Workflow) (nodes []graphNode, edges []graphEdge) {
+	for _, step := range definition.Steps {
+		item := graphNode{ID: step.ID}
+		for _, source := range append(append([]string{}, step.DependsOn...), step.After...) {
+			// Направление зависимости уже показывает стрелка. Подписи нужны только
+			// именованным решениям, в том числе если сам маршрут назван «после».
+			edges = append(edges, graphEdge{From: source, To: step.ID})
+		}
+		for _, key := range sortedRouteKeys(step.Decisions) {
+			route := step.Decisions[key]
+			item.Routes = append(item.Routes, key+" → "+formatRouteDestination(route))
+			for _, target := range route.To {
+				edges = append(edges, graphEdge{From: step.ID, To: target, Label: key})
+			}
+		}
+		if limit := formatVisitLimit(step); limit != "" {
+			item.Routes = append(item.Routes, limit)
+		}
+		nodes = append(nodes, item)
+	}
+	return nodes, edges
 }
