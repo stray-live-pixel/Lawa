@@ -13,6 +13,7 @@ import { TeamPlayer, useTeamPlayer } from '../components/TeamPlayer';
 import room from '../assets/office/room-large-selected.png';
 import { useEmployeeSprite } from '../components/appearances';
 import { CharacterGallery } from '../components/CharacterGallery';
+import { OfficeMap } from '../components/OfficeMap';
 import { officeLayout, officeSpriteFrame } from './officeLayout';
 import './office.css';
 
@@ -66,7 +67,7 @@ export default function Office() {
         <ThemePicker />
       </div>
       <ErrorNotice error={error} />
-      <div className="office-space">
+      <OfficeMap>
         <div
           style={
             {
@@ -109,7 +110,7 @@ export default function Office() {
             />
           ))}
         </div>
-      </div>
+      </OfficeMap>
       <TeamPlayer player={player} />
       {phoneOpen && (
         <TeamPhone

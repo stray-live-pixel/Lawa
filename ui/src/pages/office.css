@@ -13,17 +13,9 @@
   min-height: var(--panel-toolbar-height);
   padding: 6px var(--panel-inset);
 }
-.office-space {
-  display: grid;
-  place-items: center;
-  flex: 1;
-  min-height: 0;
-  padding: var(--panel-inset);
-}
 .office-scene {
   position: relative;
-  container-type: inline-size;
-  width: min(100%, 1100px, calc((100dvh - 80px) * 1.5));
+  width: 100%;
 }
 .office-room-image {
   display: block;
@@ -55,17 +47,19 @@
   position: absolute;
   left: 50%;
   bottom: 0;
-  transform: translateX(-50%);
-  max-width: 100%;
+  transform: translateX(-50%) scale(calc(1 / var(--office-camera-scale, 1)));
+  transform-origin: center bottom;
+  width: max-content;
+  max-width: calc(100% * var(--office-camera-scale, 1));
 }
 .office-nameplate-content {
   display: inline-flex;
   align-items: center;
-  gap: min(6px, 0.6cqw);
+  gap: 6px;
 }
 .office-status-dot {
-  width: min(7px, 0.8cqw);
-  height: min(7px, 0.8cqw);
+  width: 7px;
+  height: 7px;
   flex: none;
   border-radius: 50%;
 }
@@ -84,7 +78,8 @@
   position: absolute;
   left: 42%;
   bottom: 99%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) scale(calc(1 / var(--office-camera-scale, 1)));
+  transform-origin: center bottom;
   width: max-content;
   max-width: min(200px, 55vw);
 }
@@ -106,13 +101,14 @@
   border-top-color: var(--g-color-base-float);
 }
 
-/* Подпись ограничена шириной места, включая внутренний текст Gravity Button.
+/* Подпись и облако компенсируют масштаб камеры, чтобы не закрывать детали.
+   Подпись ограничена шириной места, включая внутренний текст Gravity Button.
    Полное имя раскрывается при наведении/фокусе; aria-label всегда полон. */
 .office-nameplate .g-button {
   max-width: 100%;
-  --g-button-height: min(24px, 2.2cqw);
-  --g-button-padding: min(8px, 0.6cqw);
-  --g-button-font-size: min(13px, 1.3cqw);
+  --g-button-height: 24px;
+  --g-button-padding: 8px;
+  --g-button-font-size: 13px;
 }
 .office-nameplate .g-button__text,
 .office-nameplate-content {
@@ -156,10 +152,6 @@
   opacity: 1;
 }
 
-.office-with-player .office-scene {
-  width: min(100%, 1100px, calc((100dvh - 220px) * 1.5));
-}
-
 .office-speech-achieved {
   display: flex;
   align-items: center;
@@ -173,6 +165,7 @@
 /* В плотной раскладке кликабелен весь спрайт, а не крошечная точка. Прозрачная
    кнопка не закрывает стол; подложка имени появляется только при выборе. */
 .office-scene-dense .office-nameplate {
+  transform: translateX(-50%);
   width: 100%;
   height: 100%;
 }
@@ -186,6 +179,8 @@
   overflow: visible;
 }
 .office-scene-dense .office-nameplate-content {
+  transform: scale(calc(1 / var(--office-camera-scale, 1)));
+  transform-origin: center bottom;
   position: absolute;
   bottom: 0;
   max-width: none;
