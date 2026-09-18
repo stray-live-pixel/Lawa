@@ -5,7 +5,7 @@ import type { Graph } from '../types';
 import { Choice, ErrorNotice, Button } from './ui';
 import { MarkdownDocument } from './MarkdownDocument';
 
-interface Source {
+export interface Source {
   JSON: unknown;
   Documents: { Name: string; Content: string }[];
   Note: string;
@@ -15,12 +15,14 @@ interface Source {
 export function WorkflowSource({
   runID,
   preview,
+  snapshot,
 }: {
   runID: string;
   preview?: Graph;
+  snapshot?: Source;
 }) {
   const { data, error } = usePoll<Source>(
-    preview ? null : `/api/source/${encodeURIComponent(runID)}`,
+    preview || snapshot ? null : `/api/source/${encodeURIComponent(runID)}`,
     0,
   );
   const [selected, setSelected] = useState('json');
@@ -40,7 +42,7 @@ export function WorkflowSource({
         })),
         Note: 'Демонстрационная схема, не JSON для запуска. Реальные исходники доступны у сохранённого запуска.',
       }
-    : data;
+    : snapshot || data;
   if (!source)
     return (
       <div className="loading">

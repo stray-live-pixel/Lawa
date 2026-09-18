@@ -49,6 +49,8 @@ const WorkflowGraph = lazy(() =>
   })),
 );
 
+// Просмотр определения загружается только на отдельной странице.
+const WorkflowDefinition = lazy(() => import('./pages/WorkflowDefinition'));
 // Офис доступен только по прямому адресу; его картинки не загружаются dashboard.
 const Office = lazy(() => import('./pages/Office'));
 
@@ -536,6 +538,14 @@ export default function App() {
   return (
     <Routes>
       <Route path="/" element={<DashboardPage />} />
+      <Route
+        path="/view"
+        element={
+          <Suspense fallback={<Loader />}>
+            <WorkflowDefinition />
+          </Suspense>
+        }
+      />
       <Route path="/preview" element={<DashboardPage />} />
       <Route
         path="/office"

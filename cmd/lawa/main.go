@@ -39,6 +39,8 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
       Создать run, запустить готовые кубики и наблюдать их до результата.
   lawa resume <run-id>
       Сверить thread и продолжить interrupted-кубики / cancelled-посещения v2.
+  lawa view <workflow.json> [--listen <host:port>] [--no-open]
+      Открыть определение без запуска; loopback, свободный порт. Ctrl+C закрывает просмотр.
   lawa graph <run-id> [--theme dark|light] [--output <файл.png>] [--root <путь>]
       Сохранить PNG графа; по умолчанию тёмная тема, нужен PlantUML.
   lawa status <run-id>
@@ -108,7 +110,7 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
                                требует --yes.
   --codex-home <путь>          Корень скиллов; по умолчанию $CODEX_HOME или ~/.codex.
 
-graph, status, logs, validate, skill, version, update и help не запускают агентов.
+view, graph, status, logs, validate, skill, version, update и help не запускают агентов.
 serve исполняет сохранённые команды; новая цель создаётся только через CLI.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
@@ -297,6 +299,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return orderCommand(ctx, args[1:], out, stderr, deps, args[0] == "reply")
 	case "resume":
 		return resumeCommand(ctx, args[1:], out, stderr, deps)
+	case "view":
+		return viewCommand(ctx, args[1:], out, stderr, openViewBrowser)
 	case "graph":
 		return graphCommand(ctx, args[1:], out, deps)
 	case "status":
