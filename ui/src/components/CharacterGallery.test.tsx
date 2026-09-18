@@ -1,18 +1,25 @@
-import { cleanup, render, screen, waitFor } from '@testing-library/react';
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { afterEach, expect, it } from 'vitest';
+import { afterEach, expect, it, vi } from 'vitest';
 import { AppTheme } from './Theme';
 import { CharacterGallery } from './CharacterGallery';
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   localStorage.clear();
 });
 
 // Справочник должен работать без заказа и копировать именно ID внешности,
 // не рабочий @id агента и не локализованное имя. Просмотр не меняет предпочтения.
 it('находит персонажа по ID и копирует его без изменения внешности', async () => {
-  const user = userEvent.setup();
+  vi.useFakeTimers();
   const key = 'lawa-office-appearance-v1:order';
   const preferences = JSON.stringify({ developer: 'cat-ginger' });
   localStorage.setItem(key, preferences);
@@ -21,12 +28,20 @@ it('находит персонажа по ID и копирует его без 
       <CharacterGallery />
     </AppTheme>,
   );
-  await user.click(screen.getByRole('button', { name: 'Галерея персонажей' }));
+  const trigger = screen.getByRole('button', { name: 'Галерея персонажей' });
+  trigger.focus();
+  fireEvent.click(trigger);
   expect(screen.getAllByRole('listitem')).toHaveLength(42);
   const search = screen.getByRole('textbox', { name: 'Поиск персонажей' });
-  // Окончание анимации запускает фокусировку Modal. Проверяем её адресата,
-  // а затем ввод: наличие карточек ещё не означает готовность клавиатурного фокуса.
-  await waitFor(() => expect(search).toHaveFocus());
+  // Modal запускает анимацию в кадре, затем по таймеру включает focus manager,
+  // который переносит фокус в следующем кадре. Управляем временем, чтобы нагрузка
+  // CI не исчерпывала таймаут ожидания. Сам фокус устанавливает настоящий UIKit.
+  await act(() => vi.advanceTimersToNextFrame());
+  await act(() => vi.runOnlyPendingTimersAsync());
+  await act(() => vi.advanceTimersToNextFrame());
+  expect(search).toHaveFocus();
+  vi.useRealTimers();
+  const user = userEvent.setup();
   await user.type(search, 'deer-reindeer');
   expect(search).toHaveValue('deer-reindeer');
   expect(search).toHaveFocus();
