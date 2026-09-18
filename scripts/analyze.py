@@ -189,6 +189,20 @@ def analyze(report, selected):
              ROOT / "ui", json_parser(metrics.npm_security), timeout=180)
 
 
+def metric_groups(report):
+    """Единые разделы для Markdown и терминала; новые группы не теряются."""
+    groups = {name: {} for name in ("GO", "UI", "NPM", "Общее")}
+    for key, rule in report["policy"]["metrics"].items():
+        groups.setdefault(rule.get("group", "Общее"), {})[key] = rule
+    return {name: rules for name, rules in groups.items() if rules}
+
+
+def group_status(report, rules):
+    """Отсутствующая метрика даёт ERROR только своему разделу."""
+    measured = {key: report["metrics"][key] for key in rules if key in report["metrics"]}
+    return metrics.overall(measured, set(rules) - measured.keys())
+
+
 def markdown(report):
     """Формирует читаемый отчёт; исходные диагностики остаются рядом в raw/."""
     lines = [f"# Анализ Lawa: {report['status']}", "", f"Дата: {report['created_at']}",
@@ -197,22 +211,22 @@ def markdown(report):
              "ERROR — анализ неполный. Эти статусы не доказывают отсутствие дефектов.", ""]
     if report["errors"]:
         lines += ["## Ошибки анализа", ""] + [f"- {error}" for error in report["errors"]] + [""]
-    if "size" in report:
-        lines += ["## Размер приложения", "", "| Часть | Файлов | Строк кода |", "|---|---:|---:|"]
-        for part in CODE.PARTS:
+    for group, rules in metric_groups(report).items():
+        lines += [f"## {group} — {group_status(report, rules)}", ""]
+        part = {"GO": CODE.PARTS[0], "UI": CODE.PARTS[1]}.get(group)
+        if part and "size" in report:
             rows = [r for r in report["size"] if r["part"] == part]
-            lines.append(f"| {part} | {len(rows)} | {sum(r['code'] for r in rows)} |")
+            lines += [f"Собственный код: **{sum(r['code'] for r in rows)} строк**, файлов: **{len(rows)}**.", ""]
+        lines += ["| Метрика | Значение | Порог | Статус | Δ |", "|---|---:|---|---|---:|"]
+        for key, rule in rules.items():
+            item = report["metrics"].get(key, {})
+            threshold = "; ".join(f"{status} >{rule[field]}" for status, field in
+                                  (("WARN", "warn_above"), ("FAIL", "fail_above")) if field in rule)
+            delta = report.get("delta", {}).get(key)
+            delta_text = f"{delta:+g}" if delta is not None else "—"
+            lines.append(f"| {rule['label']} | {item.get('value', '—')} | {threshold} | "
+                         f"{item.get('status', 'ERROR')} | {delta_text} |")
         lines.append("")
-    lines += ["## Формальные метрики", "", "| Метрика | Значение | Порог | Статус | Δ |",
-              "|---|---:|---|---|---:|"]
-    for key, rule in report["policy"]["metrics"].items():
-        item = report["metrics"].get(key, {})
-        threshold = "; ".join(f"{status} >{rule[field]}" for status, field in
-                              (("WARN", "warn_above"), ("FAIL", "fail_above")) if field in rule)
-        delta = report.get("delta", {}).get(key)
-        delta_text = f"{delta:+g}" if delta is not None else "—"
-        lines.append(f"| {rule['label']} | {item.get('value', '—')} | {threshold} | "
-                     f"{item.get('status', 'ERROR')} | {delta_text} |")
     lines += ["", "## Диагностики", "", "Все команды, версии и распределения правил: [report.json](report.json).",
               "Исходные сообщения по файлам и строкам:", ""]
     for name, entry in report["tools"].items():
@@ -277,9 +291,11 @@ def main():
     write_json(directory / "report.json", report)
     (directory / "report.md").write_text(markdown(report), encoding="utf-8")
     print(f"\nРезультат: {report['status']}")
-    for key, rule in report["policy"]["metrics"].items():
-        item = report["metrics"].get(key, {})
-        print(f"  {item.get('status', 'ERROR'):<5} {rule['label']}: {item.get('value', 'нет результата')}")
+    for group, rules in metric_groups(report).items():
+        print(f"\n{group} — {group_status(report, rules)}")
+        for key, rule in rules.items():
+            item = report["metrics"].get(key, {})
+            print(f"  {item.get('status', 'ERROR'):<5} {rule['label']}: {item.get('value', 'нет результата')}")
     print(f"Отчёт: {directory / 'report.md'}")
     for error in report["errors"]:
         print("Ошибка: " + error, file=sys.stderr)

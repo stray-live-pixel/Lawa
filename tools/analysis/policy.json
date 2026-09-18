@@ -5,36 +5,66 @@
     "govulncheck": "golang.org/x/vuln/cmd/govulncheck@v1.8.0"
   },
   "metrics": {
-    "go_issues": { "label": "Go: замечания линтеров", "fail_above": 0 },
-    "go_complexity": {
-      "label": "Go: замечания к сложности функций",
-      "warn_above": 0
+    "go_issues": {
+      "label": "замечания линтеров",
+      "fail_above": 0,
+      "group": "GO"
     },
-    "ui_errors": { "label": "UI: ошибки ESLint", "fail_above": 0 },
-    "ui_warnings": { "label": "UI: предупреждения ESLint", "warn_above": 0 },
+    "go_complexity": {
+      "label": "замечания к сложности функций",
+      "warn_above": 0,
+      "group": "GO"
+    },
+    "ui_errors": {
+      "label": "ошибки ESLint",
+      "fail_above": 0,
+      "group": "UI"
+    },
+    "ui_warnings": {
+      "label": "предупреждения ESLint",
+      "warn_above": 0,
+      "group": "UI"
+    },
     "ui_complexity": {
-      "label": "UI: функции со сложностью >15",
-      "warn_above": 0
+      "label": "функции со сложностью >15",
+      "warn_above": 0,
+      "group": "UI"
     },
     "type_errors": {
-      "label": "UI: ошибки компилятора TypeScript",
-      "fail_above": 0
+      "label": "ошибки компилятора TypeScript",
+      "fail_above": 0,
+      "group": "UI"
     },
-    "unused": { "label": "UI: замечания Knip", "warn_above": 0 },
+    "unused": {
+      "label": "замечания Knip",
+      "warn_above": 0,
+      "group": "UI"
+    },
     "duplication": {
       "label": "Повторяющиеся строки, % по jscpd",
       "warn_above": 5,
-      "fail_above": 10
+      "fail_above": 10,
+      "group": "Общее"
     },
     "dependency_violations": {
-      "label": "UI: нарушения зависимостей",
-      "fail_above": 0
+      "label": "нарушения зависимостей",
+      "fail_above": 0,
+      "group": "UI"
     },
     "go_vulnerabilities": {
-      "label": "Go: вызываемые известные уязвимости",
-      "fail_above": 0
+      "label": "вызываемые известные уязвимости",
+      "fail_above": 0,
+      "group": "GO"
     },
-    "npm_high": { "label": "npm: high + critical уязвимости", "fail_above": 0 },
-    "npm_other": { "label": "npm: остальные уязвимости", "warn_above": 0 }
+    "npm_high": {
+      "label": "high + critical уязвимости",
+      "fail_above": 0,
+      "group": "NPM"
+    },
+    "npm_other": {
+      "label": "остальные уязвимости",
+      "warn_above": 0,
+      "group": "NPM"
+    }
   }
 }
