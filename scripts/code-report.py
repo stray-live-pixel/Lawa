@@ -78,9 +78,11 @@ def count_files(root, selected):
                          "или sudo apt install cloc (Debian/Ubuntu).")
     # Свои настройки cloc и дедупликация не должны менять смысл подсчёта:
     # каждый файл приложения учитывается, даже если его содержимое повторяется.
+    # Не используем --hide-rate: cloc 1.98 с ним оставляет лишнюю запятую в JSON.
+    # Поля скорости из header не участвуют в наших измерениях.
     result = subprocess.run(
         [cloc, "--config=" + os.devnull, "--list-file=-", "--json", "--by-file",
-         "--skip-uniqueness", "--hide-rate", "--timeout=0"],
+         "--skip-uniqueness", "--timeout=0"],
         input="\n".join(selected) + "\n", text=True, capture_output=True,
         cwd=root, check=True,
     )

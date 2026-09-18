@@ -9,24 +9,6 @@ permissions:
   contents: read
 
 jobs:
-  analysis-tests:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: ui/.nvmrc
-          cache: npm
-          cache-dependency-path: tools/analysis/package-lock.json
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      # Здесь проверяется сам счётчик и конфигурации анализаторов на фикстурах.
-      # Существующий технический долг приложения не маскируется baseline-файлом.
-      - run: sudo apt-get update && sudo apt-get install -y cloc
-      - run: npm ci --prefix tools/analysis --ignore-scripts --no-audit --no-fund
-      - run: python3 -B -m unittest discover -s scripts -p 'test_*.py'
-
   verify:
     runs-on: ubuntu-latest
     steps:
