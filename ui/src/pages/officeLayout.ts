@@ -1,31 +1,38 @@
 // Геометрия привязана к room-large-selected.png (1536 × 1024). Многоугольник
 // целиком лежит на свободном полу: исключены мебель, стены и передний край.
 const floor = [
-  [39, 42],
-  [59, 44],
-  [84, 55],
-  [50, 89],
-  [16, 55],
+  [9, 53],
+  [28, 42],
+  [59, 42],
+  [87, 53],
+  [91, 57],
+  [49, 92],
 ];
+
+// Общая рамка 42 образов: значимые пиксели (alpha >= 32) лежат по X в
+// 17.6–87.6% PNG. Оставляем запас, обрезая только боковые прозрачные поля.
+// Высоту сохраняем полностью: рога, уши и ножки столов не должны обрезаться.
+// При добавлении внешности за пределами рамки её нужно расширить для всех.
+export const officeSpriteFrame = { left: 0.16, width: 0.73 };
 
 const floorTop = Math.min(...floor.map((point) => point[1]));
 const floorHeight = Math.max(...floor.map((point) => point[1])) - floorTop;
 
-// Проценты сцены: left — центр спрайта, top — верх, width — ширина.
+// Проценты сцены: left — центр видимой рамки, top — верх, width — ширина рамки.
 export interface OfficeSeat {
   left: number;
   top: number;
   width: number;
 }
 
-// Подбираем наибольший общий размер, при котором входят ВСЕ квадратные PNG.
+// Подбираем наибольший общий масштаб по видимым рамкам, без прозрачных полей.
 // Проверяем весь прямоугольник, а не только точку под ногами. Проценты высоты
 // отличаются от процентов ширины в 1.5 раза из-за пропорций фоновой картинки.
 // Число рядов не ограничено: 50 участников помещаются без наложения столов.
 export function officeLayout(count: number): OfficeSeat[] {
   if (count <= 0) return [];
   for (let step = 160; step > 0; step--) {
-    const width = step / 10;
+    const width = (step / 10) * officeSpriteFrame.width;
     const seats = seatsAtSize(width);
     if (seats.length < count) continue;
     // Неполная команда занимает центр пола, а не левый край последнего ряда.
@@ -42,7 +49,7 @@ export function officeLayout(count: number): OfficeSeat[] {
 // Горизонтальные ряды используют широкую середину комнаты. Отступ уменьшается
 // вместе со спрайтом; подпись находится внутри его нижнего прозрачного поля.
 function seatsAtSize(width: number): OfficeSeat[] {
-  const height = width * 1.5;
+  const height = (width / officeSpriteFrame.width) * 1.5;
   const gap = width * 0.08;
   const rows = Math.floor((floorHeight + gap) / (height + gap));
   const offset = (floorHeight - rows * height - (rows - 1) * gap) / 2;
@@ -84,5 +91,8 @@ function floorSpan(top: number): [number, number] {
 
 // Центр свободной области смещён вниз относительно центра изображения комнаты.
 function distance(seat: OfficeSeat): number {
-  return (seat.left - 50) ** 2 + (seat.top + seat.width * 0.75 - 64) ** 2;
+  return (
+    (seat.left - 50) ** 2 +
+    (seat.top + (seat.width / officeSpriteFrame.width) * 0.75 - 64) ** 2
+  );
 }

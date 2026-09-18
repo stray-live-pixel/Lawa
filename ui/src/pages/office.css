@@ -36,10 +36,20 @@
   position: absolute;
   transform: translateX(-50%);
 }
-.office-employee > img {
+/* Рамка убирает боковые поля PNG. Раскладка и CSS читают одни коэффициенты,
+   поэтому кликабельное место совпадает с видимым персонажем, а не всем файлом. */
+.office-sprite {
+  position: relative;
+  aspect-ratio: var(--office-sprite-width);
+  overflow: hidden;
+}
+.office-sprite > img {
   display: block;
-  width: 100%;
+  position: absolute;
+  width: calc(100% / var(--office-sprite-width));
+  max-width: none;
   height: auto;
+  left: calc(-100% * var(--office-sprite-left) / var(--office-sprite-width));
 }
 .office-nameplate {
   position: absolute;

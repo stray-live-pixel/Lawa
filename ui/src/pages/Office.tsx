@@ -13,7 +13,7 @@ import { TeamPlayer, useTeamPlayer } from '../components/TeamPlayer';
 import room from '../assets/office/room-large-selected.png';
 import { useEmployeeSprite } from '../components/appearances';
 import { CharacterGallery } from '../components/CharacterGallery';
-import { officeLayout } from './officeLayout';
+import { officeLayout, officeSpriteFrame } from './officeLayout';
 import './office.css';
 
 const states = {
@@ -68,6 +68,12 @@ export default function Office() {
       <ErrorNotice error={error} />
       <div className="office-space">
         <div
+          style={
+            {
+              '--office-sprite-width': officeSpriteFrame.width,
+              '--office-sprite-left': officeSpriteFrame.left,
+            } as CSSProperties
+          }
           className={`office-scene ${actorIds.length > 12 ? 'office-scene-dense' : ''}`}
         >
           <img
@@ -146,7 +152,14 @@ function Employee({
       : '';
   return (
     <div className={`office-employee office-${id}`} style={placement}>
-      <img src={sprite} width="1254" height="1254" alt={`${name} за MacBook`} />
+      <div className="office-sprite">
+        <img
+          src={sprite}
+          width="1254"
+          height="1254"
+          alt={`${name} за MacBook`}
+        />
+      </div>
       <div className="office-speech" role="status" aria-atomic="true">
         {achieved ? (
           <Text
