@@ -3,9 +3,10 @@ package runstore
 import "slices"
 
 // TeamMessageForActor учитывает копию обращения Боссу при возобновлении через
-// сотрудника. Текст не переписывается и второго сообщения от Чела не возникает.
+// сотрудника и исключает остановленные обсуждения во всех путях доставки.
+// Текст не переписывается и второго сообщения от Чела не возникает.
 func TeamMessageForActor(m TeamMessage, id string) bool {
-	return m.To == id || id == "boss" && m.AuthorID == "human" && m.NotifyBoss
+	return !m.Suppressed && (m.To == id || id == "boss" && m.AuthorID == "human" && m.NotifyBoss)
 }
 
 // TeamHasUrgentMessages выделяет обращения Чела и связанные ответы, которые

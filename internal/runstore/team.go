@@ -35,6 +35,11 @@ type TeamMember struct {
 // TeamMessage получает время и автора на стороне Lawa. ID — ключ повтора:
 // потеря сетевого подтверждения не должна удваивать сообщение при retry.
 type TeamMessage struct {
+	DiscussionID    string `json:"discussionId,omitempty"`
+	DiscussionCycle int    `json:"discussionCycle,omitempty"`
+	DiscussionInput string `json:"discussionInput,omitempty"` // Исходная команда для проверки повторного ID.
+	Suppressed      bool   `json:"suppressed,omitempty"`      // История остаётся видимой, автоматическая доставка остановлена.
+
 	TaskIDs    []string  `json:"taskIds,omitempty"`  // Поручения, явно принятые Боссом этим событием.
 	ResultID   string    `json:"resultId,omitempty"` // Сообщение с проверенным результатом.
 	Goal       string    `json:"goal,omitempty"`
@@ -265,6 +270,9 @@ func UpdateTeam(ctx context.Context, root, runID string, update func(*TeamChat) 
 	// ранние состояния восстанавливаются отдельно, без догадок при обычном GET.
 	if chat.Room != nil && chat.History == nil {
 		recordTeamFrame(&chat, time.Now())
+	}
+	if chat.Room != nil {
+		initializeDiscussions(&chat)
 	}
 	if err = update(&chat); err != nil {
 		return err

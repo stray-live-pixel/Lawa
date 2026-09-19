@@ -137,7 +137,9 @@ func TestConcurrentPeerMessagesWhileBusy(t *testing.T) {
 	}
 	claim("designer")
 	before := readChat(t, e, run).Room.Actors["designer"].Delivery
-	const count = 8
+	// Первый вопрос, три новых вопроса и ответ укладываются в первые пять сообщений;
+	// достижение лимита проверяется отдельно.
+	const count = 3
 	errs := make(chan error, count*2)
 	var wg sync.WaitGroup
 	for i := range count * 2 {

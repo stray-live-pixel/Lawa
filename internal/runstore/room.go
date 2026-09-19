@@ -18,6 +18,7 @@ const TeamIdleInterval = 5 * time.Minute
 // TeamRoom включает адресный runtime только для новых командных заказов.
 // Старые фиксированные workflow и их общая база не меняют способ исполнения.
 type TeamRoom struct {
+	Discussions map[string]*TeamDiscussion `json:"discussions,omitempty"`
 	// Catalog — снимок доступных личностей из workflow при создании заказа.
 	// Только Actors означает приглашённых сотрудников. Каталог не меняется в ходе заказа.
 	Catalog map[string]workflow.Character `json:"catalog,omitempty"`
@@ -85,12 +86,24 @@ func addressedTo(text string) (string, error) {
 // Только Босс имеет право адресовать сообщение человеку.
 func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, error) {
 	text = strings.TrimSpace(text)
+	input := text
+	if strings.HasPrefix(text, "/discussion ") {
+		return decideDiscussion(chat, author, id, text)
+	}
+	source, text, err := discussionReply(text)
+	if err != nil {
+		return TeamMessage{}, err
+	}
 	if len(strings.Fields(text)) < 1 || len(strings.Fields(text)) > 50 || len(text) > 8192 || !utf8.ValidString(text) || id == "" || len(id) > 200 {
 		return TeamMessage{}, errors.New("сообщение: 1–50 слов, до 8 КБ, непустой ID")
 	}
 	for _, previous := range chat.Messages {
 		if previous.ID == id {
-			if previous.AuthorID != author || previous.Text != text {
+			previousInput := previous.DiscussionInput
+			if previousInput == "" {
+				previousInput = previous.Text
+			}
+			if previous.AuthorID != author || previousInput != input {
 				return TeamMessage{}, errors.New("ID занят другим сообщением")
 			}
 			return previous, nil
@@ -148,10 +161,17 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 		}
 		actor.Summary = strings.Join(strings.Fields(strings.TrimPrefix(text, "@"+to))[:min(7, len(strings.Fields(strings.TrimPrefix(text, "@"+to))))], " ")
 	}
+	if err := attachDiscussion(chat, &m, source); err != nil {
+		return TeamMessage{}, err
+	}
+	if source != "" {
+		m.DiscussionInput = input
+	}
 	reopenForHuman(chat, &m)
 	chat.Messages = append(chat.Messages, m)
 	recordTeamTask(chat, m)
 	wakeForMessage(chat, m)
+	pauseDiscussion(chat, &m)
 	return m, nil
 }
 
@@ -291,6 +311,14 @@ func (chat TeamChat) validateRoom() error {
 		}
 		if at.IsZero() || !found {
 			return errors.New("повреждено завершение цели")
+		}
+	}
+	for id, d := range chat.Room.Discussions {
+		if d == nil || d.ID != id || d.QuestionID == "" || d.Cycle < 1 || d.Count < 0 || d.Count > discussionLimit {
+			return errors.New("повреждено обсуждение команды")
+		}
+		if d.State != "active" && d.State != "paused" && d.State != "closed" || d.State == "active" && d.Count >= discussionLimit {
+			return errors.New("повреждено состояние обсуждения")
 		}
 	}
 	for id, task := range chat.Room.Tasks {

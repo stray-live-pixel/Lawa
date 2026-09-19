@@ -51,7 +51,7 @@ func recordTeamTask(chat *TeamChat, m TeamMessage) {
 	if chat.Room.Tasks == nil {
 		chat.Room.Tasks = map[string]*TeamTask{}
 	}
-	if (m.AuthorID == "boss" || m.AuthorID == "human") && m.To != "boss" && chat.Room.Actors[m.To] != nil {
+	if m.Kind != "discussion_decision" && (m.AuthorID == "boss" || m.AuthorID == "human") && m.To != "boss" && chat.Room.Actors[m.To] != nil {
 		chat.Room.Tasks[m.ID] = &TeamTask{ID: m.ID, Assignee: m.To, Text: m.Text}
 	}
 }
