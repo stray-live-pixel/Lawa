@@ -60,6 +60,9 @@ func TestMessageWakeupRestartAndCapacity(t *testing.T) {
 	if client.calls != 0 || readChat(t, e, run).Room.Actors["developer"].Delivery != nil {
 		t.Fatal("исчерпанный лимит не остановил запуск")
 	}
+	if wait := readChat(t, e, run).Room.Actors["developer"].Wait; wait == nil || wait.Kind != "capacity" || wait.Source != "runtime" {
+		t.Fatal("не показано ожидание capacity", wait)
+	}
 	if err := lease.Release(); err != nil {
 		t.Fatal(err)
 	}

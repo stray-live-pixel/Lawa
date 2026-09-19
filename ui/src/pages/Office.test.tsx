@@ -185,3 +185,60 @@ it('показывает все 50 рабочих мест с полными д�
     expect.stringContaining('member-48 — специалист большой команды'),
   );
 });
+
+// Одновременно видны свободный сотрудник, очередь и смысловая зависимость.
+// Старый idle без wait остаётся корректным, без выдуманной даты ожидания.
+it('различает причины ожидания и показывает происхождение', async () => {
+  window.history.replaceState(null, '', '/office?run=waiting');
+  const since = new Date(Date.now() - 120000).toISOString();
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            runId: 'waiting',
+            goal: 'Проверка',
+            members: {},
+            messages: [],
+            room: {
+              actors: {
+                boss: {
+                  status: 'idle',
+                  wait: { kind: 'no_messages', source: 'runtime', since },
+                },
+                developer: {
+                  status: 'idle',
+                  wait: { kind: 'capacity', source: 'runtime', since },
+                },
+                reviewer: {
+                  status: 'idle',
+                  wait: {
+                    kind: 'result',
+                    source: 'actor',
+                    since,
+                    actorId: 'developer',
+                    messageId: 'report',
+                    text: 'Нужен результат',
+                  },
+                },
+                legacy: { status: 'idle' },
+              },
+            },
+          }),
+        ),
+    ),
+  );
+  render(
+    <AppTheme>
+      <Office />
+    </AppTheme>,
+  );
+  expect(await screen.findByText(/Нет сообщений · 2 мин/)).toBeVisible();
+  expect(screen.getByText(/Ждёт свободный слот · 2 мин/)).toBeVisible();
+  expect(screen.getByText(/Ждёт результат · 2 мин/)).toHaveAttribute(
+    'title',
+    expect.stringContaining('Сообщил сотрудник'),
+  );
+  expect(screen.getByRole('button', { name: 'legacy: Ждёт' })).toBeVisible();
+});

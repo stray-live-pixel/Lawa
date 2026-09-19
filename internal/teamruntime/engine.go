@@ -144,7 +144,16 @@ func (e *Engine) Process(ctx context.Context, run, id string) error {
 		return err
 	}
 	if !available {
-		return nil
+		if actor.CapacityPending || !runstore.TeamHasPendingMessages(chat, id, actor.Cursor) {
+			return nil
+		}
+		return runstore.UpdateTeam(ctx, e.Root, run, func(chat *runstore.TeamChat) error {
+			a := chat.Room.Actors[id]
+			if a.Delivery == nil && runstore.TeamHasPendingMessages(*chat, id, a.Cursor) {
+				a.CapacityPending = true
+			}
+			return nil
+		})
 	}
 	defer lease.Release()
 	now := time.Now()
@@ -193,6 +202,10 @@ func (e *Engine) Process(ctx context.Context, run, id string) error {
 			problem = err.Error()
 		}
 		attempted := result.CreationAttempted || result.TurnAttempted || result.TurnID != ""
+		var interaction *codex.InteractionRequired
+		if errors.As(err, &interaction) {
+			return errors.Join(err, e.blockWithReason(saveCtx, run, id, problem, attempted, true))
+		}
 		return errors.Join(err, e.block(saveCtx, run, id, problem, attempted))
 	}
 	return errors.Join(err, e.finish(saveCtx, run, id))
@@ -280,6 +293,7 @@ func (e *Engine) finish(ctx context.Context, run, id string) error {
 		}
 		a.Cursor = end
 		a.Delivery = nil
+		a.ApprovalPending = false
 		a.Status = "idle"
 		// Босс, выдавший поручение, наблюдает за командой до следующего тега.
 		// Это статус ожидания, без фонового LLM turn.
@@ -316,9 +330,16 @@ func (e *Engine) finish(ctx context.Context, run, id string) error {
 // block сохраняет неподтверждённую порцию. Повтор через UI разрешён только если
 // клиент доказал, что создание/отправка вообще не предпринимались.
 func (e *Engine) block(ctx context.Context, run, id, problem string, attempted bool) error {
+	return e.blockWithReason(ctx, run, id, problem, attempted, false)
+}
+
+// blockWithReason сохраняет ошибку и её происхождение одной транзакцией.
+// Новая ошибка снимает прежнее ожидание разрешения, если оно уже не причина сбоя.
+func (e *Engine) blockWithReason(ctx context.Context, run, id, problem string, attempted, permission bool) error {
 	return runstore.UpdateTeam(ctx, e.Root, run, func(chat *runstore.TeamChat) error {
 		a := chat.Room.Actors[id]
 		a.Status = "blocked"
+		a.ApprovalPending = permission
 		a.Error = problem
 		a.Summary = "Нужна помощь"
 		if a.Delivery != nil {
@@ -360,6 +381,9 @@ func (e *Engine) recover(ctx context.Context, run, id string, a *runstore.TeamAc
 		case codex.WorkCompleted:
 			return e.finish(ctx, run, id)
 		case codex.WorkRunning, codex.WorkWaitingForApproval:
+			if err := e.change(ctx, run, id, func(a *runstore.TeamActor) { a.ApprovalPending = status == codex.WorkWaitingForApproval }); err != nil {
+				return err
+			}
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
@@ -378,6 +402,7 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 	if id == "boss" {
 		role = "Ты Босс: отвечаешь за общую цель и качество результата. Доступные личности перечислены ниже. При необходимости пригласи сотрудника через team_summon по его ID, затем дай поручение через team_post с @id. Проверяй результаты. Сам решай рабочие вопросы; проси помощи @human, когда сам решить не можешь. Не отвечай сотрудникам, которые тебя не тегнули, кроме выдачи новых поручений. Прямые вопросы и ответы коллег видны в team_read и не требуют твоего подтверждения; они не создают обязательных поручений. Если Чел поставил новую цель, обнови pin через team_set_goal (в старом чате: team_post с /goal <цель>). При обычном вопросе цель не меняй. Если Чел тегнул сотрудника, дождись его ответа через общий чат и передай Челу результат; не дублируй его поручение. Пока ответа нет, можешь уточнять вопросы и сообщать Челу статус, но не выдавай неполученный результат за проверенный. Если действий больше нет, заверши ход: ответ сотрудника разбудит тебя. Когда цель достигнута и работа сотрудников завершена, вызови team_complete с итогом для @human: результат, где его найти и как проверено, до 50 слов. Если сохранённый чат не предлагает team_complete, вызови team_post с текстом /complete @human <итог> — это то же явное действие. Это остановит таймеры до нового обращения Чела; затем сразу заверши ход."
 	}
+	role += "\nЕсли ждёшь конкретный ответ, приёмку или разрешение, сначала отправь адресное сообщение, затем вызови team_post с /wait {\"kind\":\"result|acceptance|permission\",\"actor_id\":\"id участника\",\"message_id\":\"ID своего сообщения\",\"text\":\"что требуется, до 40 слов\"}. Выбери одно значение kind. Это только отметка, она не посылает сообщение и не запускает коллегу. /wait {} снимает отметку. После нового входящего хода старое ожидание сбрасывается; при необходимости заяви его заново. Состояние и начало ожидания доступны в room.actors[id].wait."
 	// Личность берём из снимка заказа при каждом turn, включая продолжение thread.
 	// Общие правила маршрутизации остаются контрактом runtime, а не правом конфига.
 	character := chat.Room.Catalog[id]

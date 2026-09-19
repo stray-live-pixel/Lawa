@@ -32,6 +32,11 @@ type TeamRoom struct {
 // TeamActor — личность на весь заказ, с одним Codex thread и последовательными
 // turn. Cursor — число просмотренных сообщений; во время работы не сдвигается.
 type TeamActor struct {
+	// Wait — публичная причина; Dependency — явное заявление до следующего хода.
+	Wait            *TeamWait `json:"wait,omitempty"`
+	Dependency      *TeamWait `json:"dependency,omitempty"`
+	CapacityPending bool      `json:"capacityPending,omitempty"`
+	ApprovalPending bool      `json:"approvalPending,omitempty"`
 	// Attempt различает повторные доказанно недоставленные попытки одного поручения.
 	Attempt   uint64        `json:"attempt,omitempty"`
 	ThreadID  string        `json:"threadId,omitempty"`
@@ -60,6 +65,7 @@ func initializeRoom(chat *TeamChat, catalog map[string]workflow.Character) {
 	chat.Members["boss"] = TeamMember{Name: catalog["boss"].Name, Avatar: catalog["boss"].Avatar}
 	chat.Room = &TeamRoom{Catalog: catalog, Actors: map[string]*TeamActor{"boss": {NextCheck: now, Status: "idle"}}}
 	chat.Messages = append(chat.Messages, TeamMessage{ID: "initial-goal", AuthorID: "human", To: "boss", Kind: "goal", Date: now, Text: "@boss Проанализируй закреплённую цель и организуй выполнение."})
+	RefreshTeamWaits(chat, now)
 	recordTeamFrame(chat, now)
 }
 
@@ -247,6 +253,9 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 			actor.NextCheck = now.Add(TeamIdleInterval)
 			return nil
 		}
+		actor.Dependency = nil
+		actor.CapacityPending = false
+		actor.ApprovalPending = false
 		actor.Attempt++
 		actor.Delivery = &TeamDelivery{IDs: ids, End: len(chat.Messages)}
 		actor.Status, actor.Summary, actor.Error = "working", "Читает поручение", ""

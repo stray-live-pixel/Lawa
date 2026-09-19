@@ -42,6 +42,19 @@ func (e *Engine) controlTool(ctx context.Context, run, author string, call codex
 		if err := json.Unmarshal(args, &in, json.RejectUnknownMembers(true)); err != nil {
 			return "", false, nil
 		}
+		if value, ok := strings.CutPrefix(in.Text, "/wait "); ok {
+			var in struct {
+				Kind      string `json:"kind"`
+				ActorID   string `json:"actor_id"`
+				MessageID string `json:"message_id"`
+				Text      string `json:"text"`
+			}
+			if err := json.Unmarshal([]byte(value), &in, json.RejectUnknownMembers(true)); err != nil {
+				return "", true, err
+			}
+			err := runstore.SetTeamWait(ctx, e.Root, run, author, in.Kind, in.ActorID, in.MessageID, in.Text)
+			return `{"saved":true}`, true, err
+		}
 		if value, ok := strings.CutPrefix(in.Text, "/accept "); ok {
 			name = "team_accept"
 			args = []byte(value)
@@ -134,6 +147,8 @@ func resetUnsent(chat *runstore.TeamChat, id string) error {
 		return errors.New("повтор неоднозначной доставки запрещён; проверьте историю Codex")
 	}
 	a.Delivery = nil
+	a.ApprovalPending = false
+	a.CapacityPending = false
 	a.Status = "idle"
 	a.Error = ""
 	a.NextCheck = time.Now().UTC()

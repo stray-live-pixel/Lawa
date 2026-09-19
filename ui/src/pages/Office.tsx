@@ -1,3 +1,4 @@
+import { waitLabel, waitDetails } from '../components/teamWait';
 import { useMemo, useState, type CSSProperties } from 'react';
 import { Button, Icon, Text } from '@gravity-ui/uikit';
 import { Smartphone, CircleCheckFill } from '@gravity-ui/icons';
@@ -99,6 +100,7 @@ export default function Office() {
               }
               avatar={chat?.members[id]?.avatar}
               actor={chat?.room?.actors[id]}
+              at={player.at}
               placement={{
                 left: `${seats[index].left}%`,
                 top: `${seats[index].top}%`,
@@ -127,6 +129,7 @@ export default function Office() {
 // Текст статуса доступен скринридеру: цвет точки не единственный сигнал.
 function Employee({
   compact,
+  at,
   id,
   name,
   avatar,
@@ -136,6 +139,7 @@ function Employee({
   onClick,
 }: {
   compact: boolean;
+  at: number;
   id: string;
   name: string;
   avatar?: string;
@@ -147,8 +151,9 @@ function Employee({
   const sprite = useEmployeeSprite(id, avatar || id);
   const status = actor?.status || 'idle';
   const label = states[status] || states.idle;
-  const message =
-    status === 'working' || status === 'blocked' || status === 'unknown'
+  const message = actor?.wait
+    ? waitLabel(actor.wait, at)
+    : status === 'working' || status === 'blocked' || status === 'unknown'
       ? actor?.summary
       : '';
   return (
@@ -171,7 +176,11 @@ function Employee({
           </Text>
         ) : (
           message && (
-            <Text className="office-speech-bubble" variant="body-1">
+            <Text
+              className="office-speech-bubble"
+              variant="body-1"
+              title={actor?.wait ? waitDetails(actor.wait) : undefined}
+            >
               {message}
             </Text>
           )

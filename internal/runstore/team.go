@@ -277,6 +277,7 @@ func UpdateTeam(ctx context.Context, root, runID string, update func(*TeamChat) 
 	if err = update(&chat); err != nil {
 		return err
 	}
+	RefreshTeamWaits(&chat, time.Now())
 	recordTeamFrame(&chat, time.Now())
 	data, err := json.Marshal(chat)
 	if err != nil {
