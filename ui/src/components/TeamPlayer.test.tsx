@@ -159,7 +159,11 @@ it('перематывает сцену и телефон вместе без з
   expect(
     screen.getByRole('button', { name: 'Разработчик: Работает' }),
   ).toBeVisible();
-  expect(screen.getByText('Создаёт платформы')).toBeVisible();
+  expect(
+    within(screen.getByRole('region', { name: 'Карта офиса' })).getByText(
+      'Создаёт платформы',
+    ),
+  ).toBeVisible();
   await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));
   const phone = within(screen.getByRole('dialog', { name: 'Чат команды' }));
   expect(phone.queryByText('Игра готова')).not.toBeInTheDocument();
@@ -238,7 +242,9 @@ it('показывает достигнутую цель в офисе и pin, �
       <Office />
     </AppTheme>,
   );
-  await screen.findByText('Цель достигнута');
+  await within(screen.getByRole('region', { name: 'Карта офиса' })).findByText(
+    'Цель достигнута',
+  );
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));
   const phone = within(screen.getByRole('dialog', { name: 'Чат команды' }));
@@ -256,7 +262,11 @@ it('показывает достигнутую цель в офисе и pin, �
   expect(phone.queryByRole('slider')).not.toBeInTheDocument();
   await user.click(phone.getByRole('button', { name: 'Закрыть чат' }));
   await user.click(screen.getByRole('button', { name: 'Предыдущее событие' }));
-  expect(screen.queryByText('Цель достигнута')).not.toBeInTheDocument();
+  expect(
+    within(screen.getByRole('region', { name: 'Карта офиса' })).queryByText(
+      'Цель достигнута',
+    ),
+  ).not.toBeInTheDocument();
   expect(
     screen.queryByText('Восстановлено по ходам Codex и сообщениям'),
   ).not.toBeInTheDocument();
@@ -292,7 +302,9 @@ it('отправляет из истории в текущий чат и воз�
       <Office />
     </AppTheme>,
   );
-  await screen.findByText('Цель достигнута');
+  await within(screen.getByRole('region', { name: 'Карта офиса' })).findByText(
+    'Цель достигнута',
+  );
   const user = userEvent.setup();
   await user.click(screen.getByRole('button', { name: 'Предыдущее событие' }));
   await user.click(screen.getByRole('button', { name: 'Открыть чат команды' }));

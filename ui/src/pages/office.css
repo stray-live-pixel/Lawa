@@ -81,12 +81,15 @@
   transform: translateX(-50%) scale(calc(1 / var(--office-camera-scale, 1)));
   transform-origin: center bottom;
   width: max-content;
-  max-width: min(200px, 55vw);
+  /* После компенсации масштаба облако не шире места сотрудника: соседние
+     причины и длительности остаются видны одновременно без наведения. */
+  max-width: min(200px, calc(100% * var(--office-camera-scale, 1)));
 }
 .office-speech-bubble {
   display: block;
   position: relative;
-  padding: 10px 14px;
+  padding: 6px;
+  overflow-wrap: anywhere;
   border-radius: var(--g-border-radius-l);
   background: var(--g-color-base-float);
   color: var(--g-color-text-primary);
@@ -142,6 +145,9 @@
 .office-scene-dense .office-speech {
   opacity: 0;
   pointer-events: none;
+  /* Здесь показывается только выбранная реплика, поэтому ей можно дать
+     больше места, чем крошечному спрайту в большой команде. */
+  max-width: min(200px, 55vw);
 }
 .office-scene-dense .office-employee:hover .office-nameplate-text,
 .office-scene-dense .office-employee:focus-within .office-nameplate-text {
@@ -191,4 +197,46 @@
   border-radius: var(--g-border-radius-s);
   padding: 2px 6px;
   box-shadow: 0 2px 8px var(--g-color-sfx-shadow);
+}
+
+/* На телефоне тексты читаются вне масштабируемой сцены. Ограничена высота
+   списка, а не текста: длинные причины и большая команда доступны прокруткой. */
+.office-activity {
+  display: none;
+}
+@media (max-width: 600px) {
+  .office-speech {
+    display: none;
+  }
+  .office-activity {
+    display: block;
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: 40%;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    padding: 0 var(--panel-inset);
+    border-top: 1px solid var(--g-color-line-generic);
+  }
+  .office-activity ul {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .office-activity li {
+    padding: 8px 0;
+    overflow-wrap: anywhere;
+  }
+  .office-activity li + li {
+    border-top: 1px solid var(--g-color-line-generic);
+  }
+  .office-activity-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .office-activity-heading .g-button {
+    flex: none;
+  }
 }

@@ -1,3 +1,4 @@
+import { waitLabel, waitDetails } from './teamWait';
 import { useEffect, useRef, useState } from 'react';
 import {
   Avatar,
@@ -33,7 +34,16 @@ export interface TeamMessage {
   kind?: string;
   replyTo?: string;
 }
+export interface TeamWait {
+  kind: string;
+  source: 'runtime' | 'actor';
+  since: string;
+  actorId?: string;
+  messageId?: string;
+  text?: string;
+}
 export interface TeamActor {
+  wait?: TeamWait;
   status: 'idle' | 'working' | 'monitoring' | 'blocked' | 'unknown';
   summary?: string;
   error?: string;
@@ -179,6 +189,7 @@ export function TeamPhone({
                   ? player.view
                   : undefined
               }
+              at={player?.view?.runId === run ? player.at : undefined}
               onLive={player?.live}
             />
           </>
@@ -280,10 +291,12 @@ function MemberAvatar({ id, chat }: { id: string; chat: TeamChat }) {
 function TeamThread({
   run,
   historyView,
+  at,
   onLive,
 }: {
   run: string;
   historyView?: TeamChat;
+  at?: number;
   onLive?: () => void;
 }) {
   const url = `/api/teams/${encodeURIComponent(run)}`;
@@ -384,6 +397,7 @@ function TeamThread({
                 </div>
               ) : (
                 <article
+                  id={`team-message-${message.id}`}
                   key={message.id}
                   className={`team-message ${message.authorId === 'human' ? 'team-message-own' : ''}`}
                 >
@@ -413,6 +427,33 @@ function TeamThread({
                 </article>
               ),
             )}
+            {chat.room &&
+              Object.entries(chat.room.actors)
+                .filter(([, actor]) => actor.wait)
+                .map(([id, actor]) => (
+                  <div key={id} className="team-wait">
+                    <Text variant="body-1">
+                      {chat.members[id]?.name || id}:{' '}
+                      {waitLabel(actor.wait!, at ?? Date.now())}
+                    </Text>
+                    <p>{waitDetails(actor.wait!)}</p>
+                    {actor.wait?.messageId && (
+                      <Button
+                        size="s"
+                        view="flat"
+                        onClick={() =>
+                          document
+                            .getElementById(
+                              `team-message-${actor.wait?.messageId}`,
+                            )
+                            ?.scrollIntoView({ block: 'center' })
+                        }
+                      >
+                        К сообщению
+                      </Button>
+                    )}
+                  </div>
+                ))}
           </div>
           {!historyView &&
             chat.room &&

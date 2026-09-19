@@ -23,7 +23,9 @@ type TeamFrame struct {
 	Actors       map[string]TeamActorView `json:"actors"`
 }
 
+// TeamActorView содержит только публичное состояние сотрудника в кадре.
 type TeamActorView struct {
+	Wait      *TeamWait `json:"wait,omitempty"`
 	Status    string    `json:"status"`
 	Summary   string    `json:"summary,omitempty"`
 	Error     string    `json:"error,omitempty"`
@@ -43,7 +45,12 @@ func CaptureTeamFrame(chat TeamChat, at time.Time) TeamFrame {
 			if a == nil {
 				continue
 			}
-			frame.Actors[id] = TeamActorView{Status: a.Status, Summary: a.Summary, Error: a.Error, NextCheck: a.NextCheck}
+			var wait *TeamWait
+			if a.Wait != nil {
+				copy := *a.Wait
+				wait = &copy
+			}
+			frame.Actors[id] = TeamActorView{Wait: wait, Status: a.Status, Summary: a.Summary, Error: a.Error, NextCheck: a.NextCheck}
 		}
 	}
 	return frame
@@ -80,7 +87,7 @@ func sameVisibleActors(a, b map[string]TeamActorView) bool {
 	}
 	for id, actor := range a {
 		previous, ok := b[id]
-		if !ok || actor.Status != previous.Status || actor.Summary != previous.Summary || actor.Error != previous.Error {
+		if !ok || actor.Status != previous.Status || actor.Summary != previous.Summary || actor.Error != previous.Error || !sameWait(actor.Wait, previous.Wait) {
 			return false
 		}
 	}
@@ -90,4 +97,9 @@ func sameVisibleActors(a, b map[string]TeamActorView) bool {
 // Отметка цели — часть кадра, поэтому при перемотке в прошлое галочка исчезает.
 func sameAchievement(a, b *time.Time) bool {
 	return a == nil && b == nil || a != nil && b != nil && a.Equal(*b)
+}
+
+// sameWait включает начало причины, чтобы повторное ожидание стало новым кадром.
+func sameWait(a, b *TeamWait) bool {
+	return a == nil && b == nil || sameWaitReason(a, b) && a.Since.Equal(b.Since)
 }
