@@ -565,7 +565,7 @@ func TestMigrationPreview(t *testing.T) {
 	all := readDashboard(t, h, "/api/preview?period=24h&view=all")
 	count := 0
 	for _, root := range all.Roots {
-		if root.PreviewGraph == nil {
+		if root.PreviewGraph == nil || !strings.HasPrefix(root.ID, "preview-migration-") {
 			continue
 		}
 		count++
@@ -590,7 +590,7 @@ func TestMigrationPreview(t *testing.T) {
 	}
 	working := readDashboard(t, h, "/api/preview?period=24h&view=all&states=working")
 	for _, root := range working.Roots {
-		if root.PreviewGraph != nil && len(root.PreviewGraph.Nodes) != 15 {
+		if strings.HasPrefix(root.ID, "preview-migration-") && root.PreviewGraph != nil && len(root.PreviewGraph.Nodes) != 15 {
 			t.Fatal("фильтр обрезал граф")
 		}
 	}

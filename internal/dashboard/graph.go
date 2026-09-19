@@ -3,6 +3,7 @@ package dashboard
 import (
 	"net/http"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
@@ -12,8 +13,9 @@ import (
 // graphView разделяет неизменяемую схему workflow и историю её исполнений.
 // Поэтому ещё не посещённый кубик виден, а цикл не затирает предыдущий результат.
 type graphView struct {
-	Definition                          bool `json:",omitempty"`
-	Version                             int  `json:",omitempty"`
+	StopVisitID                         string `json:",omitempty"`
+	Definition                          bool   `json:",omitempty"`
+	Version                             int    `json:",omitempty"`
 	ID, Name, State, StopReason, Prompt string
 	Nodes                               []graphNode
 	Edges                               []graphEdge
@@ -21,16 +23,29 @@ type graphView struct {
 }
 
 type graphNode struct {
-	Definition *stepDefinition `json:",omitempty"`
-	ID, Prompt string
-	Routes     []string
+	Icon, Title string                    `json:",omitempty"`
+	Start       bool                      `json:",omitempty"`
+	MaxVisits   *int                      `json:",omitempty"`
+	OnLimit     *workflow.TerminalOutcome `json:",omitempty"`
+	Definition  *stepDefinition           `json:",omitempty"`
+	ID, Prompt  string
+	Routes      []string
 }
 
-type graphEdge struct{ From, To, Label string }
+type graphEdge struct {
+	From, To, Label string
+	Key             string `json:",omitempty"`
+	Finish          string `json:",omitempty"`
+}
 
 // graphExecution содержит только данные конкретного step/visit. Память и trace
 // загружаются отдельно по существующим защищённым маршрутам, не для всего графа.
 type graphExecution struct {
+	// RunNumber считает только разрешённые активации: skipped не расходует maxVisits.
+	// Visit остаётся исходным номером истории, Attempt — техническим повтором turn.
+	RunNumber                                           int                      `json:",omitempty"`
+	Cause                                               *runstore.VisitTrigger   `json:",omitempty"`
+	DecisionRecord                                      *runstore.DecisionRecord `json:",omitempty"`
 	Key, StepID, State, Result, Note, Decision, Trigger string
 	TraceURL, MemoryURL, Prompt                         string
 	Visit, Attempt                                      int
@@ -49,7 +64,8 @@ func (h handler) graph(w http.ResponseWriter, r *http.Request) {
 
 // loadGraph строит рёбра по workflow, а не по порядку строк metadata. after и
 // dependsOn направлены от источника к получателю; именованные to — от решения.
-// finish и onLimit показаны текстом у кубика и не притворяются отдельными шагами.
+// finish сохраняет отдельный outcome для визуального маркера; onLimit остаётся
+// правилом шага. Маркеры интерфейса не добавляются в исполняемый workflow.
 func (h handler) loadGraph(runID string) (graphView, error) {
 	snapshot, err := runstore.LoadForDashboard(h.root, runID)
 	if err != nil {
@@ -61,7 +77,19 @@ func (h handler) loadGraph(runID string) (graphView, error) {
 	}
 	node := makeRunNode(h.root, snapshot)
 	view := graphView{ID: runID, Name: node.Name, State: node.State, StopReason: node.StopReason, Prompt: continuationPrompt(root, snapshot, "", "")}
+	view.Version = snapshot.Workflow.EffectiveVersion()
+	view.StopVisitID = snapshot.Meta.StopVisitID
 	view.Nodes, view.Edges = definitionTopology(snapshot.Workflow)
+	visits := make(map[string]runstore.Visit)
+	runNumbers := make(map[string]int)
+	counts := make(map[string]int)
+	for _, visit := range snapshot.Meta.Visits {
+		visits[visit.VisitID] = visit
+		if string(visit.State) != "skipped" {
+			counts[visit.StepID]++
+			runNumbers[visit.VisitID] = counts[visit.StepID]
+		}
+	}
 	for i := range view.Nodes {
 		view.Nodes[i].Prompt = continuationPrompt(root, snapshot, view.Nodes[i].ID, "")
 	}
@@ -96,6 +124,11 @@ func (h handler) loadGraph(runID string) (graphView, error) {
 			Visit: step.Visit, Attempt: step.Attempt, Result: result, Note: note,
 			Decision: strings.Join(nonemptyStrings(step.Decision, step.Explanation, step.Transition), " · "),
 			Trigger:  step.Trigger, TraceURL: string(step.TraceURL)}
+		if visit, ok := visits[step.VisitID]; ok {
+			cause := visit.Trigger
+			entry.Cause, entry.DecisionRecord = &cause, visit.Decision
+			entry.RunNumber = runNumbers[step.VisitID]
+		}
 		entry.Prompt = continuationPrompt(root, snapshot, step.StepID, step.VisitID)
 		if step.HasMemory {
 			entry.MemoryURL = string(step.MemoryURL)
@@ -155,7 +188,17 @@ func nonemptyStrings(values ...string) []string {
 // История исполнения добавляется отдельно и не меняет структуру workflow.
 func definitionTopology(definition workflow.Workflow) (nodes []graphNode, edges []graphEdge) {
 	for _, step := range definition.Steps {
-		item := graphNode{ID: step.ID}
+		item := graphNode{ID: step.ID, MaxVisits: step.MaxVisits, OnLimit: step.OnLimit,
+			Start: slices.Contains(definition.Start, step.ID)}
+		if definition.EffectiveVersion() == workflow.VersionLegacy {
+			item.Start = len(step.DependsOn) == 0
+		}
+		if step.Icon != nil {
+			item.Icon = *step.Icon
+		}
+		if character, ok := definition.Characters[step.Character]; ok {
+			item.Title = character.Name
+		}
 		for _, source := range append(append([]string{}, step.DependsOn...), step.After...) {
 			// Направление зависимости уже показывает стрелка. Подписи нужны только
 			// именованным решениям, в том числе если сам маршрут назван «после».
@@ -164,8 +207,15 @@ func definitionTopology(definition workflow.Workflow) (nodes []graphNode, edges 
 		for _, key := range sortedRouteKeys(step.Decisions) {
 			route := step.Decisions[key]
 			item.Routes = append(item.Routes, key+" → "+formatRouteDestination(route))
+			label := key
+			if route.Label != nil {
+				label = *route.Label
+			}
+			if route.Finish != nil {
+				edges = append(edges, graphEdge{From: step.ID, Label: label, Key: key, Finish: string(*route.Finish)})
+			}
 			for _, target := range route.To {
-				edges = append(edges, graphEdge{From: step.ID, To: target, Label: key})
+				edges = append(edges, graphEdge{From: step.ID, To: target, Label: label, Key: key})
 			}
 		}
 		if limit := formatVisitLimit(step); limit != "" {

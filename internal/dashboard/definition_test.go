@@ -30,8 +30,8 @@ func TestDefinitionExample(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &graph); err != nil {
 		t.Fatal(err)
 	}
-	if !graph.Definition || graph.Version != 2 || graph.ID != "" || len(graph.Executions) != 0 || len(graph.Nodes) != 4 || len(graph.Edges) != 6 {
-		t.Fatalf("неверный граф: %+v", graph)
+	if !graph.Definition || graph.Version != 2 || graph.ID != "" || len(graph.Executions) != 0 || len(graph.Nodes) != 4 || len(graph.Edges) != 10 {
+		t.Fatalf("неверный граф: definition=%v version=%d nodes=%d edges=%d", graph.Definition, graph.Version, len(graph.Nodes), len(graph.Edges))
 	}
 	for i, node := range graph.Nodes {
 		if node.Definition.Start != (i == 0) || node.Definition.Character == nil || strings.Contains(node.Prompt, "{{") || !strings.Contains(node.Prompt, "После каждого посещения") {
@@ -44,7 +44,7 @@ func TestDefinitionExample(t *testing.T) {
 	if !strings.Contains(strings.Join(graph.Nodes[3].Routes, "\n"), "passed → finish:succeeded") {
 		t.Fatal(graph.Nodes[3].Routes)
 	}
-	for _, edge := range []graphEdge{{"reviewer", "qa_frontend", "approve"}, {"qa_frontend", "qa", "passed"}, {"reviewer", "developer", "changes_requested"}, {"qa_frontend", "developer", "changes_requested"}, {"qa", "developer", "failed"}} {
+	for _, edge := range []graphEdge{{From: "reviewer", To: "qa_frontend", Label: "Ревью пройдено", Key: "approve"}, {From: "qa_frontend", To: "qa", Label: "UI проверен / не менялся", Key: "passed"}, {From: "reviewer", To: "developer", Label: "Есть замечания", Key: "changes_requested"}, {From: "qa_frontend", To: "developer", Label: "Замечания к UI", Key: "changes_requested"}, {From: "qa", To: "developer", Label: "Найдены дефекты", Key: "failed"}} {
 		found := false
 		for _, actual := range graph.Edges {
 			if actual == edge {

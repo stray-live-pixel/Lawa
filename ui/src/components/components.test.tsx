@@ -830,3 +830,37 @@ it('opens instruction source and preserves exact Markdown when clipboard fails',
   );
   expect(navigator.clipboard.writeText).toHaveBeenCalledWith(text);
 });
+
+// Пропущенные visits остаются в истории, но не расходуют квоту maxVisits.
+// Технический Attempt не подменяет номер активации на кубике.
+it('разделяет номер истории, активацию и технический повтор', () => {
+  const sample: Graph = {
+    ...graph,
+    Executions: [
+      {
+        ...graph.Executions![0],
+        Visit: 2,
+        Key: 'skipped',
+        State: 'skipped',
+        RunNumber: undefined,
+      },
+      {
+        ...graph.Executions![1],
+        Visit: 3,
+        Key: 'current',
+        RunNumber: 2,
+        Attempt: 7,
+        State: 'running',
+      },
+    ],
+  };
+  render(<WorkflowGraph runID="run-a" preview={sample} />);
+  expect(screen.getByRole('button', { name: 'loop' })).toHaveAttribute(
+    'data-visit',
+    '2',
+  );
+  expect(screen.getByRole('button', { name: 'Посещение 3' })).toHaveAttribute(
+    'aria-current',
+    'page',
+  );
+});

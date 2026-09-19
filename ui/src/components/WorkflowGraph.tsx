@@ -1,3 +1,7 @@
+import { graphDrawing } from './graphDrawing';
+import type { TextMeasure } from './graphLabel';
+import { GraphIcon } from './GraphIcon';
+import { graphTopology, isCause, markerState } from './graphModel';
 import { DefinitionDetails } from './DefinitionDetails';
 import { StatusIcon } from './StatusIcon';
 import { CopyIdentity } from './CopyIdentity';
@@ -15,7 +19,6 @@ import {
   getViewportForBounds,
   type Rect,
   Handle,
-  MarkerType,
   Position,
   ReactFlow,
   type Node,
@@ -40,68 +43,92 @@ export function layout(nodes: GraphNode[], edges: GraphEdge[]) {
 }
 // Рисуем рассчитанный маршрут целиком: smoothstep между двумя handles терял
 // обходы препятствий Dagre. Подписи получают место ещё на этапе раскладки.
-function RoutedConnection({ id, data, markerEnd }: EdgeProps) {
+// Ствол заканчивается у основания непрозрачного наконечника. Контакт с рамкой
+// вычисляется отдельно от стабильной раскладки и не сдвигает остальные точки.
+function RoutedConnection({ id, data }: EdgeProps) {
   const route = data?.route as RoutedEdge;
-  if (!route) return null;
-  const path = route.points
-    .map((p, i) => `${i ? 'L' : 'M'} ${p.x},${p.y}`)
-    .join(' ');
+  if (!route || route.points.length < 2) return null;
+  const color = data?.active
+    ? 'var(--g-color-text-info)'
+    : 'var(--lawa-graph-edge)';
   return (
     <>
       <BaseEdge
         id={id}
-        path={path}
-        markerEnd={markerEnd}
+        path={String(data?.path || '')}
+        interactionWidth={0}
         style={{
-          stroke: 'var(--g-color-text-secondary)',
-          strokeWidth: 1.5,
-          strokeDasharray: route.feedback ? '7 5' : undefined,
+          stroke: color,
+          strokeWidth: data?.active ? 3 : 1.5,
+          strokeDasharray: route.feedback && !data?.active ? '7 5' : undefined,
         }}
       />
-      {(route.labels.length > 0 || route.feedback) && (
+      <polygon
+        points={String(data?.arrow || '')}
+        fill={color}
+        pointerEvents="none"
+      />
+      {route.text.lines.length > 0 && (
         <EdgeLabelRenderer>
           <div
             className="graph-edge-label"
             style={{
-              transform: `translate(-50%, -50%) translate(${route.label.x}px,${route.label.y}px)`,
+              transform: `translate(${route.label.x}px,${route.label.y}px)`,
+              width: route.text.width,
+              color,
             }}
           >
-            {route.feedback ? '↩ Возврат' : ''}
-            {route.feedback && route.labels.length ? ' · ' : ''}
-            {route.labels.join(' · ')}
+            {route.text.lines.map((line, i) => (
+              <span key={i}>
+                {line}
+                {i < route.text.lines.length - 1 ? ' ' : ''}
+              </span>
+            ))}
           </div>
         </EdgeLabelRenderer>
       )}
     </>
   );
 }
-function WorkflowGroup({ data }: NodeProps) {
-  return (
-    <div className="workflow-group">
-      <span>{String(data.label)}</span>
-    </div>
-  );
-}
 const edgeTypes = { routed: RoutedConnection };
-type CubeNode = Node<{ label: string; state: string; visit?: number }, 'cube'>;
+type CubeNode = Node<
+  {
+    label: string;
+    state: string;
+    visit?: number;
+    maxVisits?: number;
+    icon?: string;
+    height: number;
+    marker?: string;
+    definition?: boolean;
+  },
+  'cube'
+>;
 function Cube({ data, selected }: NodeProps<CubeNode>) {
   return (
     <Card
       view="outlined"
-      className={`cube tone-${data.state} ${selected ? 'selected' : ''}`}
-      title={data.label}
+      style={{ height: data.height, width: data.marker ? 160 : 220 }}
+      className={`cube tone-${data.state} ${selected ? 'selected' : ''} ${data.marker ? 'graph-marker' : ''}`}
     >
       <Handle type="target" position={Position.Top} />
-      <strong>{data.label}</strong>
-      <small>
-        {statusNames[data.state] || data.state}
-        {data.visit ? ` · #${data.visit}` : ''}
-      </small>
+      <div className="cube-heading">
+        <GraphIcon name={data.icon} />
+        <strong>{data.label}</strong>
+      </div>
+      {!data.marker && !data.definition && (
+        <small>
+          {statusNames[data.state] || data.state}
+          {data.visit
+            ? ` · попытка ${data.visit}${data.maxVisits ? ` из ${data.maxVisits}` : ''}`
+            : ''}
+        </small>
+      )}
       <Handle type="source" position={Position.Bottom} />
     </Card>
   );
 }
-const nodeTypes = { cube: Cube, workflowGroup: WorkflowGroup };
+const nodeTypes = { cube: Cube };
 
 // Контролы Gravity работают внутри провайдера React Flow, сохраняя pan/zoom API.
 function GraphControls({
@@ -139,7 +166,10 @@ function GraphControls({
       const node = selected ? getNode(selected) : undefined;
       if (!node) return;
       const viewport = getViewport();
-      const next = visibleSelection(viewport, node.position, width, height);
+      const next = visibleSelection(viewport, node.position, width, height, {
+        width: node.measured?.width || node.width || 220,
+        height: node.measured?.height || node.height || 80,
+      });
       if (next) void setViewport(next);
     }, 100);
     return () => window.clearTimeout(timer);
@@ -243,7 +273,16 @@ function GraphView({
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [messagesOpen, setMessagesOpen] = useState(false);
   const [choice, setChoice] = useState({
-    step: initialStep || '',
+    // Начальный выбор показывает фактическую работу. Дальше он хранится
+    // локально: polling не переключает кубик и не перемещает камеру.
+    step:
+      initialStep ||
+      (!graph.Definition
+        ? (graph.Executions || []).find((e) =>
+            ['starting', 'running', 'waiting_for_approval'].includes(e.State),
+          )?.StepID
+        : '') ||
+      '',
     visit: initialVisit || '',
     source: `${initialStep}/${initialVisit}`,
   });
@@ -261,88 +300,152 @@ function GraphView({
     (entry) => entry.StepID === selected?.ID,
   );
   const execution = displayVisit(executions, current.visit);
-  const topology = JSON.stringify([
-    (graph.Nodes || []).map((node) => node.ID),
+  const topologyKey = JSON.stringify([
+    (graph.Nodes || []).map((n) => ({
+      ID: n.ID,
+      Title: n.Title || n.Definition?.Character?.name,
+      Icon: n.Icon,
+      Start: n.Start || n.Definition?.Start,
+      MaxVisits: n.MaxVisits,
+      OnLimit: n.OnLimit,
+      Prompt: '',
+      Routes: [],
+    })),
     graph.Edges || [],
+    graph.Version,
   ]);
+  const topology = useMemo(() => {
+    const [Nodes, Edges, Version] = JSON.parse(topologyKey) as [
+      GraphNode[],
+      GraphEdge[],
+      number | undefined,
+    ];
+    return graphTopology({ Nodes, Edges, Version });
+  }, [topologyKey]);
   const geometry = useMemo(() => {
-    const [ids, edges] = JSON.parse(topology) as [string[], GraphEdge[]];
-    return graphLayout(
-      ids.map((ID) => ({ ID, Prompt: '', Routes: [] })),
-      edges,
-    );
+    let measure: TextMeasure | undefined;
+    if (typeof CanvasRenderingContext2D !== 'undefined') {
+      const context = document.createElement('canvas').getContext('2d');
+      if (context) {
+        const family = getComputedStyle(document.body).fontFamily;
+        measure = (text, font) => {
+          context.font = `${font === 'title' ? 'bold 12px' : '13px'} ${family}`;
+          return context.measureText(text).width;
+        };
+      }
+    }
+    return graphLayout(topology.nodes, topology.edges, measure);
   }, [topology]);
-  // Границы включают возвраты и подписи: стандартный fitView учитывает лишь узлы.
   const bounds = useMemo(() => {
     const boxes = [
-      ...[...geometry.positions.values()].map((p) => ({
+      ...[...geometry.positions].map(([id, p]) => ({
         ...p,
-        width: 220,
-        height: 80,
+        ...geometry.sizes.get(id)!,
       })),
-      ...geometry.groups,
       ...geometry.edges.flatMap((edge) => [
         ...edge.points.map((p) => ({ ...p, width: 1, height: 1 })),
-        { x: edge.label.x - 68, y: edge.label.y - 40, width: 136, height: 80 },
+        { ...edge.label, width: edge.text.width, height: edge.text.height },
       ]),
     ];
-    const x = Math.min(0, ...boxes.map((box) => box.x));
-    const y = Math.min(0, ...boxes.map((box) => box.y));
+    const x = Math.min(0, ...boxes.map((b) => b.x)) - 4;
+    const y = Math.min(0, ...boxes.map((b) => b.y)) - 4;
     return {
       x,
       y,
-      width: Math.max(1, ...boxes.map((box) => box.x + box.width)) - x,
-      height: Math.max(1, ...boxes.map((box) => box.y + box.height)) - y,
+      width: Math.max(1, ...boxes.map((b) => b.x + b.width)) - x + 4,
+      height: Math.max(1, ...boxes.map((b) => b.y + b.height)) - y + 4,
     };
   }, [geometry]);
-  const nodes: CubeNode[] = (graph.Nodes || []).map((node) => {
-    // Для выбранного кубика цвет, подпись и детали используют один visit.
-    // Остальные узлы автоматически показывают актуальную реальную работу.
-    const shown =
+  const shownVisits = new Map(
+    (graph.Nodes || []).map((node) => [
+      node.ID,
       node.ID === selected?.ID
         ? execution
         : displayVisit(
             (graph.Executions || []).filter((item) => item.StepID === node.ID),
-          );
+          ),
+    ]),
+  );
+  const nodes: CubeNode[] = topology.nodes.map((node) => {
+    const shown = shownVisits.get(node.ID);
+    const marker = node.Marker;
     return {
       id: node.ID,
       type: 'cube',
       position: geometry.positions.get(node.ID)!,
-      selected: selected?.ID === node.ID,
+      selected: !marker && selected?.ID === node.ID,
+      selectable: !marker,
+      focusable: !marker,
+      style: geometry.sizes.get(node.ID),
       data: {
-        label: node.Definition?.Character?.name || node.ID,
-        state: graph.Definition
-          ? node.Definition?.Start
-            ? 'Старт'
-            : 'Шаг'
-          : shown?.State || 'not_started',
-        visit: shown ? shown.Visit || 1 : undefined,
+        label: marker
+          ? { start: 'Начало', succeeded: 'Готово', failed: 'Ошибка' }[marker]
+          : node.Title || node.Definition?.Character?.name || node.ID,
+        icon: marker
+          ? {
+              start: 'PlayFill',
+              succeeded: 'CircleCheck',
+              failed: 'CircleXmarkFill',
+            }[marker]
+          : node.Icon,
+        state: marker
+          ? markerState(marker, graph)
+          : graph.Definition
+            ? 'not_started'
+            : shown?.State || 'not_started',
+        visit:
+          shown && shown.State !== 'skipped'
+            ? shown.RunNumber || shown.Visit || 1
+            : undefined,
+        maxVisits: node.MaxVisits,
+        height: geometry.sizes.get(node.ID)!.height,
+        marker,
+        definition: graph.Definition,
       },
     };
   });
-  const groups: Node[] = geometry.groups.map((group) => ({
-    id: group.id,
-    type: 'workflowGroup',
-    position: { x: group.x, y: group.y },
-    style: { width: group.width, height: group.height },
-    data: { label: group.label },
-    selectable: false,
-    draggable: false,
-    focusable: false,
-    zIndex: -1,
-  }));
-  const edges: Edge[] = geometry.edges.map((route, index) => ({
+  const drawings = graphDrawing(
+    geometry.edges.map((route) => {
+      const sourceMarker = topology.nodes.find(
+        (n) => n.ID === route.from,
+      )?.Marker;
+      const targetMarker = topology.nodes.find(
+        (n) => n.ID === route.to,
+      )?.Marker;
+      const active =
+        !graph.Definition &&
+        route.members.some((member) =>
+          targetMarker
+            ? graph.State === targetMarker &&
+              graph.StopVisitID === shownVisits.get(route.from)?.Key &&
+              !!shownVisits.get(route.from)?.DecisionRecord?.applied &&
+              shownVisits.get(route.from)?.DecisionRecord?.key === member.Key &&
+              shownVisits.get(route.from)?.DecisionRecord?.finish ===
+                targetMarker
+            : route.to === selected?.ID &&
+              isCause(
+                member,
+                shownVisits.get(route.to),
+                graph.Executions || [],
+                sourceMarker,
+              ),
+        );
+      return {
+        route,
+        active,
+        sourceSelected: !sourceMarker && selected?.ID === route.from,
+        targetSelected: !targetMarker && selected?.ID === route.to,
+      };
+    }),
+  );
+  const edges: Edge[] = drawings.map((data, index) => ({
     id: String(index),
-    source: route.from,
-    target: route.to,
+    source: data.route.from,
+    target: data.route.to,
     type: 'routed',
-    data: { route },
-    markerEnd: {
-      type: MarkerType.ArrowClosed,
-      width: 18,
-      height: 18,
-      color: 'var(--g-color-text-secondary)',
-    },
+    selectable: false,
+    focusable: false,
+    data: { ...data },
   }));
   const select = (step: string, visit = '') => {
     setMemoryOpen(false);
@@ -359,7 +462,7 @@ function GraphView({
       <ResizableRunList side="right" definition={!!graph.Definition}>
         <div className="graph-area">
           <ReactFlow
-            nodes={[...groups, ...nodes]}
+            nodes={nodes}
             edges={edges}
             nodeTypes={nodeTypes}
             edgeTypes={edgeTypes}
@@ -368,7 +471,7 @@ function GraphView({
             minZoom={0.1}
             maxZoom={2}
             onNodeClick={(_, node) => {
-              if (node.type === 'cube') select(node.id);
+              if (node.type === 'cube' && !node.data.marker) select(node.id);
             }}
             onNodesChange={(changes) => {
               const chosen = changes.find(

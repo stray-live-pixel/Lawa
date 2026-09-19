@@ -1131,7 +1131,7 @@ func previewPage(params viewParams, now time.Time) page {
 	maintenance.Open = false
 	failed := run("preview-failed", "failed-nightly-cleanup", "failed", 4*time.Hour, step("cleanup", "failed", true))
 	succeeded := run("preview-succeeded", "previous-release", "succeeded", 48*time.Hour, step("publish", "succeeded", true))
-	roots := append(migrationPreviewRoots(now), release, maintenance, failed, succeeded)
+	roots := append(append(append(graphPreviewRoots(now), denseGraphPreviewRoots(now)...), migrationPreviewRoots(now)...), release, maintenance, failed, succeeded)
 	for _, root := range roots {
 		finalizeTree(root)
 	}
