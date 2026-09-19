@@ -154,7 +154,7 @@ func NotifyTeamProblem(chat *TeamChat, actorID, deliveryID, problem string) {
 }
 
 // NotifyTeamResultReady нужен только если Босс уже получил отчёт, пока коллега
-// ещё завершал turn. Иначе исходный @boss будет доставлен по обычному таймеру.
+// ещё завершал turn. Иначе исходный @boss уже готов к ближайшему циклу scheduler.
 // Событие не даёт Боссу зависнуть после корректного отказа преждевременной приёмки.
 func NotifyTeamResultReady(chat *TeamChat, actorID, resultID string) {
 	boss := chat.Room.Actors["boss"]

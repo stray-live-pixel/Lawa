@@ -86,7 +86,7 @@ func start(t *testing.T, c codex.Command, thread, turn string) {
 	}
 }
 
-// Обращение Чела срочное; внутренние поручения ждут личного таймера. Сообщение,
+// Любое адресное поручение готово немедленно. Сообщение,
 // пришедшее во время turn, не теряется при продвижении курсора текущей порции.
 func TestTeamLifecycleAndHumanRelay(t *testing.T) {
 	e, run, client, now := teamEngine(t)
@@ -121,12 +121,7 @@ func TestTeamLifecycleAndHumanRelay(t *testing.T) {
 	if systems != 1 {
 		t.Fatal("неидемпотентный призыв")
 	}
-	process(t, e, run, "developer")
-	if client.calls != 1 {
-		t.Fatal("разработчик запущен раньше таймера")
-	}
 	postHuman(t, e, run, "direct", "@developer Добавь прыжок")
-	*now = chat.Room.Actors["developer"].NextCheck
 	client.execute = func(ctx context.Context, c codex.Command) (codex.Result, error) {
 		start(t, c, "dev-thread", "dev-1")
 		if _, err := c.CallDynamicTool(ctx, codex.DynamicToolCall{Tool: "team_post", CallID: "forbidden", Arguments: []byte(`{"text":"@human Готово"}`)}); err == nil {
@@ -149,7 +144,6 @@ func TestTeamLifecycleAndHumanRelay(t *testing.T) {
 	if last.To != "boss" || last.ReplyTo != "direct" {
 		t.Fatal(last)
 	}
-	*now = chat.Room.Actors["developer"].NextCheck
 	client.observed = codex.Observation{ThreadStatus: "idle", LatestTurnID: "dev-1", LatestTurnStatus: "completed"}
 	client.execute = func(ctx context.Context, c codex.Command) (codex.Result, error) {
 		start(t, c, "dev-thread", "dev-2")
