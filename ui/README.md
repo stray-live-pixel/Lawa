@@ -48,6 +48,9 @@ go build -o bin/lawa ./cmd/lawa
 
 ## Устройство и расширение
 
+[Карта frontend](FRONTEND.md) — точки входа, связи и условия, которые важно сохранять.
+Обновляйте её при изменении структуры UI; подробности оставляйте в коде и этом README.
+
 - `src/App.tsx` — маршруты, фильтры URL, расписание и главная страница.
 - `src/components/Tree.tsx`, `RunInfo.tsx` — дерево, детали и действия запуска.
 - `WorkflowGraph.tsx` — React Flow и раскладка Dagre; отдельный lazy chunk.
