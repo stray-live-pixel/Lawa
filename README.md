@@ -665,6 +665,8 @@ Decision-fan-out достигает пару «волна + target» не бол
 созданное `cancelled`-посещение в прежнем чате. Полный пример цикла:
 [fix-until-green.json](examples/fix-until-green.json). Пример if/else с
 параллельным fan-out: [risk-routing.json](examples/risk-routing.json).
+Простой [цикл до готового PR](examples/pr-cycle.md): реализация → ревью →
+исправление блокеров до APPROVE, без слияния. На входе достаточно ссылки на issue.
 Готовый [цикл разработки](examples/development-cycle.md): программист → ревьювер → QA,
 с возвратами на исправление и ограничением числа попыток.
 
