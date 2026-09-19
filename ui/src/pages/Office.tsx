@@ -113,6 +113,46 @@ export default function Office() {
           ))}
         </div>
       </OfficeMap>
+      {/* Список вне камеры сохраняет читаемую ширину текста на телефоне.
+          Показываем и прежние статусы: старые кадры могут не содержать wait. */}
+      {actorIds.length > 0 && (
+        <section className="office-activity" aria-label="Состояние сотрудников">
+          <ul>
+            {actorIds.map((id) => {
+              const actor = actors[id];
+              const name =
+                chat?.members[id]?.name ||
+                (id === 'boss'
+                  ? 'Босс'
+                  : id === 'developer'
+                    ? 'Разработчик'
+                    : id);
+              return (
+                <li key={id}>
+                  <div className="office-activity-heading">
+                    <Text variant="subheader-1">{name}</Text>
+                    <Button
+                      size="s"
+                      view="flat"
+                      onClick={() => setPhoneOpen(true)}
+                      aria-label={`Открыть общий чат: ${name}`}
+                    >
+                      В чат
+                    </Button>
+                  </div>
+                  <Text as="div" variant="body-1">
+                    {id === 'boss' && chat?.room?.achievedAt
+                      ? 'Цель достигнута'
+                      : employeeMessage(actor, player.at) ||
+                        states[actor.status] ||
+                        states.idle}
+                  </Text>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
       <TeamPlayer player={player} />
       {phoneOpen && (
         <TeamPhone
@@ -151,11 +191,7 @@ function Employee({
   const sprite = useEmployeeSprite(id, avatar || id);
   const status = actor?.status || 'idle';
   const label = states[status] || states.idle;
-  const message = actor?.wait
-    ? waitLabel(actor.wait, at)
-    : status === 'working' || status === 'blocked' || status === 'unknown'
-      ? actor?.summary
-      : '';
+  const message = employeeMessage(actor, at);
   return (
     <div className={`office-employee office-${id}`} style={placement}>
       <div className="office-sprite">
@@ -205,4 +241,13 @@ function Employee({
       </div>
     </div>
   );
+}
+
+// Карта и мобильный список читают один кадр и одинаково считают длительность.
+function employeeMessage(actor: TeamActor | undefined, at: number): string {
+  return actor?.wait
+    ? waitLabel(actor.wait, at)
+    : actor && ['working', 'blocked', 'unknown'].includes(actor.status)
+      ? actor.summary || ''
+      : '';
 }

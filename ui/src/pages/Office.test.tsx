@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, expect, it, vi } from 'vitest';
 import { AppTheme } from '../components/Theme';
@@ -82,7 +82,11 @@ it('показывает приглашённого Разработчика и 
     await screen.findByRole('button', { name: 'Разработчик: Работает' }),
   ).toBeVisible();
   expect(screen.getByRole('button', { name: 'Босс: Мониторит' })).toBeVisible();
-  expect(screen.getByText('Проверяю прыжок')).toBeVisible();
+  expect(
+    within(screen.getByRole('region', { name: 'Карта офиса' })).getByText(
+      'Проверяю прыжок',
+    ),
+  ).toBeVisible();
 });
 
 // Новый ID не требует отдельного компонента. Образ и подпись берутся из конфига,
@@ -193,40 +197,46 @@ it('различает причины ожидания и показывает �
   const since = new Date(Date.now() - 120000).toISOString();
   vi.stubGlobal(
     'fetch',
-    vi.fn(
-      async () =>
-        new Response(
-          JSON.stringify({
-            runId: 'waiting',
-            goal: 'Проверка',
-            members: {},
-            messages: [],
-            room: {
-              actors: {
-                boss: {
-                  status: 'idle',
-                  wait: { kind: 'no_messages', source: 'runtime', since },
-                },
-                developer: {
-                  status: 'idle',
-                  wait: { kind: 'capacity', source: 'runtime', since },
-                },
-                reviewer: {
-                  status: 'idle',
-                  wait: {
-                    kind: 'result',
-                    source: 'actor',
-                    since,
-                    actorId: 'developer',
-                    messageId: 'report',
-                    text: 'Нужен результат',
+    vi.fn(async (url) =>
+      url === '/api/teams'
+        ? new Response(
+            JSON.stringify({
+              teams: [{ runId: 'waiting', goal: 'Проверка' }],
+              problems: [],
+            }),
+          )
+        : new Response(
+            JSON.stringify({
+              runId: 'waiting',
+              goal: 'Проверка',
+              members: {},
+              messages: [],
+              room: {
+                actors: {
+                  boss: {
+                    status: 'idle',
+                    wait: { kind: 'no_messages', source: 'runtime', since },
                   },
+                  developer: {
+                    status: 'idle',
+                    wait: { kind: 'capacity', source: 'runtime', since },
+                  },
+                  reviewer: {
+                    status: 'idle',
+                    wait: {
+                      kind: 'result',
+                      source: 'actor',
+                      since,
+                      actorId: 'developer',
+                      messageId: 'report',
+                      text: 'Нужен результат',
+                    },
+                  },
+                  legacy: { status: 'idle' },
                 },
-                legacy: { status: 'idle' },
               },
-            },
-          }),
-        ),
+            }),
+          ),
     ),
   );
   render(
@@ -234,11 +244,34 @@ it('различает причины ожидания и показывает �
       <Office />
     </AppTheme>,
   );
-  expect(await screen.findByText(/Нет сообщений · 2 мин/)).toBeVisible();
-  expect(screen.getByText(/Ждёт свободный слот · 2 мин/)).toBeVisible();
-  expect(screen.getByText(/Ждёт результат · 2 мин/)).toHaveAttribute(
-    'title',
-    expect.stringContaining('Сообщил сотрудник'),
-  );
+  expect(
+    await within(
+      screen.getByRole('region', { name: 'Карта офиса' }),
+    ).findByText(/Нет сообщений · 2 мин/),
+  ).toBeVisible();
+  expect(
+    within(screen.getByRole('region', { name: 'Карта офиса' })).getByText(
+      /Ждёт свободный слот · 2 мин/,
+    ),
+  ).toBeVisible();
+  expect(
+    within(screen.getByRole('region', { name: 'Карта офиса' })).getByText(
+      /Ждёт результат · 2 мин/,
+    ),
+  ).toHaveAttribute('title', expect.stringContaining('Сообщил сотрудник'));
   expect(screen.getByRole('button', { name: 'legacy: Ждёт' })).toBeVisible();
+  // CSS выбирает видимое представление; DOM-тест проверяет содержимое списка
+  // и реальное открытие чата. Читаемость при 390×844 проверяет оператор.
+  const list = screen.getByLabelText('Состояние сотрудников');
+  list.style.display = 'block';
+  const activity = within(list);
+  expect(activity.getByText(/Ждёт результат · 2 мин/)).toBeInTheDocument();
+  expect(activity.getByText('Ждёт')).toBeInTheDocument();
+  await userEvent.setup().click(
+    activity.getByRole('button', {
+      name: 'Открыть общий чат: reviewer',
+      hidden: true,
+    }),
+  );
+  expect(await screen.findByRole('dialog')).toBeVisible();
 });
