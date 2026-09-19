@@ -1,3 +1,0 @@
-interface:
-  display_name: "commit"
-  short_description: "Готовые изменения → коммит → push → PR"

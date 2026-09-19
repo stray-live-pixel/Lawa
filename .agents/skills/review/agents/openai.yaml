@@ -1,3 +1,0 @@
-interface:
-  display_name: "review"
-  short_description: "Доказуемые дефекты и вердикт по коду или PR"
