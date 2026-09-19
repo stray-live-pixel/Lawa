@@ -80,9 +80,9 @@ func addressedTo(text string) (string, error) {
 }
 
 // appendRoomMessage — единая маршрутизация под team.lock. Сотрудники пишут
-// только во время адресного поручения; их ответы ссылаются на входящее сообщение.
-// Единственные исключения: Босс делегирует/уточняет, сотрудник передаёт ответ
-// Челу через Босса. Только Босс имеет право адресовать сообщение человеку.
+// только во время адресного хода. Коллеги обмениваются вопросами без создания
+// поручений; связи с входящей порцией сохраняют контекст общего обсуждения.
+// Только Босс имеет право адресовать сообщение человеку.
 func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, error) {
 	text = strings.TrimSpace(text)
 	if len(strings.Fields(text)) < 1 || len(strings.Fields(text)) > 50 || len(text) > 8192 || !utf8.ValidString(text) || id == "" || len(id) > 200 {
@@ -134,7 +134,17 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 		} else if author == "boss" && (chat.Room.Actors[to] != nil || to == "human") {
 			m.Kind = "request"
 		} else {
-			return m, errors.New("можно отвечать только отправителю текущего поручения")
+			// Новый вопрос коллеге или отчёт Боссу после уточнения у коллеги.
+			// Это связь контекста, а не делегирование входящего поручения:
+			// обязательства создаются только по авторству Босса/Чела.
+			m.Kind = "question"
+			if to == "boss" {
+				m.Kind = "reply"
+			}
+			m.ReplyToIDs = append([]string(nil), actor.Delivery.IDs...)
+			if len(m.ReplyToIDs) > 0 {
+				m.ReplyTo = m.ReplyToIDs[len(m.ReplyToIDs)-1]
+			}
 		}
 		actor.Summary = strings.Join(strings.Fields(strings.TrimPrefix(text, "@"+to))[:min(7, len(strings.Fields(strings.TrimPrefix(text, "@"+to))))], " ")
 	}

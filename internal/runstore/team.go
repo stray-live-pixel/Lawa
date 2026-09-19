@@ -41,7 +41,7 @@ type TeamMessage struct {
 	NotifyBoss bool      `json:"notifyBoss,omitempty"`
 	To         string    `json:"to,omitempty"`
 	Kind       string    `json:"kind,omitempty"`
-	ReplyToIDs []string  `json:"replyToIds,omitempty"` // Все входы порции, на которые отвечает реплика.
+	ReplyToIDs []string  `json:"replyToIds,omitempty"` // Входы порции, на которые отвечает реплика или опирается вопрос.
 	ReplyTo    string    `json:"replyTo,omitempty"`
 	ID         string    `json:"id"`
 	AuthorID   string    `json:"authorId"`
