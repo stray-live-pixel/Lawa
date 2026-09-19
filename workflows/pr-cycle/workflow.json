@@ -6,7 +6,7 @@
     {
       "id": "developer",
       "type": "agent",
-      "prompt": {"file": "prompts/pr-cycle/developer.md"},
+      "prompt": {"file": "prompts/developer.md"},
       "after": [],
       "maxVisits": 5,
       "onLimit": "failed"
@@ -14,13 +14,13 @@
     {
       "id": "reviewer",
       "type": "agent",
-      "prompt": {"file": "prompts/pr-cycle/reviewer.md"},
+      "prompt": {"file": "prompts/reviewer.md"},
       "after": ["developer"]
     },
     {
       "id": "result",
       "type": "agent",
-      "prompt": {"file": "prompts/pr-cycle/result.md"},
+      "prompt": {"file": "prompts/result.md"},
       "after": ["reviewer"],
       "decisions": {
         "approved": {"finish": "succeeded"},

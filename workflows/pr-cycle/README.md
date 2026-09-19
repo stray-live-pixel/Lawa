@@ -1,12 +1,12 @@
 # Задача → готовый PR
 
-[pr-cycle.json](pr-cycle.json) повторяет простой цикл: реализация и публикация PR →
+[workflow.json](workflow.json) повторяет простой цикл: реализация и публикация PR →
 независимое ревью → исправление блокеров → новое ревью. При APPROVE завершается.
 Merge, deploy и release не выполняются; комментарии в GitHub не публикуются.
 Итог ревью и история итераций остаются в памяти запуска Lawa.
 
 ```sh
-lawa run /absolute/Lawa/examples/pr-cycle.json \
+lawa run /absolute/Lawa/workflows/pr-cycle/workflow.json \
   --cwd /absolute/project \
   --task 'https://github.com/owner/repo/issues/123'
 ```
@@ -33,5 +33,5 @@ lawa run /absolute/Lawa/examples/pr-cycle.json \
 Проверить конфигурацию без запуска агентов:
 
 ```sh
-lawa validate examples/pr-cycle.json
+lawa validate workflows/pr-cycle/workflow.json
 ```
