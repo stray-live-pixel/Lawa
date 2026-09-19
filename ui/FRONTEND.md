@@ -12,7 +12,7 @@ React + TypeScript, Vite; Gravity UI и Gravity icons. Схема — React Flow
 |---|---|
 | Инициализация, маршруты, dashboard | `ui/src/main.tsx`, `ui/src/App.tsx` |
 | Определение workflow (`/view`) | `ui/src/pages/WorkflowDefinition.tsx`, `ui/src/components/DefinitionDetails.tsx` |
-| Граф и геометрия | `ui/src/components/WorkflowGraph.tsx`, `graphLayout.ts`, `displayVisit.ts` в той же папке |
+| Граф и геометрия | `ui/src/components/WorkflowGraph.tsx`, `graphLayout.ts`, `graphRouting.ts`, `graphDrawing.ts`, `graphLabel.ts`, `graphModel.ts`, `displayVisit.ts` в той же папке |
 | Дерево, фильтры, детали запуска | `ui/src/components/Tree.tsx`, `DashboardFilters.tsx`, `RunInfo.tsx` |
 | Общие контролы, темы и компоновка | `ui/src/components/ui.tsx`, `Theme.tsx`, `ui/src/styles.css` |
 | Размеры панелей | `ui/src/components/ResizableRunList.tsx` |
@@ -29,7 +29,8 @@ React + TypeScript, Vite; Gravity UI и Gravity icons. Схема — React Flow
 - `Theme.tsx` задаёт русский язык Gravity и системную/светлую/тёмную тему. Тема хранится в `lawa-theme`; сбой localStorage не должен ломать UI.
 - `styles.css` содержит общие `--panel-toolbar-height`, `--panel-inset` и алиасы цветов Gravity. Глобальные заголовки и классы используются несколькими экранами.
 - `ResizableRunList` обслуживает обе панели и сохраняет их ширину независимо; есть pointer- и клавиатурное управление. Не делай отдельную несовместимую реализацию для нового экрана.
-- Геометрия графа зависит от топологии, а не от каждого ответа polling. Выбранное посещение связывает статус, результат и сообщения; оно не всегда последнее.
+- `graphModel.ts` добавляет только визуальные маркеры и проверяет сохранённую причину посещения. `graphLayout.ts` и `graphDense.ts` размещают узлы и порты по [геометрическому контракту](GRAPH_DESIGN.md), `graphRouting.ts` обходит препятствия, `graphDrawing.ts` объединяет общие стволы и обрезает их у непрозрачного наконечника. `graphLabel.ts` измеряет и сокращает подписи до раскладки.
+- Геометрия зависит от топологии и текста, а не polling, статусов и выбранного посещения. Выбор связывает статус, причину, результат и сообщения одного visit; `Attempt` — отдельный технический счётчик. Старые исполнения без структурированного `Cause` не получают выдуманную подсветку.
 - В `/view` выбор шага связан с URL. Back/forward должен восстанавливать выбор. Определение не содержит реальных runtime-статусов и посещений.
 - `usePoll` отменяет запросы и защищается от устаревших ответов. Не добавляй конкурирующий polling; скрытая тяжёлая панель не должна начинать ненужные загрузки.
 - `MarkdownDocument` копирует исходный Markdown, имеет ручной fallback при отказе Clipboard API, не исполняет HTML и показывает изображения ссылками. Сохраняй эти свойства при упрощении интерфейса.

@@ -119,17 +119,32 @@ export interface StepDefinition {
   Speed: string;
 }
 export interface GraphNode {
+  Icon?: string;
+  Title?: string;
+  Start?: boolean;
+  MaxVisits?: number;
+  OnLimit?: 'succeeded' | 'failed';
+  Marker?: 'start' | 'succeeded' | 'failed';
   Definition?: StepDefinition;
   ID: string;
   Prompt: string;
   Routes: string[] | null;
 }
 export interface GraphEdge {
+  Key?: string;
+  Finish?: string;
   From: string;
   To: string;
   Label: string;
 }
 export interface Execution {
+  RunNumber?: number;
+  Cause?: {
+    kind: 'start' | 'after' | 'decision' | 'decision_skipped';
+    sourceVisitIds?: string[];
+    decisionKey?: string;
+  };
+  DecisionRecord?: { key: string; finish?: string; applied: boolean };
   Key: string;
   StepID: string;
   State: string;
@@ -144,6 +159,7 @@ export interface Execution {
   Attempt: number;
 }
 export interface Graph {
+  StopVisitID?: string;
   Definition?: boolean;
   Version?: number;
   ID: string;

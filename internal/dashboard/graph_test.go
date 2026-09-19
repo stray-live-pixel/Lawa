@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -26,7 +27,7 @@ func TestGraphIncludesUnstartedDependencies(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(view.Nodes) != 2 || len(view.Edges) != 1 || view.Edges[0] != (graphEdge{"a", "b", ""}) {
+		if len(view.Nodes) != 2 || len(view.Edges) != 1 || view.Edges[0] != (graphEdge{From: "a", To: "b", Label: ""}) {
 			t.Fatalf("потеряна зависимость ещё не запущенного кубика: %+v", view)
 		}
 	}
@@ -40,12 +41,18 @@ func TestGraphKeepsRoutesAndVisits(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(view.Nodes) != 2 || len(view.Executions) != 3 || len(view.Edges) != 1 || view.Edges[0] != (graphEdge{"loop", "loop", "again"}) {
-		t.Fatalf("потеряны схема или посещения: %+v", view)
+	if len(view.Nodes) != 2 || len(view.Executions) != 3 || len(view.Edges) != 2 || view.Edges[0] != (graphEdge{From: "loop", To: "loop", Label: "again", Key: "again"}) {
+		t.Fatalf("потеряны схема или посещения: nodes=%d executions=%d edges=%+v", len(view.Nodes), len(view.Executions), view.Edges)
 	}
 	for i, entry := range view.Executions {
 		if entry.Key != snapshot.Meta.Visits[i].VisitID || !strings.Contains(entry.TraceURL, "visit="+entry.Key) {
 			t.Fatalf("неверная привязка истории: %+v", entry)
+		}
+		if entry.Cause == nil || entry.Cause.Kind != snapshot.Meta.Visits[i].Trigger.Kind || !reflect.DeepEqual(entry.Cause.SourceVisitIDs, snapshot.Meta.Visits[i].Trigger.SourceVisitIDs) || entry.Cause.DecisionKey != snapshot.Meta.Visits[i].Trigger.DecisionKey {
+			t.Fatalf("потеряна структурированная причина visit %s: %+v", entry.Key, entry.Cause)
+		}
+		if entry.State == "skipped" && entry.RunNumber != 0 || entry.StepID == "loop" && entry.RunNumber != entry.Visit {
+			t.Fatalf("активации смешаны с пропусками: %+v", entry)
 		}
 		if entry.Result != "" {
 			t.Fatal("старое сообщение ошибочно выдано за финальный отчёт")

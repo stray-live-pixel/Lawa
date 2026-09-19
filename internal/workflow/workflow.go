@@ -47,7 +47,9 @@ const (
 // Route — один статически разрешённый результат агентного решения. To запускает
 // перечисленные цели параллельно, а Finish завершает весь workflow. Ровно одна
 // форма обязательна; это проверяет Workflow.Validate после чтения всех ID.
+// Label — необязательная подпись UI; ключ решения и исполнение не меняет.
 type Route struct {
+	Label  *string          `json:"label,omitempty"`
 	To     []string         `json:"to,omitzero"`
 	Finish *TerminalOutcome `json:"finish,omitempty"`
 }
@@ -75,12 +77,14 @@ func (w Workflow) EffectiveVersion() int {
 }
 
 // Step — задача агента. ID является ключом графа, а не путём или ID чата Codex.
+// Icon — необязательное имя экспорта Gravity UI; проверяется по встроенному каталогу.
 // В v1 пустой DependsOn разрешает старт без ожидания, в v2 входящие технические
 // рёбра задаёт After, а присутствие Decisions превращает запуск в кубик решения.
 // Model, Effort и Speed — указатели, потому что отсутствие поля означает
 // наследование: Model сначала берётся из Workflow, остальные настройки — из Codex.
 // Явное значение попадает в неизменяемый снимок run и используется при продолжении.
 type Step struct {
+	Icon      *string          `json:"icon,omitempty"`
 	Character string           `json:"character,omitempty"`
 	ID        string           `json:"id"`
 	Type      string           `json:"type"`
@@ -263,6 +267,7 @@ func (workflow *Workflow) UnmarshalJSONFrom(decoder *jsontext.Decoder) error {
 // stepJSON отделяет присутствие необязательных полей от публичной модели Step.
 // Обязательные поля остаются обычными Go-значениями и проходят прежнюю Validate.
 type stepJSON struct {
+	Icon      optionalRuntimeSetting[string] `json:"icon"`
 	Character string                         `json:"character"`
 	ID        string                         `json:"id"`
 	Type      string                         `json:"type"`
@@ -287,8 +292,8 @@ func (step *Step) UnmarshalJSONFrom(decoder *jsontext.Decoder) error {
 		return err
 	}
 	*step = Step{
-		Character: raw.Character,
-		ID:        raw.ID, Type: raw.Type, Prompt: raw.Prompt,
+		Character: raw.Character, Icon: raw.Icon.pointer(),
+		ID: raw.ID, Type: raw.Type, Prompt: raw.Prompt,
 		DependsOn: []string(raw.DependsOn), After: []string(raw.After), Decisions: map[string]Route(raw.Decisions),
 		MaxVisits: raw.MaxVisits.pointer(), OnLimit: raw.OnLimit.pointer(),
 		Model: raw.Model.pointer(), Effort: raw.Effort.pointer(), Speed: raw.Speed.pointer(),
@@ -300,8 +305,9 @@ func (step *Step) UnmarshalJSONFrom(decoder *jsontext.Decoder) error {
 // неизвестное поле внутри route не должно теряться из-за пользовательского
 // UnmarshalJSONFrom у окружающего Step.
 type routeJSON struct {
-	To     stringList              `json:"to"`
-	Finish optionalTerminalOutcome `json:"finish"`
+	Label  optionalRuntimeSetting[string] `json:"label"`
+	To     stringList                     `json:"to"`
+	Finish optionalTerminalOutcome        `json:"finish"`
 }
 
 // UnmarshalJSONFrom отклоняет null и неизвестные поля до семантической проверки
@@ -317,7 +323,7 @@ func (route *Route) UnmarshalJSONFrom(decoder *jsontext.Decoder) error {
 	if err := json.UnmarshalDecode(decoder, &raw, json.RejectUnknownMembers(true)); err != nil {
 		return err
 	}
-	*route = Route{To: []string(raw.To), Finish: raw.Finish.pointer()}
+	*route = Route{Label: raw.Label.pointer(), To: []string(raw.To), Finish: raw.Finish.pointer()}
 	return nil
 }
 
@@ -370,6 +376,9 @@ func (w Workflow) Validate() error {
 		}
 		if version == VersionAgentGraph && (s.Type != "agent" || strings.TrimSpace(s.Prompt) == "") {
 			return fmt.Errorf("шаг %q: нужны type=agent и непустой prompt", s.ID)
+		}
+		if s.Icon != nil && !graphIcons[*s.Icon] {
+			return fmt.Errorf("шаг %q: неизвестная icon %q; нужно имя экспорта @gravity-ui/icons", s.ID, *s.Icon)
 		}
 		subject := fmt.Sprintf("шаг %q", s.ID)
 		if err := validateOptionalSetting(subject, "model", s.Model); err != nil {
@@ -453,6 +462,9 @@ func validateAgentGraph(w Workflow, indices map[string]int) error {
 				return fmt.Errorf("шаг %q: нужен непустой ключ решения", step.ID)
 			}
 			route := step.Decisions[key]
+			if route.Label != nil && strings.TrimSpace(*route.Label) == "" {
+				return fmt.Errorf("шаг %q, решение %q: label должна быть непустой", step.ID, key)
+			}
 			hasTargets, hasFinish := route.To != nil, route.Finish != nil
 			if hasTargets == hasFinish || hasTargets && len(route.To) == 0 {
 				return fmt.Errorf("шаг %q, решение %q: нужен ровно один из непустого to или finish", step.ID, key)

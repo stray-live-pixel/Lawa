@@ -12,7 +12,7 @@ import (
 // workflow не меняет fixture автоматически: топологию обновляют явно.
 func migrationPreviewRoots(now time.Time) []*runNode {
 	ids := []string{"page-plan", "implement-1", "implement-2", "implement-3", "implement-4", "implement-5", "integrate", "review", "release", "optimization-plan", "optimize", "optimization-release", "report", "project-map", "final-report"}
-	edges := []graphEdge{{"report", "page-plan", ""}, {"page-plan", "project-map", "finalize"}, {"page-plan", "implement-1", "work_1"}, {"page-plan", "implement-1", "work_2"}, {"page-plan", "implement-2", "work_2"}, {"page-plan", "implement-1", "work_3"}, {"page-plan", "implement-2", "work_3"}, {"page-plan", "implement-3", "work_3"}, {"page-plan", "implement-1", "work_4"}, {"page-plan", "implement-2", "work_4"}, {"page-plan", "implement-3", "work_4"}, {"page-plan", "implement-4", "work_4"}, {"page-plan", "implement-1", "work_5"}, {"page-plan", "implement-2", "work_5"}, {"page-plan", "implement-3", "work_5"}, {"page-plan", "implement-4", "work_5"}, {"page-plan", "implement-5", "work_5"}, {"implement-1", "integrate", ""}, {"implement-2", "integrate", ""}, {"implement-3", "integrate", ""}, {"implement-4", "integrate", ""}, {"implement-5", "integrate", ""}, {"integrate", "review", ""}, {"review", "release", ""}, {"release", "optimization-plan", "optimize"}, {"release", "report", "report"}, {"optimization-plan", "optimize", ""}, {"optimize", "optimization-release", ""}, {"optimization-release", "report", "report"}, {"project-map", "final-report", ""}}
+	edges := []graphEdge{{From: "report", To: "page-plan", Label: ""}, {From: "page-plan", To: "project-map", Label: "finalize"}, {From: "page-plan", To: "implement-1", Label: "work_1"}, {From: "page-plan", To: "implement-1", Label: "work_2"}, {From: "page-plan", To: "implement-2", Label: "work_2"}, {From: "page-plan", To: "implement-1", Label: "work_3"}, {From: "page-plan", To: "implement-2", Label: "work_3"}, {From: "page-plan", To: "implement-3", Label: "work_3"}, {From: "page-plan", To: "implement-1", Label: "work_4"}, {From: "page-plan", To: "implement-2", Label: "work_4"}, {From: "page-plan", To: "implement-3", Label: "work_4"}, {From: "page-plan", To: "implement-4", Label: "work_4"}, {From: "page-plan", To: "implement-1", Label: "work_5"}, {From: "page-plan", To: "implement-2", Label: "work_5"}, {From: "page-plan", To: "implement-3", Label: "work_5"}, {From: "page-plan", To: "implement-4", Label: "work_5"}, {From: "page-plan", To: "implement-5", Label: "work_5"}, {From: "implement-1", To: "integrate", Label: ""}, {From: "implement-2", To: "integrate", Label: ""}, {From: "implement-3", To: "integrate", Label: ""}, {From: "implement-4", To: "integrate", Label: ""}, {From: "implement-5", To: "integrate", Label: ""}, {From: "integrate", To: "review", Label: ""}, {From: "review", To: "release", Label: ""}, {From: "release", To: "optimization-plan", Label: "optimize"}, {From: "release", To: "report", Label: "report"}, {From: "optimization-plan", To: "optimize", Label: ""}, {From: "optimize", To: "optimization-release", Label: ""}, {From: "optimization-release", To: "report", Label: "report"}, {From: "project-map", To: "final-report", Label: ""}}
 	scenarios := []struct {
 		id, label, state string
 		completed        int
@@ -28,7 +28,7 @@ func migrationPreviewRoots(now time.Time) []*runNode {
 	var roots []*runNode
 	for index, scenario := range scenarios {
 		id := "preview-migration-" + scenario.id
-		graph := &graphView{ID: id, Name: "sp-main-migration · " + scenario.label, State: scenario.state,
+		graph := &graphView{Version: 2, ID: id, Name: "sp-main-migration · " + scenario.label, State: scenario.state,
 			Prompt: "Демонстрационные данные для разработки UI. Агенты не запускаются.", Edges: edges}
 		node := &runNode{ID: id, Name: graph.Name, State: scenario.state, Tone: tone(scenario.state),
 			AgentGraph: true, TotalSteps: len(ids), PreviewGraph: graph,
@@ -84,7 +84,7 @@ func migrationPreviewRoots(now time.Time) []*runNode {
 					routes = append(routes, edge.Label+" → "+edge.To)
 				}
 			}
-			graph.Nodes = append(graph.Nodes, graphNode{ID: stepID, Prompt: "Демонстрационный кубик", Routes: routes})
+			graph.Nodes = append(graph.Nodes, graphNode{ID: stepID, Start: stepID == "page-plan", Prompt: "Демонстрационный кубик", Routes: routes})
 			// pending ещё не имеет посещения; завершённый результат не показываем заранее.
 			if state != "pending" {
 				result := ""

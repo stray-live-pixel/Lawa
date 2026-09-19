@@ -499,20 +499,80 @@ pre {
   color: inherit;
   font-size: 11px;
 }
+/* Псевдоэлемент рисует единственную рамку наружу; размеры контента неизменны. */
+.cube {
+  position: relative;
+  border: 0 !important;
+  border-radius: 8px;
+  --cube-line: var(--g-color-line-generic);
+}
+.cube::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border: 1px solid var(--cube-line);
+  border-radius: 9px;
+  pointer-events: none;
+}
 .cube.selected {
-  background: var(--g-color-base-selection);
-  outline: 2px solid var(--g-color-line-brand);
-  outline-offset: 1px;
+  background:
+    linear-gradient(
+      color-mix(in srgb, var(--cube-line) 22%, transparent),
+      color-mix(in srgb, var(--cube-line) 22%, transparent)
+    ),
+    var(--bg);
+}
+.cube.selected::after {
+  inset: -3px;
+  border-width: 3px;
+  border-radius: 11px;
 }
 .cube.tone-running,
-.cube.tone-starting {
-  border-color: var(--g-color-line-info);
+.cube.tone-starting,
+.cube.tone-waiting_for_approval {
+  --cube-line: var(--g-color-line-info);
+}
+.cube.tone-succeeded {
+  --cube-line: var(--g-color-line-positive);
 }
 .cube.tone-failed {
-  border-color: var(--g-color-line-danger);
+  --cube-line: var(--g-color-line-danger);
 }
-.cube.tone-skipped {
+.cube.tone-skipped::after {
   border-style: dashed;
+}
+.cube-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+}
+.cube-heading > .g-icon {
+  flex-shrink: 0;
+}
+.graph-marker {
+  align-items: center;
+  background: var(--g-color-base-generic-ultralight);
+}
+.graph-marker .cube-heading,
+.graph-marker strong {
+  color: inherit;
+}
+.graph-marker strong {
+  font-size: 13px;
+}
+
+.cube.tone-not_started {
+  color: var(--muted);
+}
+.cube.graph-marker {
+  --cube-line: var(--g-color-line-generic);
+}
+.g-root_theme_light {
+  --lawa-graph-edge: #808080;
+}
+.g-root_theme_dark {
+  --lawa-graph-edge: #918e90;
 }
 .note {
   color: var(--muted);
@@ -719,16 +779,20 @@ pre {
 }
 .graph-edge-label {
   position: absolute;
-  width: 135px;
-  padding: 3px 5px;
-  border-radius: 4px;
-  background: var(--g-color-base-background);
-  color: var(--g-color-text-secondary);
-  text-align: center;
-  font-size: 11px;
-  line-height: 16px;
-  overflow-wrap: anywhere;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+  font-size: 13px;
+  line-height: 18px;
   pointer-events: none;
+  max-width: 120px;
+  max-height: 54px;
+  overflow: hidden;
+}
+.graph-edge-label span {
+  display: block;
+  white-space: pre;
 }
 
 /* Разворачивание меняет обычную сетку страницы, без overlay и перемещения
