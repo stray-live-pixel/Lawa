@@ -59,7 +59,9 @@ vi.mock('@xyflow/react', () => ({
   ),
   Background: () => null,
   Panel: () => null,
-  useReactFlow: () => ({ zoomIn() {}, zoomOut() {}, fitView() {} }),
+  useReactFlow: () => ({ zoomIn() {}, zoomOut() {}, setViewport() {} }),
+  useStore: () => 0,
+  useNodesInitialized: () => false,
   Handle: () => null,
   Position: { Left: 'left', Right: 'right' },
   MarkerType: { ArrowClosed: 'arrowclosed' },
@@ -805,4 +807,26 @@ it('opens workflow definition and navigates steps without run APIs', async () =>
     '/api/definition',
     '/api/definition/source',
   ]);
+});
+
+// Полная разметка доступна заранее; отказ Clipboard не лишает ручного копирования.
+it('opens instruction source and preserves exact Markdown when clipboard fails', async () => {
+  const text =
+    '# Инструкция\n\n| A | B |\n|---|---|\n| 1 | 2 |\n\n```ts\nconst answer = 42;\n```';
+  Object.defineProperty(navigator, 'clipboard', {
+    configurable: true,
+    value: { writeText: vi.fn().mockRejectedValue(new Error('denied')) },
+  });
+  render(<MarkdownDocument text={text} label="Инструкция шага" reader />);
+  fireEvent.click(screen.getByRole('button', { name: 'Исходник инструкции' }));
+  expect(
+    screen.getByLabelText('Исходный Markdown: Инструкция шага'),
+  ).toHaveValue(text);
+  fireEvent.click(screen.getByRole('button', { name: 'Скопировать Markdown' }));
+  await waitFor(() =>
+    expect(
+      screen.getByLabelText('Исходный Markdown: Инструкция шага'),
+    ).toHaveFocus(),
+  );
+  expect(navigator.clipboard.writeText).toHaveBeenCalledWith(text);
 });
