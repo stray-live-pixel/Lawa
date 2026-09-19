@@ -66,10 +66,6 @@ func TestConfiguredDesignerLifecycle(t *testing.T) {
 	if len(chat.History.Frames[0].Actors) != 1 {
 		t.Fatal("личность появилась раньше приглашения")
 	}
-	process(t, e, run, "designer")
-	if client.calls != 1 {
-		t.Fatal("таймер обойдён")
-	}
 	// Прямой вопрос Чела будит и Босса даже до первого достижения цели.
 	postHuman(t, e, run, "question", "@designer Какой цвет подходит?")
 	chat = readChat(t, e, run)

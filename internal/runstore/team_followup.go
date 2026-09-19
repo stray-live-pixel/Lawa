@@ -8,8 +8,8 @@ func TeamMessageForActor(m TeamMessage, id string) bool {
 	return m.To == id || id == "boss" && m.AuthorID == "human" && m.NotifyBoss
 }
 
-// TeamHasUrgentMessages сохраняет немедленное пробуждение, если обращение Чела
-// пришло во время turn. Ответ сотрудника на такое обращение будит Босса тоже.
+// TeamHasUrgentMessages выделяет обращения Чела и связанные ответы, которые
+// нельзя поглотить завершением цели. Для пробуждения подходят все адресные сообщения.
 func TeamHasUrgentMessages(chat TeamChat, id string, from int) bool {
 	for _, m := range chat.Messages[from:] {
 		if !TeamMessageForActor(m, id) {
@@ -29,6 +29,18 @@ func TeamHasUrgentMessages(chat TeamChat, id string, from int) bool {
 	return false
 }
 
+// TeamHasPendingMessages проверяет адресный хвост после текущей порции.
+// Вызывается под team.lock: сообщения до End уже доставлены, новые нельзя
+// потерять при завершении или восстановлении хода.
+func TeamHasPendingMessages(chat TeamChat, id string, from int) bool {
+	for _, m := range chat.Messages[from:] {
+		if TeamMessageForActor(m, id) {
+			return true
+		}
+	}
+	return false
+}
+
 // wakeForMessage изменяет только расписание, не сбрасывает Delivery/ошибки.
 // При занятом сотруднике finish проверит непрочитанный хвост; неоднозначный
 // старый turn остаётся заблокированным, даже если Чел прислал новое поручение.
@@ -40,9 +52,7 @@ func wakeForMessage(chat *TeamChat, m TeamMessage) {
 		if !TeamMessageForActor(m, id) || a.Delivery != nil || a.Status == "blocked" {
 			continue
 		}
-		if m.AuthorID == "human" || a.NextCheck.IsZero() || TeamHasUrgentMessages(*chat, id, len(chat.Messages)-1) {
-			a.NextCheck = m.Date
-		}
+		a.NextCheck = m.Date
 	}
 }
 
