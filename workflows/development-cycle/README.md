@@ -1,6 +1,6 @@
 # Цикл разработки задачи
 
-[development-cycle.json](development-cycle.json) — последовательный workflow Lawa v2
+[workflow.json](workflow.json) — последовательный workflow Lawa v2
 с четырьмя ролями. Постановка передаётся при запуске через `--task-file` или `--task`.
 
 ```mermaid
@@ -77,7 +77,7 @@ QA frontend запускается по решению reviewer `approve`, фи�
 Максимум пять посещений программиста: первая реализация и четыре доработки.
 При исчерпании лимита или блокировке workflow завершается как `failed`.
 В случае необходимости решения человека вопрос остаётся в отчёте; автоматического
-ожидания ответа этот пример не реализует. Модель наследуется из настроек Codex.
+ожидания ответа этот workflow не реализует. Модель наследуется из настроек Codex.
 
 GitHub issue хранит хронологию всех итераций. Каждый участник после каждого
 посещения (кроме раннего пропуска QA frontend без frontend-изменений) публикует отдельный комментарий: роль, runId/visitId, PR, SHA, выполненная
@@ -135,13 +135,13 @@ Commit, push и создание/обновление PR разрешены пр
 Проверка конфигурации из корня репозитория Lawa:
 
 ```sh
-lawa validate examples/development-cycle.json
+lawa validate workflows/development-cycle/workflow.json
 ```
 
 Пример команды запуска (замени пути на реальные):
 
 ```sh
-lawa run /absolute/Lawa/examples/development-cycle.json \
+lawa run /absolute/Lawa/workflows/development-cycle/workflow.json \
   --cwd /absolute/project \
   --task-file /absolute/task.md
 ```

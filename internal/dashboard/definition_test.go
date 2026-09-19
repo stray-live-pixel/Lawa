@@ -14,7 +14,7 @@ import (
 // TestDefinitionExample проверяет реальный цикл без runstore: порядок проверок,
 // возвраты, исходы, лимиты и раскрытый шаблон остаются в снимке.
 func TestDefinitionExample(t *testing.T) {
-	path := filepath.Join("..", "..", "examples", "development-cycle.json")
+	path := filepath.Join("..", "..", "workflows", "development-cycle", "workflow.json")
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)

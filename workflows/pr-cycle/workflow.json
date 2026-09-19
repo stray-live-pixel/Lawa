@@ -1,0 +1,34 @@
+{
+  "version": 2,
+  "id": "pr-cycle",
+  "start": ["developer"],
+  "steps": [
+    {
+      "id": "developer",
+      "type": "agent",
+      "prompt": {"file": "prompts/developer.md"},
+      "after": [],
+      "maxVisits": 5,
+      "onLimit": "failed"
+    },
+    {
+      "id": "reviewer",
+      "type": "agent",
+      "prompt": {"file": "prompts/reviewer.md"},
+      "after": ["developer"]
+    },
+    {
+      "id": "result",
+      "type": "agent",
+      "prompt": {"file": "prompts/result.md"},
+      "after": ["reviewer"],
+      "decisions": {
+        "approved": {"finish": "succeeded"},
+        "fix": {"to": ["developer"]},
+        "blocked": {"finish": "failed"}
+      },
+      "maxVisits": 5,
+      "onLimit": "failed"
+    }
+  ]
+}

@@ -665,7 +665,10 @@ Decision-fan-out достигает пару «волна + target» не бол
 созданное `cancelled`-посещение в прежнем чате. Полный пример цикла:
 [fix-until-green.json](examples/fix-until-green.json). Пример if/else с
 параллельным fan-out: [risk-routing.json](examples/risk-routing.json).
-Готовый [цикл разработки](examples/development-cycle.md): программист → ревьювер → QA,
+Рабочие сценарии разработки Lawa собраны в [workflows](workflows/README.md),
+учебные примеры — в `examples`. Простой [цикл до готового PR](workflows/pr-cycle/README.md): реализация → ревью →
+исправление блокеров до APPROVE, без слияния. На входе достаточно ссылки на issue.
+Готовый [цикл разработки](workflows/development-cycle/README.md): программист → ревьювер → QA,
 с возвратами на исправление и ограничением числа попыток.
 
 Статические рёбра `after` сами образуют DAG. Каждый кубик v2 должен быть достижим
@@ -907,8 +910,8 @@ UI показывает Markdown и копирует исходную разме
 ### Посмотреть workflow до запуска
 
 ```sh
-lawa view examples/development-cycle.json
-lawa view examples/development-cycle.json --no-open
+lawa view workflows/development-cycle/workflow.json
+lawa view workflows/development-cycle/workflow.json --no-open
 lawa view workflow.json --listen 127.0.0.1:60801
 ```
 
