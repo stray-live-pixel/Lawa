@@ -12,7 +12,6 @@ import {
   Panel,
   useReactFlow,
   useStore,
-  useNodesInitialized,
   getViewportForBounds,
   type Rect,
   Handle,
@@ -112,15 +111,23 @@ function GraphControls({
   bounds: Rect;
   selected?: string;
 }) {
-  const { zoomIn, zoomOut, getViewport, setViewport, getNode } = useReactFlow();
+  const {
+    zoomIn,
+    zoomOut,
+    getViewport,
+    setViewport,
+    getNode,
+    viewportInitialized,
+  } = useReactFlow();
   const width = useStore((state) => state.width);
   const height = useStore((state) => state.height);
-  const initialized = useNodesInitialized();
+  // Размеры узлов заданы раскладкой; ждём готовности камеры, а не измерения
+  // всех декоративных групп React Flow. Иначе первый fit может не выполняться.
   const started = useRef(false);
   // Только реальная смена размеров/выбора может поправить камеру. Polling,
   // тема и ручное перемещение не запускают fit и не сбрасывают масштаб.
   useEffect(() => {
-    if (!initialized || !width || !height) return;
+    if (!viewportInitialized || !width || !height) return;
     const timer = window.setTimeout(() => {
       if (!started.current) {
         started.current = true;
@@ -140,7 +147,7 @@ function GraphControls({
     width,
     height,
     selected,
-    initialized,
+    viewportInitialized,
     bounds,
     getNode,
     getViewport,
