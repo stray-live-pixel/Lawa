@@ -1012,6 +1012,12 @@ pre {
   max-width: 100%;
   overflow-x: auto;
 }
+/* Длинное значение не должно сжимать соседние столбцы до отдельных букв.
+   На узкой панели полная таблица доступна через горизонтальную прокрутку. */
+.definition-graph .markdown th,
+.definition-graph .markdown td {
+  min-width: 10rem;
+}
 .definition-graph textarea {
   min-height: 360px;
 }
