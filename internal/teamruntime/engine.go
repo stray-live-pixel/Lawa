@@ -20,6 +20,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/internal/codex"
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
+	"github.com/stray-live-pixel/Lawa/internal/workflow"
 )
 
 // Engine живёт вместе с lawa serve. Тик читает только локальную очередь;
@@ -404,6 +405,7 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 	}
 	role += "\nЕсли ждёшь конкретный ответ, приёмку или разрешение, сначала отправь адресное сообщение, затем вызови team_post с /wait {\"kind\":\"result|acceptance|permission\",\"actor_id\":\"id участника\",\"message_id\":\"ID своего сообщения\",\"text\":\"что требуется, до 40 слов\"}. Выбери одно значение kind. Это только отметка, она не посылает сообщение и не запускает коллегу. /wait {} снимает отметку. После нового входящего хода старое ожидание сбрасывается; при необходимости заяви его заново. Состояние и начало ожидания доступны в room.actors[id].wait."
 	role += sharedWorkspacePrompt
+	role += workflow.TaskClarityPrompt
 	// Личность берём из снимка заказа при каждом turn, включая продолжение thread.
 	// Общие правила маршрутизации остаются контрактом runtime, а не правом конфига.
 	character := chat.Room.Catalog[id]
