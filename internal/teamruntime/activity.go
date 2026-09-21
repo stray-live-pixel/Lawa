@@ -14,6 +14,9 @@ import (
 // Поток токенов, reasoning, аргументы инструментов и вывод команд не сохраняются.
 // Это краткое наблюдение, а не новый пост: оно никого не тегает и не будит.
 func (e *Engine) activity(run, id string, event codex.Event) error {
+	if err := e.metricEvent(run, id, event); err != nil {
+		return err
+	}
 	if event.Method != "item/started" && event.Method != "item/completed" {
 		return nil
 	}

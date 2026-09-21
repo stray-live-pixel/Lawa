@@ -65,6 +65,7 @@ func initializeRoom(chat *TeamChat, catalog map[string]workflow.Character) {
 	chat.Members["boss"] = TeamMember{Name: catalog["boss"].Name, Avatar: catalog["boss"].Avatar}
 	chat.Room = &TeamRoom{Catalog: catalog, Actors: map[string]*TeamActor{"boss": {NextCheck: now, Status: "idle"}}}
 	chat.Messages = append(chat.Messages, TeamMessage{ID: "initial-goal", AuthorID: "human", To: "boss", Kind: "goal", Date: now, Text: "@boss Проанализируй закреплённую цель и организуй выполнение."})
+	chat.Metrics = &TeamMetrics{RecordedFrom: now}
 	RefreshTeamWaits(chat, now)
 	recordTeamFrame(chat, now)
 }
@@ -93,6 +94,9 @@ func addressedTo(text string) (string, error) {
 func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, error) {
 	text = strings.TrimSpace(text)
 	input := text
+	if strings.HasPrefix(text, "/result ") || strings.HasPrefix(text, "/rework ") {
+		return postResultEvent(chat, author, id, text)
+	}
 	if strings.HasPrefix(text, "/discussion ") {
 		return decideDiscussion(chat, author, id, text)
 	}
@@ -258,6 +262,10 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 		actor.ApprovalPending = false
 		actor.Attempt++
 		actor.Delivery = &TeamDelivery{IDs: ids, End: len(chat.Messages)}
+		at := now.UTC()
+		execution := TeamExecutionFor(chat, actorID, now)
+		execution.ClaimedAt = &at
+		execution.NewThread = actor.ThreadID == ""
 		actor.Status, actor.Summary, actor.Error = "working", "Читает поручение", ""
 		claimed = true
 		return nil

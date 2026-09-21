@@ -51,7 +51,7 @@ func recordTeamTask(chat *TeamChat, m TeamMessage) {
 	if chat.Room.Tasks == nil {
 		chat.Room.Tasks = map[string]*TeamTask{}
 	}
-	if m.Kind != "discussion_decision" && (m.AuthorID == "boss" || m.AuthorID == "human") && m.To != "boss" && chat.Room.Actors[m.To] != nil {
+	if m.Kind != "discussion_decision" && m.Kind != "task_rework" && (m.AuthorID == "boss" || m.AuthorID == "human") && m.To != "boss" && chat.Room.Actors[m.To] != nil {
 		chat.Room.Tasks[m.ID] = &TeamTask{ID: m.ID, Assignee: m.To, Text: m.Text}
 	}
 }
@@ -115,6 +115,13 @@ func AcceptTeamTasks(ctx context.Context, root, run, author, id string, ids []st
 			}
 			if task.AcceptedAt != nil {
 				return errors.New("поручение уже принято")
+			}
+			// Возврат продолжает исходную задачу. Без этой проверки Босс мог бы
+			// принять старый отчёт и закрыть цель, пока доработка ещё в очереди.
+			for i, message := range chat.Messages {
+				if message.Kind == "task_rework" && slices.Contains(message.TaskIDs, taskID) && (i >= resultIndex || i >= actor.Cursor) {
+					return errors.New("после возврата нужен новый результат полученной доработки")
+				}
 			}
 		}
 		now := time.Now().UTC()

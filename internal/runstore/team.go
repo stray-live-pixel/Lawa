@@ -17,6 +17,7 @@ import (
 // TeamChat — общая доска корневого заказа. Текущая цель версионируется кадрами, сообщения добавляются
 // последовательно. Память кубиков остаётся рабочими заметками, чат — общими фактами.
 type TeamChat struct {
+	Metrics  *TeamMetrics          `json:"metrics,omitempty"`
 	History  *TeamHistory          `json:"history,omitempty"`
 	Room     *TeamRoom             `json:"room,omitempty"`
 	RunID    string                `json:"runId"`
@@ -112,6 +113,9 @@ func readTeam(dir *os.Root, s Snapshot) (TeamChat, error) {
 			return TeamChat{}, err
 		}
 	}
+	if err := validateTeamMetrics(chat.Metrics); err != nil {
+		return TeamChat{}, err
+	}
 	return chat, nil
 }
 
@@ -129,11 +133,12 @@ func ReadTeam(root, runID string) (TeamChat, error) {
 	return readTeam(dir, s)
 }
 
-// ReadTeamForAgent сохраняет контракт общей памяти без кадров UI: история
-// визуальных состояний не должна раздувать контекст каждого team_read.
+// ReadTeamForAgent сохраняет рабочую память без истории UI и метрик.
+// Телеметрия предназначена для отчёта оператору, а не для контекста сотрудников.
 func ReadTeamForAgent(root, runID string) (TeamChat, error) {
 	chat, err := ReadTeam(root, runID)
 	chat.History = nil
+	chat.Metrics = nil
 	return chat, err
 }
 

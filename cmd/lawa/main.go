@@ -43,6 +43,8 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
       Открыть определение без запуска; loopback, свободный порт. Ctrl+C закрывает просмотр.
   lawa graph <run-id> [--theme dark|light] [--output <файл.png>] [--root <путь>]
       Сохранить PNG графа; по умолчанию тёмная тема, нужен PlantUML.
+  lawa metrics <run-id> [--root <путь>] [--at <RFC3339>]
+      Прочитать JSON-отчёт команды: время, ожидания, результаты и доступные токены.
   lawa status <run-id>
       Показать состояния и активность; для v2 — visits, решения и причину итога.
   lawa logs <run-id> [step-id] [--visit <visit-id>] [--follow]
@@ -110,7 +112,7 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
                                требует --yes.
   --codex-home <путь>          Корень скиллов; по умолчанию $CODEX_HOME или ~/.codex.
 
-view, graph, status, logs, validate, skill, version, update и help не запускают агентов.
+view, graph, metrics, status, logs, validate, skill, version, update и help не запускают агентов.
 serve исполняет сохранённые команды; новая цель создаётся только через CLI.
 Коды выхода: 0 — успех; 2 — ошибка ввода/интеграции; 130 — SIGINT; 143 — SIGTERM.
 После сигнала новые волны не стартуют, а активные turn получают turn/interrupt.
@@ -303,6 +305,8 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return viewCommand(ctx, args[1:], out, stderr, openViewBrowser)
 	case "graph":
 		return graphCommand(ctx, args[1:], out, deps)
+	case "metrics":
+		return metricsCommand(args[1:], out, deps)
 	case "status":
 		return statusCommand(args[1:], out, deps)
 	case "logs":
