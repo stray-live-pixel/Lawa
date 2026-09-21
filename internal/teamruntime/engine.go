@@ -197,6 +197,11 @@ func (e *Engine) Process(ctx context.Context, run, id string) error {
 	// После отмены всё равно сохраняем известный результат ограниченным контекстом.
 	saveCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if result.Status == "completed" || result.Status == "failed" || result.Status == "interrupted" {
+		if saveErr := e.finishMetric(saveCtx, run, id, result.Status, false); saveErr != nil {
+			return errors.Join(err, saveErr)
+		}
+	}
 	if result.Status != "completed" {
 		problem := "Ход не завершён: " + result.Status
 		if err != nil {
@@ -380,6 +385,9 @@ func (e *Engine) recover(ctx context.Context, run, id string, a *runstore.TeamAc
 		}
 		switch status {
 		case codex.WorkCompleted:
+			if err := e.finishMetric(ctx, run, id, "completed", true); err != nil {
+				return err
+			}
 			return e.finish(ctx, run, id)
 		case codex.WorkRunning, codex.WorkWaitingForApproval:
 			if err := e.change(ctx, run, id, func(a *runstore.TeamActor) { a.ApprovalPending = status == codex.WorkWaitingForApproval }); err != nil {
@@ -391,6 +399,11 @@ func (e *Engine) recover(ctx context.Context, run, id string, a *runstore.TeamAc
 			case <-time.After(3 * time.Second):
 			}
 		default:
+			if status == codex.WorkFailed || status == codex.WorkInterrupted {
+				if err := e.finishMetric(ctx, run, id, string(status), true); err != nil {
+					return err
+				}
+			}
 			return e.block(ctx, run, id, "Предыдущий ход остановлен: "+string(status), true)
 		}
 	}
@@ -403,6 +416,7 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 	if id == "boss" {
 		role = "Ты Босс: отвечаешь за общую цель и качество результата. Доступные личности перечислены ниже. При необходимости пригласи сотрудника через team_summon по его ID, затем дай поручение через team_post с @id. Проверяй результаты. Сам решай рабочие вопросы; проси помощи @human, когда сам решить не можешь. Не отвечай сотрудникам, которые тебя не тегнули, кроме выдачи новых поручений. Прямые вопросы и ответы коллег видны в team_read и не требуют твоего подтверждения; они не создают обязательных поручений. Если Чел поставил новую цель, обнови pin через team_set_goal (в старом чате: team_post с /goal <цель>). При обычном вопросе цель не меняй. Если Чел тегнул сотрудника, дождись его ответа через общий чат и передай Челу результат; не дублируй его поручение. Пока ответа нет, можешь уточнять вопросы и сообщать Челу статус, но не выдавай неполученный результат за проверенный. Если действий больше нет, заверши ход: ответ сотрудника разбудит тебя. Когда цель достигнута и работа сотрудников завершена, вызови team_complete с итогом для @human: результат, где его найти и как проверено, до 50 слов. Если сохранённый чат не предлагает team_complete, вызови team_post с текстом /complete @human <итог> — это то же явное действие. Это остановит таймеры до нового обращения Чела; затем сразу заверши ход."
 	}
+	role += "\nПроверяемый результат сотрудник публикует через team_post: /result @boss <что готово и где проверить>. Это заявление готовности, не приёмка. Босс возвращает такой результат через /rework <ID сообщения результата> @сотрудник <что исправить>; обычное уточнение не считается возвратом. Приёмка остаётся через team_accept."
 	role += "\nЕсли ждёшь конкретный ответ, приёмку или разрешение, сначала отправь адресное сообщение, затем вызови team_post с /wait {\"kind\":\"result|acceptance|permission\",\"actor_id\":\"id участника\",\"message_id\":\"ID своего сообщения\",\"text\":\"что требуется, до 40 слов\"}. Выбери одно значение kind. Это только отметка, она не посылает сообщение и не запускает коллегу. /wait {} снимает отметку. После нового входящего хода старое ожидание сбрасывается; при необходимости заяви его заново. Состояние и начало ожидания доступны в room.actors[id].wait."
 	role += sharedWorkspacePrompt
 	role += workflow.TaskClarityPrompt
@@ -440,7 +454,12 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 	command.OnTurn = func(turn string, _ func(context.Context) error) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		return e.change(ctx, run, id, func(a *runstore.TeamActor) { a.TurnID = turn; a.Delivery.TurnID = turn })
+		return runstore.UpdateTeam(ctx, e.Root, run, func(chat *runstore.TeamChat) error {
+			a := chat.Room.Actors[id]
+			a.TurnID, a.Delivery.TurnID = turn, turn
+			runstore.StartTeamExecution(chat, id, e.metricTime())
+			return nil
+		})
 	}
 	command.DynamicTools = []codex.DynamicTool{
 		{Name: "team_read", Description: "Прочитать цель, участников и общий чат.", InputSchema: []byte(`{"type":"object","properties":{},"additionalProperties":false}`)},
