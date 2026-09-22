@@ -362,7 +362,9 @@ func applyTaskCommand(chat *TeamChat, author string, in TaskCommand, cwd string)
 		if r.ID != in.ResultID || r.Revision != c.Revision || review.ResultID != r.ID || review.Verdict != "approve" {
 			return fail("нет актуального положительного заключения")
 		}
-		if a := chat.Room.Actors[task.Assignee]; a != nil && a.Delivery != nil {
+		// Следующая независимая карточка не задерживает приёмку этой. Для
+		// старых доставок без taskId сохраняем ожидание: их область неизвестна.
+		if a := chat.Room.Actors[task.Assignee]; a != nil && a.Delivery != nil && (a.Delivery.TaskID == "" || a.Delivery.TaskID == task.ID) {
 			return fail("сначала дождись завершения хода исполнителя")
 		}
 		if len(r.Artifacts) > 0 {

@@ -504,3 +504,118 @@ func TestTaskBlockerReschedulesWork(t *testing.T) {
 		t.Fatal("снятие блокера не создаёт готовность")
 	}
 }
+
+// Блокер до start должен дойти до Босса даже после завершения хода сотрудника.
+// Иначе курсор поглощает единственное уведомление, а повторный сигнал не создаётся.
+func TestTaskTodoBlockerReachesBossAfterTurn(t *testing.T) {
+	root, s := boardFixture(t)
+	run := s.Meta.RunID
+	boardCreate(t, root, run, "A")
+	if err := UpdateTeam(t.Context(), root, run, func(chat *TeamChat) error {
+		boss := chat.Room.Actors["boss"]
+		boss.Delivery = nil
+		boss.Status = "idle"
+		boss.Cursor = len(chat.Messages)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	boardCommand(t, root, run, "developer", "block", "A", func(in *TaskCommand) { in.Reason = "Нужен входной файл" })
+	state, err := ReadTeam(root, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blockID := state.Messages[len(state.Messages)-1].ID
+	if err := UpdateTeam(t.Context(), root, run, func(chat *TeamChat) error {
+		developer := chat.Room.Actors["developer"]
+		developer.Delivery = nil
+		developer.Status = "idle"
+		developer.Cursor = len(chat.Messages)
+		NotifyTeamResultReady(chat, "developer", blockID)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(time.Hour)
+	claimed, err := ClaimTeamDelivery(t.Context(), root, run, "boss", now)
+	if err != nil || !claimed {
+		t.Fatalf("Босс не получил блокер: claimed=%v err=%v", claimed, err)
+	}
+	chat, err := ReadTeam(root, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	delivery := chat.Room.Actors["boss"].Delivery
+	if len(delivery.IDs) != 1 || delivery.IDs[0] != blockID || delivery.TaskID != "" {
+		t.Fatalf("ожидалось одно уведомление, не назначение задачи: %+v", delivery)
+	}
+	if claimed, err := ClaimTeamDelivery(t.Context(), root, run, "boss", now); err != nil || claimed {
+		t.Fatalf("повторная доставка: %v, %v", claimed, err)
+	}
+	if claimed, err := ClaimTeamDelivery(t.Context(), root, run, "developer", now); err != nil || claimed {
+		t.Fatalf("заблокированная работа выдана исполнителю: %v, %v", claimed, err)
+	}
+}
+
+// Приёмка ждёт завершения хода своей задачи. Независимая следующая задача
+// того же сотрудника не должна задерживать готовый результат и его зависимости.
+func TestTaskAcceptWhileAssigneeWorksOnAnotherTask(t *testing.T) {
+	root, s := boardFixture(t)
+	run := s.Meta.RunID
+	boardCreate(t, root, run, "A")
+	boardCreate(t, root, run, "B")
+	boardWork(t, root, run, "A")
+	boardCommand(t, root, run, "developer", "report", "A", func(in *TaskCommand) {
+		in.Result = &TaskResult{Summary: "Результат готов", Links: []string{"https://example.invalid/result"}, Checks: []string{"Проверен"}, Limitations: "Без файлов"}
+	})
+	state, err := ReadTeam(root, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resultID := state.Room.Tasks["A"].Card.Results[0].ID
+	boardCommand(t, root, run, "boss", "review", "A", func(in *TaskCommand) {
+		in.ResultID, in.Verdict, in.Reason = resultID, "approve", "Результат проверен"
+	})
+	for _, taskID := range []string{"A", ""} {
+		if err := UpdateTeam(t.Context(), root, run, func(chat *TeamChat) error {
+			chat.Room.Actors["developer"].Delivery.TaskID = taskID
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		chat, err := ReadTeam(root, run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = ApplyTaskCommand(t.Context(), root, run, "boss", TaskCommand{
+			ID: "premature-accept-" + taskID, Action: "accept", TaskID: "A", Version: chat.Room.Tasks["A"].Card.Version,
+			ResultID: resultID, Reason: "Проверено", Integration: "Результат учтён",
+		})
+		if err == nil {
+			t.Fatal("приёмка до завершения своего или неопределённого хода")
+		}
+	}
+	if err := UpdateTeam(t.Context(), root, run, func(chat *TeamChat) error {
+		actor := chat.Room.Actors["developer"]
+		actor.Delivery, actor.Status, actor.Cursor = nil, "idle", len(chat.Messages)
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if claimed, err := ClaimTeamDelivery(t.Context(), root, run, "developer", time.Now().Add(time.Hour)); err != nil || !claimed {
+		t.Fatalf("следующая задача не выдана: %v, %v", claimed, err)
+	}
+	chat, err := ReadTeam(root, run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chat.Room.Actors["developer"].Delivery.TaskID != "B" {
+		t.Fatal("ожидалась задача B")
+	}
+	accepted := boardCommand(t, root, run, "boss", "accept", "A", func(in *TaskCommand) {
+		in.ResultID, in.Reason, in.Integration = resultID, "Проверено", "Результат учтён"
+	})
+	if accepted.Card.Status != "done" {
+		t.Fatal("готовый результат не принят")
+	}
+}

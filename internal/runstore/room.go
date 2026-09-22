@@ -272,9 +272,11 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 			if selected != nil && message.ID == selected.Card.ScheduleKey {
 				continue
 			}
-			if message.Kind == "task_change" && message.TaskID != "" {
+			// Готовность ограничивает выдачу работы исполнителю, но не служебные
+			// уведомления Боссу: блокер todo должен дойти независимо от scheduler.
+			if message.Kind == "task_change" && message.TaskID != "" && message.To == actorID {
 				task := chat.Room.Tasks[message.TaskID]
-				if task != nil && task.Card != nil && task.Card.Status == "todo" && task.Card.Cancellation == "" && (selected == nil || selected.ID != task.ID) {
+				if task != nil && task.Assignee == actorID && task.Card != nil && task.Card.Status == "todo" && task.Card.Cancellation == "" && (selected == nil || selected.ID != task.ID) {
 					continue
 				}
 			}
