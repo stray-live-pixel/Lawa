@@ -10,12 +10,14 @@ import (
 	"unicode/utf8"
 )
 
-// TeamTask — обязательство перед командой. ID совпадает с исходным сообщением:
-// получение и завершение Codex turn не означают выполнения поручения. Только
+// TeamTask — обязательство перед командой. У legacy ID совпадает с исходным
+// сообщением, у карточки задаётся явно. Получение и завершение Codex turn не означают выполнения поручения. Только
 // Босс после проверки конкретного результата записывает AcceptedAt и Evidence.
-// Любое обращение Босса/Чела к сотруднику учитывается, включая уточнения.
+// Старые обязательства сохраняются; новые карточки создаются явной командой.
 // Цель самого Босса хранится отдельно в pin и завершается через CompleteTeam.
 type TeamTask struct {
+	// Card отсутствует у старых поручений: им нельзя приписывать проверенную revision.
+	Card       *TaskCard  `json:"card,omitempty"`
 	ID         string     `json:"id"`
 	Assignee   string     `json:"assignee"`
 	Text       string     `json:"text"`
@@ -33,6 +35,9 @@ func initializeTeamTasks(chat *TeamChat) {
 		return
 	}
 	chat.Room.Tasks = map[string]*TeamTask{}
+	if chat.Room.TaskBoardVersion > 0 {
+		return
+	}
 	start := 0
 	for i, m := range chat.Messages {
 		if m.Kind == "achievement" {
@@ -107,6 +112,9 @@ func AcceptTeamTasks(ctx context.Context, root, run, author, id string, ids []st
 			task := chat.Room.Tasks[taskID]
 			if task == nil || task.Assignee != report.AuthorID || seen[taskID] {
 				return errors.New("неизвестное, чужое или повторное поручение")
+			}
+			if task.Card != nil {
+				return errors.New("версионируемая карточка требует проверки актуального результата; legacy-приёмка запрещена")
 			}
 			seen[taskID] = true
 			pos, ok := positions[taskID]

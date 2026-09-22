@@ -38,6 +38,10 @@ type TeamMember struct {
 // TeamMessage получает время и автора на стороне Lawa. ID — ключ повтора:
 // потеря сетевого подтверждения не должна удваивать сообщение при retry.
 type TeamMessage struct {
+	LinkInput       string       `json:"linkInput,omitempty"`
+	TaskSnapshot    *TeamTask    `json:"taskSnapshot,omitempty"`
+	TaskID          string       `json:"taskId,omitempty"`
+	TaskRevision    uint64       `json:"taskRevision,omitempty"`
 	Position        int          `json:"position,omitempty"` // Позиция в ответе чтения; исходный журнал задаёт порядок индексом.
 	Summary         *TeamSummary `json:"summary,omitempty"`
 	DiscussionID    string       `json:"discussionId,omitempty"`
@@ -282,6 +286,9 @@ func UpdateTeam(ctx context.Context, root, runID string, update func(*TeamChat) 
 	}
 	if err = update(&chat); err != nil {
 		return err
+	}
+	if chat.Room != nil {
+		wakeReadyTasks(&chat)
 	}
 	ensureTeamCompaction(&chat, time.Now())
 	RefreshTeamWaits(&chat, time.Now())

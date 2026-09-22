@@ -579,3 +579,40 @@
   margin-block: 8px;
   max-width: 100%;
 }
+
+/* Связи читаются и переносятся внутри узкой реплики; полный текст доступен
+   через исходное сообщение или карточку. Цвет не заменяет подписи действий. */
+.team-message-links,
+.team-task-details {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.team-message-links .g-button,
+.team-task-comment.g-button {
+  height: auto;
+  max-width: 100%;
+  text-align: left;
+}
+.team-message-links .g-button__text,
+.team-task-comment .g-button__text {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  padding-block: 4px;
+}
+.team-compose-reply {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+.team-compose-reply > .g-text {
+  flex: 1;
+  min-width: 0;
+}
+.team-task-details ul {
+  padding-left: 24px;
+}

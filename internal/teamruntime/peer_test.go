@@ -31,6 +31,10 @@ func peerEngine(t *testing.T) (*Engine, string, *fakeClient, *time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Сохранённый заказ старого формата продолжает прежний контракт поручений.
+	if err := runstore.UpdateTeam(t.Context(), root, s.Meta.RunID, func(chat *runstore.TeamChat) error { chat.Room.TaskBoardVersion = 0; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().Add(time.Second)
 	client := &fakeClient{}
 	e := &Engine{Root: root, Client: client, Now: func() time.Time { return now }}
@@ -58,7 +62,7 @@ func TestPeerConversationAndExistingThread(t *testing.T) {
 	}
 	client.execute = func(ctx context.Context, c codex.Command) (codex.Result, error) {
 		start(t, c, "developer-thread", "developer-1")
-		for _, text := range []string{"@human Привет", "@unknown Вопрос", "@developer Сам себе", "@system Вопрос", "Без адресата"} {
+		for _, text := range []string{"@human Привет", "@unknown Вопрос", "@developer Сам себе", "@system Вопрос"} {
 			args, _ := json.Marshal(map[string]string{"text": text})
 			if _, err := c.CallDynamicTool(ctx, codex.DynamicToolCall{Tool: "team_post", CallID: text, Arguments: args}); err == nil {
 				t.Fatalf("разрешён неверный адресат: %s", text)

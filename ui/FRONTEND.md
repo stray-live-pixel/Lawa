@@ -21,6 +21,7 @@ React + TypeScript, Vite; Gravity UI и Gravity icons. Схема — React Flow
 | Причины ожидания: подпись, длительность, происхождение; мобильный список вне камеры в `Office.tsx` | `ui/src/components/teamWait.ts`, поля `wait` в `TeamPhone.tsx`; время берётся из курсора плеера |
 | Сводки, единый архив и переход к источникам; граница только из видимого префикса истории | `ui/src/components/TeamConversation.tsx`; `TeamPhone.tsx` сохраняет ориентир прокрутки |
 | Карта офиса, чат, воспроизведение | `ui/src/components/OfficeMap.tsx`, `TeamPhone.tsx`, `TeamPlayer.tsx` и их CSS |
+| Карточка задачи, явные ответы и переходы в архив; история использует только видимые taskSnapshot | `ui/src/components/TeamTaskDetails.tsx`, связи в `TeamPhone.tsx`; read API `/api/teams/{run}/tasks` |
 | API и типы | `ui/src/hooks/api.ts`, `ui/src/types.ts` |
 
 Соседние `*.test.ts(x)` показывают проверяемые сценарии. `/preview` даёт демонстрационные данные dashboard, но не заменяет fixtures конкретного экрана.

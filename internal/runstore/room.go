@@ -18,7 +18,9 @@ const TeamIdleInterval = 5 * time.Minute
 // TeamRoom включает адресный runtime только для новых командных заказов.
 // Старые фиксированные workflow и их общая база не меняют способ исполнения.
 type TeamRoom struct {
-	Discussions map[string]*TeamDiscussion `json:"discussions,omitempty"`
+	TaskBoardVersion int                        `json:"taskBoardVersion,omitempty"`
+	TaskOperations   map[string]TaskReceipt     `json:"taskOperations,omitempty"`
+	Discussions      map[string]*TeamDiscussion `json:"discussions,omitempty"`
 	// Catalog — снимок доступных личностей из workflow при создании заказа.
 	// Только Actors означает приглашённых сотрудников. Каталог не меняется в ходе заказа.
 	Catalog map[string]workflow.Character `json:"catalog,omitempty"`
@@ -52,10 +54,12 @@ type TeamActor struct {
 // TeamDelivery фиксируется до сети. End отделяет текущую порцию адресных
 // сообщений от поступивших во время работы. Attempted запрещает слепой повтор.
 type TeamDelivery struct {
-	TurnID    string   `json:"turnId,omitempty"` // Только текущая доставка, не предыдущий turn личности.
-	IDs       []string `json:"ids"`
-	End       int      `json:"end"`
-	Attempted bool     `json:"attempted"`
+	TaskID       string   `json:"taskId,omitempty"`
+	TaskRevision uint64   `json:"taskRevision,omitempty"`
+	TurnID       string   `json:"turnId,omitempty"` // Только текущая доставка, не предыдущий turn личности.
+	IDs          []string `json:"ids"`
+	End          int      `json:"end"`
+	Attempted    bool     `json:"attempted"`
 }
 
 // initializeRoom создаёт только Босса. Постановка цели является первым явным
@@ -63,7 +67,7 @@ type TeamDelivery struct {
 func initializeRoom(chat *TeamChat, catalog map[string]workflow.Character) {
 	now := time.Now().UTC()
 	chat.Members["boss"] = TeamMember{Name: catalog["boss"].Name, Avatar: catalog["boss"].Avatar}
-	chat.Room = &TeamRoom{Catalog: catalog, Actors: map[string]*TeamActor{"boss": {NextCheck: now, Status: "idle"}}}
+	chat.Room = &TeamRoom{TaskBoardVersion: 1, Tasks: map[string]*TeamTask{}, Catalog: catalog, Actors: map[string]*TeamActor{"boss": {NextCheck: now, Status: "idle"}}}
 	chat.Messages = append(chat.Messages, TeamMessage{ID: "initial-goal", AuthorID: "human", To: "boss", Kind: "goal", Date: now, Text: "@boss Проанализируй закреплённую цель и организуй выполнение."})
 	chat.Metrics = &TeamMetrics{RecordedFrom: now}
 	RefreshTeamWaits(chat, now)
@@ -135,51 +139,57 @@ func appendRoomMessage(chat *TeamChat, author, id, text string) (TeamMessage, er
 		if actor == nil || actor.Delivery == nil || actor.Status != "working" {
 			return m, errors.New("нет активного адресного поручения")
 		}
-		if to == "" || to == author {
+		if to == author {
 			return m, errors.New("ответ должен начинаться с @id получателя")
 		}
 		if author != "boss" && to == "human" {
 			return m, errors.New("ответ Челу передай через @boss")
 		}
-		for _, msg := range chat.Messages {
-			for _, inputID := range actor.Delivery.IDs {
-				if msg.ID == inputID && (msg.AuthorID == to || author != "boss" && msg.AuthorID == "human" && to == "boss") {
-					m.ReplyTo = msg.ID
-					m.ReplyToIDs = append(m.ReplyToIDs, msg.ID)
+		if to != "" {
+			for _, msg := range chat.Messages {
+				for _, inputID := range actor.Delivery.IDs {
+					if msg.ID == inputID && (msg.AuthorID == to || author != "boss" && msg.AuthorID == "human" && to == "boss") {
+						m.ReplyTo = msg.ID
+						m.ReplyToIDs = append(m.ReplyToIDs, msg.ID)
+					}
 				}
 			}
-		}
-		// Босс может уточнить вопрос или сообщить статус до ответа коллеги.
-		// Полноту результата проверяет CompleteTeam по приёмке поручений;
-		// обычное сообщение Челу не принимает и не завершает работу.
-		if m.ReplyTo != "" {
-			m.Kind = "reply"
-		} else if author == "boss" && (chat.Room.Actors[to] != nil || to == "human") {
-			m.Kind = "request"
-		} else {
-			// Новый вопрос коллеге или отчёт Боссу после уточнения у коллеги.
-			// Это связь контекста, а не делегирование входящего поручения:
-			// обязательства создаются только по авторству Босса/Чела.
-			m.Kind = "question"
-			if to == "boss" {
+			// Босс может уточнить вопрос или сообщить статус до ответа коллеги.
+			// Полноту результата проверяет CompleteTeam по приёмке поручений;
+			// обычное сообщение Челу не принимает и не завершает работу.
+			if m.ReplyTo != "" {
 				m.Kind = "reply"
-			}
-			m.ReplyToIDs = append([]string(nil), actor.Delivery.IDs...)
-			if len(m.ReplyToIDs) > 0 {
-				m.ReplyTo = m.ReplyToIDs[len(m.ReplyToIDs)-1]
+			} else if author == "boss" && (chat.Room.Actors[to] != nil || to == "human") {
+				m.Kind = "request"
+			} else {
+				// Новый вопрос коллеге или отчёт Боссу после уточнения у коллеги.
+				// Это связь контекста, а не делегирование входящего поручения:
+				// обязательства создаются только по авторству Босса/Чела.
+				m.Kind = "question"
+				if to == "boss" {
+					m.Kind = "reply"
+				}
+				m.ReplyToIDs = append([]string(nil), actor.Delivery.IDs...)
+				if len(m.ReplyToIDs) > 0 {
+					m.ReplyTo = m.ReplyToIDs[len(m.ReplyToIDs)-1]
+				}
 			}
 		}
 		actor.Summary = strings.Join(strings.Fields(strings.TrimPrefix(text, "@"+to))[:min(7, len(strings.Fields(strings.TrimPrefix(text, "@"+to))))], " ")
 	}
-	if err := attachDiscussion(chat, &m, source); err != nil {
-		return TeamMessage{}, err
+	if to != "" {
+		if err := attachDiscussion(chat, &m, source); err != nil {
+			return TeamMessage{}, err
+		}
 	}
 	if source != "" {
 		m.DiscussionInput = input
 	}
 	reopenForHuman(chat, &m)
 	chat.Messages = append(chat.Messages, m)
-	recordTeamTask(chat, m)
+	if chat.Room.TaskBoardVersion == 0 {
+		recordTeamTask(chat, m)
+	}
 	wakeForMessage(chat, m)
 	pauseDiscussion(chat, &m)
 	return m, nil
@@ -231,8 +241,12 @@ func SummonActor(ctx context.Context, root, run, author, id string) error {
 // ClaimTeamDelivery проверяет личный таймер и резервирует только явные теги.
 // Пустая проверка не запускает LLM. Вызывать под долгим LockTeamActor.
 func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.Time) (bool, error) {
+	snapshot, err := TeamRoot(root, run)
+	if err != nil {
+		return false, err
+	}
 	claimed := false
-	err := UpdateTeam(ctx, root, run, func(chat *TeamChat) error {
+	err = UpdateTeam(ctx, root, run, func(chat *TeamChat) error {
 		if chat.Room == nil {
 			return errors.New("нет комнаты")
 		}
@@ -246,10 +260,27 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 		if actor.Cursor < 0 || actor.Cursor > len(chat.Messages) {
 			return errors.New("повреждён курсор истории")
 		}
+		refreshTaskEvidence(chat, snapshot.Meta.CWD)
+		selected := selectTaskDispatch(chat, actorID)
 		var ids []string
 		end, tokens := len(chat.Messages), 0
+		if selected != nil {
+			ids = append(ids, selected.Card.ScheduleKey)
+		}
 		for i := actor.Cursor; i < len(chat.Messages); i++ {
-			if TeamMessageForActor(chat.Messages[i], actorID) {
+			message := chat.Messages[i]
+			if selected != nil && message.ID == selected.Card.ScheduleKey {
+				continue
+			}
+			// Готовность ограничивает выдачу работы исполнителю, но не служебные
+			// уведомления Боссу: блокер todo должен дойти независимо от scheduler.
+			if message.Kind == "task_change" && message.TaskID != "" && message.To == actorID {
+				task := chat.Room.Tasks[message.TaskID]
+				if task != nil && task.Assignee == actorID && task.Card != nil && task.Card.Status == "todo" && task.Card.Cancellation == "" && (selected == nil || selected.ID != task.ID) {
+					continue
+				}
+			}
+			if TeamMessageForActor(message, actorID) {
 				// Адресная очередь независима от чтения контекста, но также
 				// передаётся порциями. Первое сообщение сохраняется целиком.
 				cost := EstimateTeamTokens(chat.Messages[i])
@@ -271,6 +302,10 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 		actor.ApprovalPending = false
 		actor.Attempt++
 		actor.Delivery = &TeamDelivery{IDs: ids, End: end}
+		if selected != nil {
+			actor.Delivery.TaskID = selected.ID
+			actor.Delivery.TaskRevision = selected.Card.Revision
+		}
 		at := now.UTC()
 		execution := TeamExecutionFor(chat, actorID, now)
 		execution.ClaimedAt = &at
@@ -348,7 +383,7 @@ func (chat TeamChat) validateRoom() error {
 		}
 	}
 	for id, task := range chat.Room.Tasks {
-		if task == nil || task.ID != id || task.Assignee == "boss" || chat.Room.Actors[task.Assignee] == nil {
+		if task == nil || task.ID != id || task.Assignee == "boss" || (task.Assignee != "" && chat.Room.Actors[task.Assignee] == nil) || (task.Assignee == "" && task.Card == nil) {
 			return errors.New("повреждено поручение команды")
 		}
 		if task.AcceptedAt != nil && (task.AcceptedAt.IsZero() || task.ResultID == "" || task.Evidence == "") {

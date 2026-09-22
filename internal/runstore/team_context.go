@@ -114,6 +114,7 @@ func teamContext(chat TeamChat, o TeamReadOptions) (TeamContext, error) {
 		if chat.Room != nil {
 			room := *chat.Room
 			room.Catalog = nil
+			room.TaskOperations = nil
 			room.Discussions = map[string]*TeamDiscussion{}
 			for id, d := range chat.Room.Discussions {
 				if d.State != "closed" {
@@ -122,8 +123,14 @@ func teamContext(chat TeamChat, o TeamReadOptions) (TeamContext, error) {
 			}
 			room.Tasks = map[string]*TeamTask{}
 			for id, t := range chat.Room.Tasks {
-				if t.AcceptedAt == nil {
-					room.Tasks[id] = t
+				if t.AcceptedAt == nil || t.Card != nil && t.Card.Status != "done" {
+					copy := compactTask(*t)
+					if copy.Card != nil {
+						copy.Text = ""
+						copy.Card.Expected = ""
+						copy.Card.Criteria = nil
+					}
+					room.Tasks[id] = &copy
 				}
 			}
 			room.Actors = map[string]*TeamActor{}
@@ -135,6 +142,7 @@ func teamContext(chat TeamChat, o TeamReadOptions) (TeamContext, error) {
 				room.Actors[id] = &copy
 			}
 			out.Room = &room
+			out.Notice = "Карточки здесь краткие. Требования, результаты и обсуждения: team_task_read (или /task_read), с явными страницами."
 		}
 	} else {
 		out.Goal = ""
@@ -178,7 +186,7 @@ func teamContext(chat TeamChat, o TeamReadOptions) (TeamContext, error) {
 	}
 	base := EstimateTeamTokens(out) + 256
 	if base > budget {
-		return TeamContext{RunID: chat.RunID, Messages: []TeamMessage{}, Head: len(chat.Messages), Notice: "Цель и действующие поручения превышают лимит ответа; увеличьте responseTokens в contextPolicy. Переписка доступна через archive=true."}, nil
+		return TeamContext{RunID: chat.RunID, Messages: []TeamMessage{}, Head: len(chat.Messages), Notice: "Цель и действующие поручения превышают лимит ответа; карточки доступны через team_task_read с limit/after. Переписка доступна через archive=true."}, nil
 	}
 	selected := map[string]bool{}
 	for _, id := range o.IDs {
@@ -206,6 +214,8 @@ func teamContext(chat TeamChat, o TeamReadOptions) (TeamContext, error) {
 		message.Position = position + 1
 		// Старая сводка остаётся доступна в архиве, но не дублирует текущую в обычном чтении.
 		if !o.Archive {
+			message.LinkInput = ""
+			message.TaskSnapshot = nil
 			message.Summary = nil
 			message.Goal = ""
 			message.DiscussionInput = ""
