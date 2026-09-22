@@ -46,6 +46,10 @@ func teamEngine(t *testing.T) (*Engine, string, *fakeClient, *time.Time) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Эти проверки сохраняют контракт старых заказов без доски.
+	if err := runstore.UpdateTeam(t.Context(), root, s.Meta.RunID, func(chat *runstore.TeamChat) error { chat.Room.TaskBoardVersion = 0; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().UTC().Add(time.Second)
 	client := &fakeClient{}
 	return &Engine{Root: root, Client: client, Now: func() time.Time { return now }}, s.Meta.RunID, client, &now

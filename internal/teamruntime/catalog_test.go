@@ -29,6 +29,10 @@ func TestConfiguredDesignerLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Проверяем прежний каталог и сохранённый контракт legacy-поручений.
+	if err := runstore.UpdateTeam(t.Context(), root, s.Meta.RunID, func(chat *runstore.TeamChat) error { chat.Room.TaskBoardVersion = 0; return nil }); err != nil {
+		t.Fatal(err)
+	}
 	now := time.Now().Add(time.Second)
 	client := &fakeClient{}
 	e := &Engine{Root: root, Client: client, Now: func() time.Time { return now }}
@@ -119,6 +123,9 @@ func TestConfiguredDesignerLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	postHuman(t, e, run, "followup", "@designer А зелёный?")
+	// Под race предшествующие проверки могут занять больше секунды;
+	// управляемые часы продвигаем после фактической публикации сообщения.
+	now = time.Now().Add(time.Second)
 	chat = readChat(t, e, run)
 	if chat.Room.AchievedAt != nil || chat.Room.Actors["boss"].NextCheck.IsZero() || chat.Room.Actors["designer"].NextCheck.IsZero() {
 		t.Fatal("не возобновлена команда")

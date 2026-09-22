@@ -1,3 +1,4 @@
+import { TeamTaskDetails, type TeamTask } from './TeamTaskDetails';
 import {
   TeamConversation,
   revealTeamMessage,
@@ -31,6 +32,9 @@ import { usePhoneWindow } from './usePhoneWindow';
 import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 
 export interface TeamMessage {
+  taskId?: string;
+  taskRevision?: number;
+  taskSnapshot?: TeamTask;
   summary?: {
     requestId: string;
     through: number;
@@ -68,7 +72,11 @@ export interface TeamChat {
   goal: string;
   members: Record<string, { name: string; avatar?: string }>;
   messages: TeamMessage[];
-  room?: { actors: Record<string, TeamActor>; achievedAt?: string };
+  room?: {
+    tasks?: Record<string, TeamTask>;
+    actors: Record<string, TeamActor>;
+    achievedAt?: string;
+  };
 }
 interface Teams {
   teams: { id: string; goal: string }[];
@@ -315,10 +323,17 @@ function TeamThread({
   const { data: liveChat, error: readError } = usePoll<TeamChat>(url);
   const chat = historyView || liveChat;
   const [text, setText] = useState('');
+  const [reply, setReply] = useState<TeamMessage>();
+  const [taskId, setTaskId] = useState('');
   const [confirmed, setConfirmed] = useState<TeamMessage[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
-  const pending = useRef<{ id: string; text: string } | null>(null);
+  const pending = useRef<{
+    id: string;
+    text: string;
+    taskId?: string;
+    replyTo?: string;
+  } | null>(null);
   const list = useRef<HTMLDivElement>(null);
   const follows = useRef(true);
   const readingAnchor = useRef<{ id: string; top: number } | undefined>(
@@ -350,8 +365,17 @@ function TeamThread({
     if (busy || !text.trim() || wordCount(text) > 50) return;
     setBusy(true);
     setError('');
-    if (!pending.current || pending.current.text !== text)
-      pending.current = { id: crypto.randomUUID(), text };
+    if (
+      !pending.current ||
+      pending.current.text !== text ||
+      pending.current.replyTo !== reply?.id
+    )
+      pending.current = {
+        id: crypto.randomUUID(),
+        text,
+        taskId: reply?.taskId,
+        replyTo: reply?.id,
+      };
     try {
       const message = await post<TeamMessage>(
         `${url}/messages`,
@@ -364,6 +388,7 @@ function TeamThread({
       pending.current = null;
       follows.current = true;
       setText('');
+      setReply(undefined);
       onLive?.();
     } catch (cause) {
       setError(String(cause));
@@ -371,9 +396,93 @@ function TeamThread({
       setBusy(false);
     }
   }
+  const messagesById = new Map(
+    messages.map((message) => [message.id, message]),
+  );
+  const taskSnapshots = Object.fromEntries(
+    messages
+      .filter((message) => message.taskSnapshot)
+      .map((message) => [message.taskId, message.taskSnapshot!]),
+  );
+  const tasks = historyView
+    ? taskSnapshots
+    : { ...taskSnapshots, ...chat?.room?.tasks };
+  function messageLinks(message: TeamMessage) {
+    const source = message.replyTo
+      ? messagesById.get(message.replyTo)
+      : undefined;
+    return (
+      <div className="team-message-links">
+        {message.taskId && (
+          <Button
+            view="flat"
+            size="s"
+            className="team-task-link"
+            onClick={() => setTaskId(message.taskId!)}
+          >
+            Задача {message.taskId}
+            {tasks[message.taskId]?.card?.title
+              ? ` · ${tasks[message.taskId].card!.title}`
+              : ''}
+          </Button>
+        )}
+        {message.replyTo &&
+          (source ? (
+            <Button
+              view="flat"
+              size="s"
+              className="team-reply-link"
+              onClick={() => revealTeamMessage(source.id)}
+            >
+              Ответ на: {source.text.slice(0, 100)}
+              {source.text.length > 100 ? '…' : ''}
+            </Button>
+          ) : (
+            <Text color="secondary">
+              Исходное сообщение недоступно в этом кадре
+            </Text>
+          ))}
+        {!historyView && (
+          <Button
+            view="flat"
+            size="s"
+            disabled={busy}
+            onClick={() => {
+              setReply(message);
+              if (chat?.room?.actors[message.authorId])
+                setText(
+                  (current) =>
+                    `@${message.authorId} ${current.replace(/^@\S*\s*/, '')}`,
+                );
+              requestAnimationFrame(() =>
+                document
+                  .querySelector<HTMLTextAreaElement>(
+                    '[aria-label="Сообщение команде"]',
+                  )
+                  ?.focus(),
+              );
+            }}
+          >
+            Ответить
+          </Button>
+        )}
+      </div>
+    );
+  }
   return (
     <>
       <ErrorNotice error={readError} />
+      {taskId && (
+        <TeamTaskDetails
+          key={`${taskId}-${historyView ? messages.length : 'live'}`}
+          id={taskId}
+          run={run}
+          snapshot={tasks[taskId]}
+          historical={Boolean(historyView)}
+          messages={messages}
+          onClose={() => setTaskId('')}
+        />
+      )}
       {!historyView && <ErrorNotice error={chat?.compaction?.pending?.error} />}
       {chat ? (
         <>
@@ -441,6 +550,7 @@ function TeamThread({
                       )}{' '}
                       {message.text}
                     </span>
+                    {messageLinks(message)}
                   </div>
                 ) : (
                   <article
@@ -470,6 +580,7 @@ function TeamThread({
                       </div>
                       <div className="team-message-bubble">
                         <TeamMarkdown text={message.text} to={message.to} />
+                        {messageLinks(message)}
                       </div>
                     </div>
                   </article>
@@ -538,6 +649,20 @@ function TeamThread({
             }}
           >
             <ErrorNotice error={error} />
+            {reply && (
+              <div className="team-compose-reply">
+                <Text>Ответ на: {reply.text.slice(0, 100)}</Text>
+                <Button
+                  view="flat"
+                  size="s"
+                  aria-label="Сбросить ответ"
+                  disabled={busy}
+                  onClick={() => setReply(undefined)}
+                >
+                  <Icon data={Xmark} size={14} />
+                </Button>
+              </div>
+            )}
             {(liveChat || chat).room && (
               <TeamRecipients
                 actors={(liveChat || chat).room!.actors}

@@ -109,3 +109,59 @@ func TestTeamContextHTTP(t *testing.T) {
 		}
 	}
 }
+
+// Публичный HTTP-контракт работает в каталоге без VCS, не принимает авторство
+// клиента и не позволяет человеку принудительно закрыть непроверенную карточку.
+func TestTaskBoardHTTPWithoutVCS(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	root := t.TempDir()
+	data, _ := json.Marshal(workflow.Workflow{ID: "board", Characters: workflow.DefaultTeamCharacters(), Steps: []workflow.Step{{ID: "boss", Type: "agent", Character: "boss", Prompt: "Проверка", DependsOn: []string{}}}})
+	s, err := runstore.Create(root, runstore.Input{Order: true, Team: true, WorkflowJSON: data, CWD: t.TempDir(), Task: "Проверить карточки"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := Handler(root)
+	path := "/api/teams/" + s.Meta.RunID
+	request := func(method, suffix, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://localhost"+path+suffix, strings.NewReader(body))
+		r.Header.Set("Origin", "http://localhost")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	create := `{"id":"create","action":"create","taskId":"T1","version":0,"title":"Файл","body":"Подготовить файл","expected":"Готовый файл","criteria":["Файл прочитан"]}`
+	for range 2 {
+		w := request("POST", "/tasks", create)
+		if w.Code != 200 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	}
+	if w := request("GET", "/tasks?taskId=T1", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "Подготовить файл") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	for range 2 {
+		w := request("POST", "/messages", `{"id":"comment","text":"Уточнение в обсуждении","taskId":"T1","replyTo":"create"}`)
+		if w.Code != 200 {
+			t.Fatal(w.Code, w.Body.String())
+		}
+	}
+	if w := request("GET", "/tasks?taskId=T1&section=messages&limit=1", ""); w.Code != 200 || !strings.Contains(w.Body.String(), "nextOffset") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	if w := request("POST", "/tasks", `{"id":"override","action":"accept","taskId":"T1","version":1}`); w.Code != 409 {
+		t.Fatal("человек принял карточку", w.Code)
+	}
+	if w := request("POST", "/tasks", `{"id":"spoof","action":"cancel","taskId":"T1","version":1,"author":"boss"}`); w.Code != 400 {
+		t.Fatal("подмена автора", w.Code)
+	}
+	if w := request("POST", "/messages", `{"id":"foreign","text":"Текст","taskId":"unknown"}`); w.Code != 400 {
+		t.Fatal("неизвестная связь", w.Code)
+	}
+	chat, err := runstore.ReadTeam(root, s.Meta.RunID)
+	if err != nil || len(chat.Room.Tasks) != 1 || len(chat.Messages) != 3 {
+		t.Fatal("дублирование карточки или сообщения", err)
+	}
+	if chat.Room.Actors["boss"].ThreadID != "" {
+		t.Fatal("чтение запустило модель")
+	}
+}

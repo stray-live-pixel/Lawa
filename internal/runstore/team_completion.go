@@ -12,6 +12,10 @@ import (
 // Активного коллегу сначала нужно дождаться: завершение не обрывает его работу
 // и не оставляет сетевой turn без владельца. Свой turn Босс завершает обычным final.
 func CompleteTeam(ctx context.Context, root, run, author, id, text string) (TeamMessage, error) {
+	snapshot, loadErr := TeamRoot(root, run)
+	if loadErr != nil {
+		return TeamMessage{}, loadErr
+	}
 	var result TeamMessage
 	err := UpdateTeam(ctx, root, run, func(chat *TeamChat) error {
 		if chat.Room == nil || author != "boss" {
@@ -69,7 +73,18 @@ func CompleteTeam(ctx context.Context, root, run, author, id, text string) (Team
 			}
 		}
 		for _, task := range chat.Room.Tasks {
-			if task.AcceptedAt == nil {
+			if task.Card != nil && task.Card.Cancellation == "cancelled" {
+				continue
+			}
+			if task.Card != nil && len(task.Card.Results) > 0 {
+				r := task.Card.Results[len(task.Card.Results)-1]
+				if len(r.Artifacts) > 0 {
+					if err := CheckTaskBasis(snapshot.Meta.CWD, r.Basis); err != nil {
+						return err
+					}
+				}
+			}
+			if task.AcceptedAt == nil || task.Card != nil && (task.Card.Status != "done" || task.Card.Cancellation != "") {
 				return errors.New("сначала проверь и прими результаты всех поручений через team_accept")
 			}
 		}

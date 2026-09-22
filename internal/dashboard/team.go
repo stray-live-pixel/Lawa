@@ -113,11 +113,18 @@ func (h handler) postTeam(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		ID   string `json:"id"`
 		Text string `json:"text"`
+		runstore.TeamMessageLinks
 	}
 	if !teamInput(w, r, &input) {
 		return
 	}
-	message, err := runstore.PostTeam(r.Context(), h.root, r.PathValue("run"), "", input.ID, input.Text)
+	var message runstore.TeamMessage
+	var err error
+	if input.TaskID != "" || input.ReplyTo != "" {
+		message, err = runstore.PostLinkedActor(r.Context(), h.root, r.PathValue("run"), "human", input.ID, input.Text, input.TeamMessageLinks)
+	} else {
+		message, err = runstore.PostTeam(r.Context(), h.root, r.PathValue("run"), "", input.ID, input.Text)
+	}
 	if err != nil {
 		http.Error(w, diagnostic(err), http.StatusBadRequest)
 		return
@@ -186,4 +193,48 @@ func (h handler) teamContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	teamJSON(w, result)
+}
+
+// tasks предоставляет read-only карточки и архивные обсуждения без запуска моделей.
+func (h handler) tasks(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	limit, err := strconv.Atoi(q.Get("limit"))
+	if q.Get("limit") == "" {
+		limit = 20
+		err = nil
+	}
+	if err != nil {
+		http.Error(w, "неверный limit", 400)
+		return
+	}
+	offset, err := strconv.Atoi(q.Get("offset"))
+	if q.Get("offset") == "" {
+		offset = 0
+		err = nil
+	}
+	if err != nil {
+		http.Error(w, "неверный offset", 400)
+		return
+	}
+	out, err := runstore.ReadTasks(h.root, r.PathValue("run"), runstore.TaskReadOptions{TaskID: q.Get("taskId"), Section: q.Get("section"), After: q.Get("after"), Offset: offset, Limit: limit})
+	if err != nil {
+		http.Error(w, diagnostic(err), 400)
+		return
+	}
+	teamJSON(w, out)
+}
+
+// changeTask — необязательное явное управление от человека. Автор не принимается
+// из тела; произвольный статус и обход приёмки этим endpoint не поддерживаются.
+func (h handler) changeTask(w http.ResponseWriter, r *http.Request) {
+	var in runstore.TaskCommand
+	if !teamInput(w, r, &in) {
+		return
+	}
+	out, err := runstore.ApplyTaskCommand(r.Context(), h.root, r.PathValue("run"), "human", in)
+	if err != nil {
+		http.Error(w, diagnostic(err), http.StatusConflict)
+		return
+	}
+	teamJSON(w, out)
 }
