@@ -247,8 +247,17 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 			return errors.New("повреждён курсор истории")
 		}
 		var ids []string
+		end, tokens := len(chat.Messages), 0
 		for i := actor.Cursor; i < len(chat.Messages); i++ {
 			if TeamMessageForActor(chat.Messages[i], actorID) {
+				// Адресная очередь независима от чтения контекста, но также
+				// передаётся порциями. Первое сообщение сохраняется целиком.
+				cost := EstimateTeamTokens(chat.Messages[i])
+				if len(ids) > 0 && (tokens+cost > 4000 || len(ids) >= 50) {
+					end = i
+					break
+				}
+				tokens += cost
 				ids = append(ids, chat.Messages[i].ID)
 			}
 		}
@@ -261,7 +270,7 @@ func ClaimTeamDelivery(ctx context.Context, root, run, actorID string, now time.
 		actor.CapacityPending = false
 		actor.ApprovalPending = false
 		actor.Attempt++
-		actor.Delivery = &TeamDelivery{IDs: ids, End: len(chat.Messages)}
+		actor.Delivery = &TeamDelivery{IDs: ids, End: end}
 		at := now.UTC()
 		execution := TeamExecutionFor(chat, actorID, now)
 		execution.ClaimedAt = &at

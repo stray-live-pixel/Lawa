@@ -17,13 +17,15 @@ import (
 // TeamChat — общая доска корневого заказа. Текущая цель версионируется кадрами, сообщения добавляются
 // последовательно. Память кубиков остаётся рабочими заметками, чат — общими фактами.
 type TeamChat struct {
-	Metrics  *TeamMetrics          `json:"metrics,omitempty"`
-	History  *TeamHistory          `json:"history,omitempty"`
-	Room     *TeamRoom             `json:"room,omitempty"`
-	RunID    string                `json:"runId"`
-	Goal     string                `json:"goal"`
-	Members  map[string]TeamMember `json:"members"`
-	Messages []TeamMessage         `json:"messages"`
+	ContextPolicy *TeamContextPolicy    `json:"contextPolicy,omitempty"`
+	Compaction    *TeamCompaction       `json:"compaction,omitempty"`
+	Metrics       *TeamMetrics          `json:"metrics,omitempty"`
+	History       *TeamHistory          `json:"history,omitempty"`
+	Room          *TeamRoom             `json:"room,omitempty"`
+	RunID         string                `json:"runId"`
+	Goal          string                `json:"goal"`
+	Members       map[string]TeamMember `json:"members"`
+	Messages      []TeamMessage         `json:"messages"`
 }
 
 // TeamMember хранит отображение автора по ID. Avatar задаёт известный UI образ;
@@ -36,10 +38,12 @@ type TeamMember struct {
 // TeamMessage получает время и автора на стороне Lawa. ID — ключ повтора:
 // потеря сетевого подтверждения не должна удваивать сообщение при retry.
 type TeamMessage struct {
-	DiscussionID    string `json:"discussionId,omitempty"`
-	DiscussionCycle int    `json:"discussionCycle,omitempty"`
-	DiscussionInput string `json:"discussionInput,omitempty"` // Исходная команда для проверки повторного ID.
-	Suppressed      bool   `json:"suppressed,omitempty"`      // История остаётся видимой, автоматическая доставка остановлена.
+	Position        int          `json:"position,omitempty"` // Позиция в ответе чтения; исходный журнал задаёт порядок индексом.
+	Summary         *TeamSummary `json:"summary,omitempty"`
+	DiscussionID    string       `json:"discussionId,omitempty"`
+	DiscussionCycle int          `json:"discussionCycle,omitempty"`
+	DiscussionInput string       `json:"discussionInput,omitempty"` // Исходная команда для проверки повторного ID.
+	Suppressed      bool         `json:"suppressed,omitempty"`      // История остаётся видимой, автоматическая доставка остановлена.
 
 	TaskIDs    []string  `json:"taskIds,omitempty"`  // Поручения, явно принятые Боссом этим событием.
 	ResultID   string    `json:"resultId,omitempty"` // Сообщение с проверенным результатом.
@@ -113,6 +117,9 @@ func readTeam(dir *os.Root, s Snapshot) (TeamChat, error) {
 			return TeamChat{}, err
 		}
 	}
+	if err := validateTeamContext(chat); err != nil {
+		return TeamChat{}, err
+	}
 	if err := validateTeamMetrics(chat.Metrics); err != nil {
 		return TeamChat{}, err
 	}
@@ -133,15 +140,6 @@ func ReadTeam(root, runID string) (TeamChat, error) {
 	return readTeam(dir, s)
 }
 
-// ReadTeamForAgent сохраняет рабочую память без истории UI и метрик.
-// Телеметрия предназначена для отчёта оператору, а не для контекста сотрудников.
-func ReadTeamForAgent(root, runID string) (TeamChat, error) {
-	chat, err := ReadTeam(root, runID)
-	chat.History = nil
-	chat.Metrics = nil
-	return chat, err
-}
-
 // PostTeam связывает автора с реальным кубиком sourceRun. Пустой stepID означает
 // человека; HTTP не принимает произвольный authorId, агентский tool всегда
 // передаёт свой захваченный stepID. Это локальная идентификация, не аутентификация.
@@ -149,6 +147,9 @@ func ReadTeamForAgent(root, runID string) (TeamChat, error) {
 // файл: все процессы должны блокировать один inode. Запись атомарна с fsync.
 func PostTeam(ctx context.Context, root, sourceRun, stepID, id, text string) (TeamMessage, error) {
 	text = strings.TrimSpace(text)
+	if text == "/compact_retry" && stepID == "" {
+		return RetryTeamCompaction(ctx, root, sourceRun, "human", id)
+	}
 	words := len(strings.Fields(text))
 	if words == 0 || words > 50 || len(text) > 8192 || !utf8.ValidString(text) {
 		return TeamMessage{}, errors.New("сообщение должно содержать от 1 до 50 слов (до 8 КБ)")
@@ -282,6 +283,7 @@ func UpdateTeam(ctx context.Context, root, runID string, update func(*TeamChat) 
 	if err = update(&chat); err != nil {
 		return err
 	}
+	ensureTeamCompaction(&chat, time.Now())
 	RefreshTeamWaits(&chat, time.Now())
 	recordTeamFrame(&chat, time.Now())
 	data, err := json.Marshal(chat)

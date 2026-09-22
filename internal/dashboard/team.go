@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"time"
 
 	"github.com/stray-live-pixel/Lawa/internal/codex"
@@ -154,4 +155,35 @@ func (h handler) recoverTeamHistory(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	teamJSON(w, chat)
+}
+
+// teamContext предоставляет тот же ограниченный контракт оператору и QA,
+// не запускает модель и не меняет адресную доставку. Полный UI-журнал — h.team.
+func (h handler) teamContext(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	options := runstore.TeamReadOptions{Cursor: q.Get("cursor"), IDs: q["id"]}
+	if value := q.Get("archive"); value != "" {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			http.Error(w, "неверный archive", 400)
+			return
+		}
+		options.Archive = parsed
+	}
+	for key, target := range map[string]*int{"from": &options.From, "through": &options.Through, "limit": &options.Limit} {
+		if value := q.Get(key); value != "" {
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				http.Error(w, "неверный "+key, 400)
+				return
+			}
+			*target = parsed
+		}
+	}
+	result, err := runstore.ReadTeamContext(h.root, r.PathValue("run"), options)
+	if err != nil {
+		http.Error(w, diagnostic(err), 400)
+		return
+	}
+	teamJSON(w, result)
 }

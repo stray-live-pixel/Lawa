@@ -1,5 +1,10 @@
+import {
+  TeamConversation,
+  revealTeamMessage,
+  conversationBoundary,
+} from './TeamConversation';
 import { waitLabel, waitDetails } from './teamWait';
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   Avatar,
   ClipboardButton,
@@ -26,6 +31,12 @@ import { usePhoneWindow } from './usePhoneWindow';
 import { toaster } from '@gravity-ui/uikit/toaster-singleton';
 
 export interface TeamMessage {
+  summary?: {
+    requestId: string;
+    through: number;
+    text: string;
+    sourceIds: string[];
+  };
   id: string;
   authorId: string;
   date: string;
@@ -51,6 +62,7 @@ export interface TeamActor {
   delivery?: { attempted: boolean };
 }
 export interface TeamChat {
+  compaction?: { pending?: { status: string; error?: string } };
   history?: TeamHistory;
   runId: string;
   goal: string;
@@ -309,6 +321,9 @@ function TeamThread({
   const pending = useRef<{ id: string; text: string } | null>(null);
   const list = useRef<HTMLDivElement>(null);
   const follows = useRef(true);
+  const readingAnchor = useRef<{ id: string; top: number } | undefined>(
+    undefined,
+  );
   const messages = [
     ...new Map(
       [...(chat?.messages || []), ...(historyView ? [] : confirmed)].map(
@@ -316,6 +331,17 @@ function TeamThread({
       ),
     ).values(),
   ];
+  const boundary = conversationBoundary(messages);
+  // После переноса сообщения в архив сохраняем его положение до отрисовки.
+  useLayoutEffect(() => {
+    const anchor = readingAnchor.current;
+    if (!follows.current && anchor && list.current) {
+      const element = document.getElementById(anchor.id);
+      if (element)
+        list.current.scrollTop +=
+          element.getBoundingClientRect().top - anchor.top;
+    }
+  }, [boundary]);
   useEffect(() => {
     if (follows.current && list.current)
       list.current.scrollTop = list.current.scrollHeight;
@@ -348,6 +374,7 @@ function TeamThread({
   return (
     <>
       <ErrorNotice error={readError} />
+      {!historyView && <ErrorNotice error={chat?.compaction?.pending?.error} />}
       {chat ? (
         <>
           <div
@@ -359,6 +386,18 @@ function TeamThread({
               const el = list.current!;
               follows.current =
                 el.scrollHeight - el.scrollTop - el.clientHeight < 48;
+              const visible = [
+                ...el.querySelectorAll<HTMLElement>('[id^="team-message-"]'),
+              ].find(
+                (node) =>
+                  node.getBoundingClientRect().bottom >
+                  el.getBoundingClientRect().top + 90,
+              );
+              if (visible)
+                readingAnchor.current = {
+                  id: visible.id,
+                  top: visible.getBoundingClientRect().top,
+                };
             }}
           >
             <div className="team-pin-layer">
@@ -373,60 +412,70 @@ function TeamThread({
                 Здесь — самое важное для всей команды.
               </Text>
             )}
-            {messages.map((message) =>
-              message.authorId === 'system' ||
-              message.kind === 'achievement' ||
-              message.kind === 'goal_updated' ? (
-                <div key={message.id} className="team-system-message">
-                  <time dateTime={message.date}>
-                    {new Date(message.date).toLocaleTimeString('ru-RU', {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </time>
-                  <span>
-                    {message.kind === 'achievement' && (
-                      <Icon
-                        data={CircleCheckFill}
-                        size={14}
-                        className="team-achievement-icon"
-                      />
-                    )}{' '}
-                    {message.text}
-                  </span>
-                </div>
-              ) : (
-                <article
-                  id={`team-message-${message.id}`}
-                  key={message.id}
-                  className={`team-message ${message.authorId === 'human' ? 'team-message-own' : ''}`}
-                >
-                  <MemberAvatar id={message.authorId} chat={chat} />
-                  <div className="team-message-body">
-                    <div className="team-message-meta">
-                      <Text variant="caption-2">
-                        {chat.members[message.authorId]?.name ||
-                          message.authorId}
-                      </Text>
-                      <time
-                        dateTime={message.date}
-                        title={new Date(message.date).toLocaleString('ru-RU')}
-                      >
-                        {new Date(message.date).toLocaleString('ru-RU', {
-                          day: '2-digit',
-                          month: '2-digit',
-                          hour: '2-digit',
-                          minute: '2-digit',
-                        })}
-                      </time>
-                    </div>
-                    <div className="team-message-bubble">
-                      <TeamMarkdown text={message.text} to={message.to} />
-                    </div>
+            <TeamConversation
+              messages={messages}
+              preserveReading={!follows.current}
+              renderMessage={(message) =>
+                message.authorId === 'system' ||
+                message.kind === 'achievement' ||
+                message.kind === 'goal_updated' ? (
+                  <div
+                    key={message.id}
+                    id={`team-message-${message.id}`}
+                    tabIndex={-1}
+                    className="team-system-message"
+                  >
+                    <time dateTime={message.date}>
+                      {new Date(message.date).toLocaleTimeString('ru-RU', {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </time>
+                    <span>
+                      {message.kind === 'achievement' && (
+                        <Icon
+                          data={CircleCheckFill}
+                          size={14}
+                          className="team-achievement-icon"
+                        />
+                      )}{' '}
+                      {message.text}
+                    </span>
                   </div>
-                </article>
-              ),
-            )}
+                ) : (
+                  <article
+                    id={`team-message-${message.id}`}
+                    key={message.id}
+                    tabIndex={-1}
+                    className={`team-message ${message.authorId === 'human' ? 'team-message-own' : ''}`}
+                  >
+                    <MemberAvatar id={message.authorId} chat={chat} />
+                    <div className="team-message-body">
+                      <div className="team-message-meta">
+                        <Text variant="caption-2">
+                          {chat.members[message.authorId]?.name ||
+                            message.authorId}
+                        </Text>
+                        <time
+                          dateTime={message.date}
+                          title={new Date(message.date).toLocaleString('ru-RU')}
+                        >
+                          {new Date(message.date).toLocaleString('ru-RU', {
+                            day: '2-digit',
+                            month: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </time>
+                      </div>
+                      <div className="team-message-bubble">
+                        <TeamMarkdown text={message.text} to={message.to} />
+                      </div>
+                    </div>
+                  </article>
+                )
+              }
+            />
             {chat.room &&
               Object.entries(chat.room.actors)
                 .filter(([, actor]) => actor.wait)
@@ -442,11 +491,7 @@ function TeamThread({
                         size="s"
                         view="flat"
                         onClick={() =>
-                          document
-                            .getElementById(
-                              `team-message-${actor.wait?.messageId}`,
-                            )
-                            ?.scrollIntoView({ block: 'center' })
+                          revealTeamMessage(actor.wait!.messageId!)
                         }
                       >
                         К сообщению

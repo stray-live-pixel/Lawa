@@ -74,6 +74,10 @@ func (e *Engine) tick(ctx context.Context) {
 		if err != nil || s.Meta.Order == nil || !s.Meta.Order.Team {
 			continue
 		}
+		if err := runstore.EnsureTeamCompaction(ctx, e.Root, s.Meta.RunID); err != nil {
+			e.report(err)
+			continue
+		}
 		chat, err := runstore.ReadTeam(e.Root, s.Meta.RunID)
 		if err != nil {
 			e.report(err)
@@ -282,6 +286,7 @@ func (e *Engine) finish(ctx context.Context, run, id string) error {
 	return runstore.UpdateTeam(ctx, e.Root, run, func(chat *runstore.TeamChat) error {
 		a := chat.Room.Actors[id]
 		end := a.Delivery.End
+		runstore.FinishTeamCompaction(chat, id, now)
 		// Нормальный final не публикуется в командный чат. Если сотрудник
 		// промолчал, Босс получает явный тег. Уточнение у коллеги допускает
 		// продолжение без Босса; исходное поручение остаётся открытым до приёмки.
@@ -418,6 +423,7 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 	}
 	role += "\nПроверяемый результат сотрудник публикует через team_post: /result @boss <что готово и где проверить>. Это заявление готовности, не приёмка. Босс возвращает такой результат через /rework <ID сообщения результата> @сотрудник <что исправить>; обычное уточнение не считается возвратом. Приёмка остаётся через team_accept."
 	role += "\nЕсли ждёшь конкретный ответ, приёмку или разрешение, сначала отправь адресное сообщение, затем вызови team_post с /wait {\"kind\":\"result|acceptance|permission\",\"actor_id\":\"id участника\",\"message_id\":\"ID своего сообщения\",\"text\":\"что требуется, до 40 слов\"}. Выбери одно значение kind. Это только отметка, она не посылает сообщение и не запускает коллегу. /wait {} снимает отметку. После нового входящего хода старое ожидание сбрасывается; при необходимости заяви его заново. Состояние и начало ожидания доступны в room.actors[id].wait."
+	role += teamContextPrompt
 	role += sharedWorkspacePrompt
 	role += workflow.TaskClarityPrompt
 	// Личность берём из снимка заказа при каждом turn, включая продолжение thread.
@@ -462,7 +468,7 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 		})
 	}
 	command.DynamicTools = []codex.DynamicTool{
-		{Name: "team_read", Description: "Прочитать цель, участников и общий чат.", InputSchema: []byte(`{"type":"object","properties":{},"additionalProperties":false}`)},
+		{Name: "team_read", Description: "Прочитать цель, участников и общий чат.", InputSchema: []byte(runstore.TeamReadSchema)},
 		{Name: "team_post", Description: "Написать адресное сообщение: @id и текст, до 50 слов.", InputSchema: []byte(`{"type":"object","properties":{"text":{"type":"string"}},"required":["text"],"additionalProperties":false}`)},
 	}
 	if id == "boss" {
@@ -494,10 +500,10 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 		var err error
 		switch call.Tool {
 		case "team_read":
-			var in struct{}
+			var in runstore.TeamReadOptions
 			err = json.Unmarshal(call.Arguments, &in, json.RejectUnknownMembers(true))
 			if err == nil {
-				result, err = runstore.ReadTeamForAgent(e.Root, run)
+				result, err = runstore.ReadTeamContext(e.Root, run, in)
 			}
 		case "team_set_goal":
 			var in struct {
@@ -528,7 +534,20 @@ func (e *Engine) command(run, id string, chat runstore.TeamChat, s runstore.Snap
 					complete = true
 					in.Text = strings.TrimPrefix(in.Text, "/complete ")
 				}
-				if call.Tool == "team_post" && strings.HasPrefix(in.Text, "/goal ") {
+				if options, handled, parseErr := runstore.ContextReadCommand(in.Text); call.Tool == "team_post" && handled {
+					err = parseErr
+					if err == nil {
+						result, err = runstore.ReadTeamContext(e.Root, run, options)
+					}
+				} else if call.Tool == "team_post" && strings.HasPrefix(in.Text, "/compact ") {
+					var summary runstore.TeamSummary
+					summary, err = runstore.ParseTeamSummary(in.Text)
+					if err == nil {
+						result, err = runstore.PublishTeamSummary(ctx, e.Root, run, id, summary)
+					}
+				} else if call.Tool == "team_post" && in.Text == "/compact_retry" {
+					result, err = runstore.RetryTeamCompaction(ctx, e.Root, run, id, key)
+				} else if call.Tool == "team_post" && strings.HasPrefix(in.Text, "/goal ") {
 					result, err = runstore.SetTeamGoal(ctx, e.Root, run, id, key, strings.TrimPrefix(in.Text, "/goal "))
 				} else if complete {
 					result, err = runstore.CompleteTeam(ctx, e.Root, run, id, key, in.Text)

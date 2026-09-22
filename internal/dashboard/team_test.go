@@ -66,3 +66,46 @@ func TestTeamAPI(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 }
+
+// Публичное чтение повторяет агентский контракт без запуска App Server.
+// Некорректная позиция возвращает восстановление снимка, архив требует явного режима.
+func TestTeamContextHTTP(t *testing.T) {
+	root := t.TempDir()
+	s, err := runstore.Create(root, runstore.Input{WorkflowJSON: []byte(`{"id":"context","steps":[{"id":"work","type":"agent","prompt":"Тест","dependsOn":[]}]}`), CWD: t.TempDir(), Task: "Цель"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{"one", "two", "three"} {
+		if _, err := runstore.PostTeam(t.Context(), root, s.Meta.RunID, "", id, "Исходный текст"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	h := Handler(root)
+	get := func(query string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest("GET", "/api/teams/"+s.Meta.RunID+"/context"+query, nil))
+		return w
+	}
+	first := get("?limit=1")
+	var page runstore.TeamContext
+	if err := json.Unmarshal(first.Body.Bytes(), &page); err != nil || first.Code != 200 || !page.HasMore || len(page.Messages) != 1 {
+		t.Fatal(first.Code, first.Body.String(), err)
+	}
+	delta := get("?cursor=" + page.Cursor)
+	if delta.Code != 200 || strings.Contains(delta.Body.String(), `"id":"one"`) {
+		t.Fatal(delta.Body.String())
+	}
+	invalid := get("?cursor=broken")
+	if !strings.Contains(invalid.Body.String(), `"resetRequired":true`) {
+		t.Fatal(invalid.Body.String())
+	}
+	archive := get("?archive=true&id=one")
+	if archive.Code != 200 || !strings.Contains(archive.Body.String(), "Исходный текст") {
+		t.Fatal(archive.Body.String())
+	}
+	for _, query := range []string{"?from=1", "?archive=invalid", "?limit=101", "?through=no", "?archive=true&id=missing"} {
+		if w := get(query); w.Code != 400 {
+			t.Fatal(query, w.Code, w.Body.String())
+		}
+	}
+}

@@ -37,6 +37,11 @@ func CompleteTeam(ctx context.Context, root, run, author, id, text string) (Team
 		if chat.Room.AchievedAt != nil {
 			return errors.New("цель уже достигнута")
 		}
+		// Запрос обслуживания уже адресован Боссу. Достижение не должно
+		// поглотить его и остановить scheduler до сохранения сводки.
+		if chat.Compaction != nil && chat.Compaction.Pending != nil && chat.Compaction.Pending.Status == "pending" {
+			return errors.New("сначала опубликуй запрошенную сводку прошлого через /compact")
+		}
 		boss := chat.Room.Actors["boss"]
 		if boss == nil || boss.Delivery == nil {
 			return errors.New("нет активного поручения Босса")
