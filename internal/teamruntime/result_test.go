@@ -60,16 +60,17 @@ func TestResultReworkAndAcceptance(t *testing.T) {
 	if len(r.Tasks) != 1 || r.Tasks[0].Reworks == nil || *r.Tasks[0].Reworks != 1 || r.Tasks[0].AcceptedAt == nil || !r.Tasks[0].FirstResultAt.Equal(first.Date) {
 		t.Fatal(r.Tasks)
 	}
+	// Принятые поручения остаются в журнале, но не повторяются в обычном контексте.
 	// Поздний возврат уже принятого результата не возобновляет поручение.
 	if _, err := runstore.PostActor(t.Context(), e.Root, run, "boss", "late", "/rework result2 @developer Ещё правка"); err == nil {
 		t.Fatal("возвращено принятое поручение")
 	}
-	shared, err := runstore.ReadTeamForAgent(e.Root, run)
+	shared, err := runstore.ReadTeamContext(e.Root, run, runstore.TeamReadOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	data, _ := json.Marshal(shared)
-	if shared.Metrics != nil || len(shared.Room.Tasks) != 1 || !strings.Contains(string(data), `"task_rework"`) {
+	if strings.Contains(string(data), `"metrics"`) || strings.Contains(string(data), `"history"`) || len(shared.Room.Tasks) != 0 || !strings.Contains(string(data), `"task_rework"`) {
 		t.Fatal("потеряна рабочая память")
 	}
 }

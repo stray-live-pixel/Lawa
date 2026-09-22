@@ -45,8 +45,8 @@ func TestDeclaredWaitReadAndNewDelivery(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 2 {
-		chat, err := runstore.ReadTeamForAgent(e.Root, run)
-		if err != nil || chat.History != nil || chat.Room.Actors["developer"].Wait == nil {
+		chat, err := runstore.ReadTeamContext(e.Root, run, runstore.TeamReadOptions{})
+		if err != nil || chat.Room.Actors["developer"].Wait == nil {
 			t.Fatal(chat, err)
 		}
 	}

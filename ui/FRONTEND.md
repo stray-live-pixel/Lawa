@@ -19,6 +19,7 @@ React + TypeScript, Vite; Gravity UI и Gravity icons. Схема — React Flow
 | Markdown, копирование, исходники | `ui/src/components/MarkdownDocument.tsx`, `CopyIdentity.tsx`, `WorkflowSource.tsx` |
 | Офис | `ui/src/pages/Office.tsx`, `officeLayout.ts`, `office.css` |
 | Причины ожидания: подпись, длительность, происхождение; мобильный список вне камеры в `Office.tsx` | `ui/src/components/teamWait.ts`, поля `wait` в `TeamPhone.tsx`; время берётся из курсора плеера |
+| Сводки, единый архив и переход к источникам; граница только из видимого префикса истории | `ui/src/components/TeamConversation.tsx`; `TeamPhone.tsx` сохраняет ориентир прокрутки |
 | Карта офиса, чат, воспроизведение | `ui/src/components/OfficeMap.tsx`, `TeamPhone.tsx`, `TeamPlayer.tsx` и их CSS |
 | API и типы | `ui/src/hooks/api.ts`, `ui/src/types.ts` |
 

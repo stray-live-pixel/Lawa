@@ -546,3 +546,36 @@
   flex: none;
   overflow-wrap: anywhere;
 }
+
+/* Сводка и оригиналы используют ту же плотность и токены, что обычный чат. */
+.team-conversation {
+  min-width: 0;
+}
+.team-compaction {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 0;
+  border-block: 1px solid var(--g-color-line-generic);
+  overflow-wrap: anywhere;
+}
+.team-compaction p {
+  margin: 0;
+}
+.team-summary-sources {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+.team-summary-sources .g-button {
+  max-width: 100%;
+}
+.team-archive-boundary {
+  padding: 12px 0;
+  border-top: 1px solid var(--g-color-line-generic);
+}
+.team-archive-toggle {
+  margin-block: 8px;
+  max-width: 100%;
+}

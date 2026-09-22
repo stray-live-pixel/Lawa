@@ -83,8 +83,8 @@ func TestNativeHistoryAndAgentContext(t *testing.T) {
 	if len(frames) != 3 || len(frames[0].Actors) != 1 || len(frames[2].Actors) != 2 || frames[2].MessageCount != 2 {
 		t.Fatal(frames)
 	}
-	shared, err := runstore.ReadTeamForAgent(e.Root, run)
-	if err != nil || shared.History != nil || len(shared.Messages) != 2 {
+	shared, err := runstore.ReadTeamContext(e.Root, run, runstore.TeamReadOptions{})
+	if err != nil || len(shared.Messages) != 2 {
 		t.Fatalf("контекст: %+v %v", shared, err)
 	}
 }
