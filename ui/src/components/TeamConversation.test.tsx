@@ -103,3 +103,40 @@ it('исторический курсор выбирает только уже �
     ),
   ).toBe(3);
 });
+
+// Высокий текст нельзя центрировать: его начало уйдёт под закреплённую цель.
+// Проверяем геометрию перехода и повторный расчёт после раскрытия цели.
+it('открывает начало сводки под текущей высотой закреплённой цели', () => {
+  render(
+    <AppTheme>
+      <div className="team-messages" style={{ rowGap: 18 }}>
+        <div className="team-pin-layer" />
+        <TeamConversation
+          messages={messages}
+          preserveReading={false}
+          renderMessage={() => null}
+        />
+      </div>
+    </AppTheme>,
+  );
+  const list = document.querySelector<HTMLElement>('.team-messages')!;
+  const pin = list.querySelector<HTMLElement>('.team-pin-layer')!;
+  const summary = document.getElementById('team-message-summary2')!;
+  let pinHeight = 80;
+  vi.spyOn(list, 'getBoundingClientRect').mockImplementation(
+    () => ({ top: 100 }) as DOMRect,
+  );
+  vi.spyOn(pin, 'getBoundingClientRect').mockImplementation(
+    () => ({ height: pinHeight }) as DOMRect,
+  );
+  vi.spyOn(summary, 'getBoundingClientRect').mockImplementation(
+    () => ({ top: 100 + 1000 - list.scrollTop, height: 2500 }) as DOMRect,
+  );
+  const go = screen.getByRole('button', { name: 'К сводке Босса' });
+  fireEvent.click(go);
+  expect(summary.getBoundingClientRect().top).toBe(198);
+  expect(document.activeElement).toBe(summary);
+  pinHeight = 220;
+  fireEvent.click(go);
+  expect(summary.getBoundingClientRect().top).toBe(338);
+});

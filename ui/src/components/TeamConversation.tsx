@@ -38,8 +38,7 @@ export function TeamConversation({
   useLayoutEffect(() => {
     if (!source) return;
     const element = document.getElementById(`team-message-${source}`);
-    element?.scrollIntoView({ block: 'center' });
-    element?.focus({ preventScroll: true });
+    if (element) focusTeamMessage(element);
     setSource('');
   }, [source, expanded]);
   function goToSource(id: string) {
@@ -128,9 +127,25 @@ export function revealTeamMessage(id: string) {
     '.team-archive-toggle[aria-expanded="false"]',
   );
   if (!document.getElementById(`team-message-${id}`) && toggle) toggle.click();
-  requestAnimationFrame(() =>
-    document
-      .getElementById(`team-message-${id}`)
-      ?.scrollIntoView({ block: 'center' }),
-  );
+  requestAnimationFrame(() => {
+    const element = document.getElementById(`team-message-${id}`);
+    if (element) focusTeamMessage(element);
+  });
+}
+
+// Начало даже длинного текста остаётся под закреплённой целью. Высоту берём
+// при переходе: раскрытие цели и ширина телефона меняют занимаемое ею место.
+// Прокручиваем только чат, чтобы переход не сдвигал окружающий экран офиса.
+function focusTeamMessage(element: HTMLElement) {
+  const list = element.closest<HTMLElement>('.team-messages');
+  if (list) {
+    const pin = list.querySelector<HTMLElement>('.team-pin-layer');
+    const gap = Number.parseFloat(getComputedStyle(list).rowGap) || 0;
+    list.scrollTop +=
+      element.getBoundingClientRect().top -
+      list.getBoundingClientRect().top -
+      (pin?.getBoundingClientRect().height || 0) -
+      gap;
+  }
+  element.focus({ preventScroll: true });
 }
