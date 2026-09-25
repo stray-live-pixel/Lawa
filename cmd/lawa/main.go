@@ -81,6 +81,8 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
   --cron <расписание>          Стандартные 5 полей: minute hour day month weekday.
   --timezone <IANA-зона>       Явная зона cron, например Europe/Moscow.
   --max-runs <N>               Положительный лимит; без него серия бесконечна.
+  --no-ui                     Не запускать UI и не открывать браузер.
+                               По умолчанию открывается страница созданного run.
 
 Параметры order/reply:
   --task / --task-file         Дословный заказ или следующая реплика Чела.
@@ -227,7 +229,10 @@ func exitCode(err error, received int32) int {
 // app-server, тесты — клиент без модели и изолированное временное хранилище.
 type dependencies struct {
 	// serve позволяет проверять CLI-инициализацию без TCP и запуска моделей.
-	serve            func(context.Context, string, string, func() error) error
+	serve func(context.Context, string, string, func() error) error
+	// startUI и openBrowser отделяют локальный сервер и браузер от тестов runtime.
+	startUI          func(context.Context, string) (string, func() error, error)
+	openBrowser      func(context.Context, string) error
 	check            func(context.Context, codex.Connection) error
 	client           func(string, io.Writer, *codex.Directory) coordinator.Client
 	pollInterval     time.Duration
@@ -244,7 +249,9 @@ type dependencies struct {
 // productionDependencies собирает стандартное окружение команд run/resume.
 func productionDependencies() dependencies {
 	return dependencies{
-		check: codex.Check,
+		startUI:     startRunUI,
+		openBrowser: openViewBrowser,
+		check:       codex.Check,
 		client: func(executable string, stderr io.Writer, directory *codex.Directory) coordinator.Client {
 			return coordinator.ProductionClient{Executable: executable, Stderr: stderr, Directory: directory}
 		},
@@ -342,6 +349,7 @@ func validateCommand(args []string, out io.Writer) error {
 type runArguments struct {
 	workflow, cwd, task, taskFile, comment, commentFile, parentRun, root, executable string
 	maxParallel, repeat, repeatDelay, cron, timezone, maxRuns                        string
+	noUI                                                                             bool
 }
 
 // resumeArguments не содержит cwd: продолжение обязано использовать сохранённый.
@@ -402,8 +410,10 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 		Task:         parsed.task, Comment: parsed.comment, CWD: parsed.cwd,
 		ParentRunID: parsed.parentRun,
 	}
+	ui := newRunUI(ctx, parsed.root, parsed.noUI, out, stderr, deps)
+	defer ui.Close()
 	if parsed.repeat != "" {
-		return runSeries(ctx, parsed.root, parsed.executable, input, definition.ID, config, schedule, pool, out, stderr, deps)
+		return runSeries(ctx, parsed.root, parsed.executable, input, definition.ID, config, schedule, pool, out, stderr, deps, ui)
 	}
 	snapshot, err := runstore.Create(parsed.root, input)
 	if err != nil {
@@ -412,6 +422,7 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 	if _, err = fmt.Fprintf(out, "runId: %s\n", snapshot.Meta.RunID); err != nil {
 		return err
 	}
+	ui.Show(snapshot.Meta.RunID)
 	return coordinate(ctx, parsed.root, snapshot.Meta.RunID, parsed.executable, pool, out, stderr, deps, false, false)
 }
 
@@ -475,7 +486,7 @@ func serveCommand(ctx context.Context, args []string, out, stderr io.Writer, dep
 // runSeries последовательно создаёт обычные run. Блокирующий coordinate служит
 // главным барьером параллельности: следующий run нельзя запланировать, пока
 // предыдущий не вернул терминальный успех или явную неуспешность.
-func runSeries(ctx context.Context, root, executable string, input runstore.Input, workflowID string, config series.Config, schedule series.Schedule, pool *capacity.Pool, out, stderr io.Writer, deps dependencies) (err error) {
+func runSeries(ctx context.Context, root, executable string, input runstore.Input, workflowID string, config series.Config, schedule series.Schedule, pool *capacity.Pool, out, stderr io.Writer, deps dependencies, ui *runUI) (err error) {
 	owner, err := series.Create(root, config, workflowID)
 	if err != nil {
 		return fmt.Errorf("создать серию: %w", err)
@@ -521,6 +532,7 @@ func runSeries(ctx context.Context, root, executable string, input runstore.Inpu
 		if _, err = fmt.Fprintf(out, "runId: %s\n", snapshot.Meta.RunID); err != nil {
 			return errors.Join(err, owner.FailRunControl(err))
 		}
+		ui.Show(snapshot.Meta.RunID)
 		outcome, runErr := coordinateWithOutcome(ctx, root, snapshot.Meta.RunID, executable, pool, out, stderr, deps, false, true)
 		// Терминальность берём из сохранённого состояния, а не выводим из ошибки.
 		// Поэтому отказ финальной сводки останавливает серию и остаётся видимым,
@@ -660,11 +672,11 @@ func coordinateRunWithOutcome(ctx context.Context, root, runID, executable strin
 // передачи текста, но чтение файлов и UTF-8 оставляет runCommand.
 func parseRunArguments(args []string) (runArguments, error) {
 	var parsed runArguments
-	positionals, values, err := parseOptions(args, map[string]bool{
+	positionals, values, err := parseOptionsWithSwitches(args, map[string]bool{
 		"cwd": true, "task": true, "task-file": true, "comment": true, "comment-file": true,
 		"parent-run": true, "root": true, "codex": true, "max-parallel": true, "repeat": true,
 		"repeat-delay": true, "cron": true, "timezone": true, "max-runs": true,
-	})
+	}, map[string]bool{"no-ui": true})
 	if err != nil || len(positionals) != 1 {
 		if err != nil {
 			return parsed, err
@@ -672,6 +684,7 @@ func parseRunArguments(args []string) (runArguments, error) {
 		return parsed, errors.New("использование: lawa run <workflow.json> --cwd <проект> (--task <текст> | --task-file <путь>)")
 	}
 	parsed.workflow, parsed.cwd, parsed.task = positionals[0], values["cwd"], values["task"]
+	_, parsed.noUI = values["no-ui"]
 	parsed.taskFile, parsed.comment = values["task-file"], values["comment"]
 	parsed.commentFile = values["comment-file"]
 	parsed.parentRun, parsed.root, parsed.executable = values["parent-run"], values["root"], values["codex"]
@@ -776,6 +789,13 @@ func parseServeArguments(args []string) (serveArguments, error) {
 // flag.FlagSet останавливается на первом позиционном аргументе и не принимает
 // продуктовую форму `run workflow.json --cwd ...` без дополнительной перестановки.
 func parseOptions(args []string, allowed map[string]bool) ([]string, map[string]string, error) {
+	return parseOptionsWithSwitches(args, allowed, nil)
+}
+
+// parseOptionsWithSwitches разбирает флаги без значения в общем проходе: текст
+// --task "--no-ui" остаётся постановкой, а не отключает UI. Значения вида
+// --no-ui=false отклоняются, чтобы отрицательный флаг не имел двойного смысла.
+func parseOptionsWithSwitches(args []string, allowed, switches map[string]bool) ([]string, map[string]string, error) {
 	values := map[string]string{}
 	var positionals []string
 	for index := 0; index < len(args); index++ {
@@ -786,11 +806,18 @@ func parseOptions(args []string, allowed map[string]bool) ([]string, map[string]
 		}
 		nameValue := strings.SplitN(strings.TrimPrefix(argument, "--"), "=", 2)
 		name := nameValue[0]
-		if !allowed[name] {
+		if !allowed[name] && !switches[name] {
 			return nil, nil, fmt.Errorf("неизвестный параметр --%s", name)
 		}
 		if _, repeated := values[name]; repeated {
 			return nil, nil, fmt.Errorf("параметр --%s повторён", name)
+		}
+		if switches[name] {
+			if len(nameValue) != 1 {
+				return nil, nil, fmt.Errorf("параметр --%s не принимает значение", name)
+			}
+			values[name] = ""
+			continue
 		}
 		value := ""
 		if len(nameValue) == 2 {

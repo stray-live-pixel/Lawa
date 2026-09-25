@@ -1058,6 +1058,13 @@ func ServeWithStartup(ctx context.Context, root, address string, startup func() 
 	return err
 }
 
+// ServeRuns показывает сохранённые запуски без фонового Engine команд. Владелец
+// listener сам ведёт workflow и отменяет ctx при завершении; serve закрывает порт.
+// Это позволяет CLI открыть UI, не возобновляя посторонние заказы из того же root.
+func ServeRuns(ctx context.Context, listener net.Listener, root string) error {
+	return serve(ctx, listener, Handler(root))
+}
+
 // serve отделён от открытия TCP listener для детерминированного теста Shutdown.
 func serve(ctx context.Context, listener net.Listener, handler http.Handler) error {
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second}
