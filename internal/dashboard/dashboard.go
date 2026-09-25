@@ -101,6 +101,8 @@ type stepNode struct {
 func Handler(root string) http.Handler {
 	h := handler{root: root}
 	mux := http.NewServeMux()
+	identity := identityForUI(root)
+	mux.HandleFunc("GET /api/ui", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, identity) })
 	mux.HandleFunc("GET /{$}", serveUI)
 	mux.HandleFunc("GET /api/dashboard", h.live)
 	mux.HandleFunc("GET /api/source/{run}", h.workflowSource)
@@ -1038,6 +1040,18 @@ func ServeWithStartup(ctx context.Context, root, address string, startup func() 
 		listener.Close()
 		return err
 	}
+	if err := os.MkdirAll(root, 0700); err != nil {
+		listener.Close()
+		return err
+	}
+	registration, err := registerServedUI(root, listener)
+	if err != nil {
+		listener.Close()
+		return err
+	}
+	if registration != nil {
+		defer registration.Close()
+	}
 	if startup != nil {
 		if err := ctx.Err(); err != nil {
 			listener.Close()
@@ -1056,6 +1070,13 @@ func ServeWithStartup(ctx context.Context, root, address string, startup func() 
 	cancel()
 	<-done
 	return err
+}
+
+// ServeRuns показывает сохранённые запуски без фонового Engine команд. Владелец
+// listener сам ведёт workflow и отменяет ctx при закрытии UI; serve закрывает порт.
+// Это позволяет CLI открыть UI, не возобновляя посторонние заказы из того же root.
+func ServeRuns(ctx context.Context, listener net.Listener, root string) error {
+	return serve(ctx, listener, Handler(root))
 }
 
 // serve отделён от открытия TCP listener для детерминированного теста Shutdown.
