@@ -83,6 +83,8 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
   --max-runs <N>               Положительный лимит; без него серия бесконечна.
   --no-ui                     Не запускать UI и не открывать браузер.
                                По умолчанию открывается страница созданного run.
+                               Готовый UI того же root используется повторно;
+                               владелец нового UI ждёт Ctrl+C после выполнения.
 
 Параметры order/reply:
   --task / --task-file         Дословный заказ или следующая реплика Чела.
@@ -231,7 +233,7 @@ type dependencies struct {
 	// serve позволяет проверять CLI-инициализацию без TCP и запуска моделей.
 	serve func(context.Context, string, string, func() error) error
 	// startUI и openBrowser отделяют локальный сервер и браузер от тестов runtime.
-	startUI          func(context.Context, string) (string, func() error, error)
+	startUI          func(context.Context, string) (*runUIServer, error)
 	openBrowser      func(context.Context, string) error
 	check            func(context.Context, codex.Connection) error
 	client           func(string, io.Writer, *codex.Directory) coordinator.Client
@@ -411,7 +413,10 @@ func runCommand(ctx context.Context, args []string, out, stderr io.Writer, deps 
 		ParentRunID: parsed.parentRun,
 	}
 	ui := newRunUI(ctx, parsed.root, parsed.noUI, out, stderr, deps)
-	defer ui.Close()
+	defer func() {
+		err = ui.Wait(err)
+		ui.Close()
+	}()
 	if parsed.repeat != "" {
 		return runSeries(ctx, parsed.root, parsed.executable, input, definition.ID, config, schedule, pool, out, stderr, deps, ui)
 	}

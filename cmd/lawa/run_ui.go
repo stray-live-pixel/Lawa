@@ -5,15 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net"
 	"net/url"
 	"time"
 
 	"github.com/stray-live-pixel/Lawa/internal/dashboard"
+	"github.com/stray-live-pixel/Lawa/internal/runstore"
 )
 
 // runUI обслуживает одну команду run, включая всю серию. Сервер создаётся лениво
 // после сохранения первого run: неверный ввод и ожидание cron не открывают UI.
+// После освобождения координатора UI продолжает показывать сохранённый результат
+// до отмены контекста пользователем; фоновые процессы не создаются.
 // Методы вызываются последовательно; nil означает явно отключённый UI либо тест
 // runtime без подставленной границы startUI.
 type runUI struct {
@@ -21,8 +23,17 @@ type runUI struct {
 	root        string
 	out, stderr io.Writer
 	deps        dependencies
-	baseURL     string
-	stop        func() error
+	server      *runUIServer
+}
+
+// runUIServer отделяет завершение HTTP от отмены CLI. done закрывается даже при
+// отказе сервера, чтобы режим просмотра не ждал Ctrl+C у уже неработающего UI.
+// stop отменяет сервер, ждёт его завершения и возвращает ошибку; повтор безопасен.
+type runUIServer struct {
+	url    string
+	done   <-chan struct{}
+	stop   func() error
+	shared bool
 }
 
 // newRunUI готовит сессию без открытия порта или обращения к браузеру.
@@ -39,15 +50,15 @@ func (ui *runUI) Show(runID string) {
 	if ui == nil || ui.ctx.Err() != nil {
 		return
 	}
-	if ui.stop == nil {
+	if ui.server == nil {
 		var err error
-		ui.baseURL, ui.stop, err = ui.deps.startUI(ui.ctx, ui.root)
+		ui.server, err = ui.deps.startUI(ui.ctx, ui.root)
 		if err != nil {
 			fmt.Fprintf(ui.stderr, "Не удалось запустить UI: %v. Workflow продолжится без UI.\n", err)
 			return
 		}
 	}
-	pageURL := ui.baseURL + "/graph/" + url.PathEscape(runID)
+	pageURL := ui.server.url + "/graph/" + url.PathEscape(runID)
 	if _, err := fmt.Fprintf(ui.out, "UI: %s\n", pageURL); err != nil {
 		fmt.Fprintf(ui.stderr, "Не удалось вывести URL интерфейса: %v.\n", err)
 	}
@@ -58,42 +69,75 @@ func (ui *runUI) Show(runID string) {
 	}
 }
 
+// Wait оставляет UI после завершения координатора и всей серии. Вызывается,
+// когда runtime уже освободил блокировки: просмотр не удерживает turn или run.
+// Ошибка исполнения показывается до ожидания и сохраняется для вызывающего кода.
+// При --no-ui, отказе сервера или отмене во время работы ожидания нет.
+func (ui *runUI) Wait(runErr error) error {
+	if ui == nil || ui.server == nil || ui.server.shared || ui.ctx.Err() != nil {
+		return runErr
+	}
+	select {
+	case <-ui.server.done:
+		return runErr
+	default:
+	}
+	if runErr != nil {
+		fmt.Fprintf(ui.stderr, "Выполнение завершилось с ошибкой: %s\n", runstore.SafeTerminalText(runErr.Error()))
+	}
+	if _, err := fmt.Fprintln(ui.out, "Выполнение завершено. UI доступен до Ctrl+C."); err != nil {
+		return errors.Join(runErr, fmt.Errorf("сообщить о режиме просмотра: %w", err))
+	}
+	select {
+	case <-ui.ctx.Done():
+	case <-ui.server.done:
+	}
+	return runErr
+}
+
 // Close освобождает порт при любом исходе команды и ждёт завершения сервера,
 // чтобы его goroutine не пережила владельца. Повторный вызов безопасен.
 func (ui *runUI) Close() {
-	if ui == nil || ui.stop == nil {
+	if ui == nil || ui.server == nil || ui.server.shared {
 		return
 	}
-	if err := ui.stop(); err != nil {
+	if err := ui.server.stop(); err != nil {
 		fmt.Fprintf(ui.stderr, "Ошибка сервера UI: %v.\n", err)
 	}
-	ui.stop = nil
+	ui.server = nil
 }
 
-// startRunUI захватывает свободный loopback-порт до публикации URL. Каждый
-// процесс смотрит в свой root и не зависит от чужого lawa serve на стандартном
-// порту. Командный Engine здесь не запускается: workflow уже ведёт координатор.
-// Возвращённый stop обязателен даже при отменённом ctx; он освобождает ресурсы.
-func startRunUI(ctx context.Context, root string) (string, func() error, error) {
+// startRunUI переиспользует готовый UI того же root или резервирует свободный
+// loopback-порт. Только владелец нового listener обслуживает и закрывает сервер.
+// Командный Engine здесь не запускается: workflow уже ведёт координатор.
+// Вызов stop обязателен даже при отменённом ctx; он освобождает ресурсы.
+func startRunUI(ctx context.Context, root string) (*runUIServer, error) {
 	if err := ctx.Err(); err != nil {
-		return "", nil, err
+		return nil, err
 	}
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	endpoint, err := dashboard.AcquireUI(ctx, root)
 	if err != nil {
-		return "", nil, err
+		return nil, err
+	}
+	if endpoint.Listener == nil {
+		return &runUIServer{url: endpoint.URL, shared: true}, nil
 	}
 	serverCtx, cancel := context.WithCancel(ctx)
-	done := make(chan error, 1)
+	done := make(chan struct{})
+	var serverErr error
 	go func() {
-		done <- dashboard.ServeRuns(serverCtx, listener, root)
+		serverErr = dashboard.ServeRuns(serverCtx, endpoint.Listener, root)
+		serverErr = errors.Join(serverErr, endpoint.Close())
+		close(done)
 	}()
 	stop := func() error {
 		cancel()
-		err := <-done
-		if errors.Is(err, context.Canceled) {
+		// Закрытие done синхронизирует чтение serverErr с записью в goroutine.
+		<-done
+		if isCancellationOnly(serverErr) {
 			return nil
 		}
-		return err
+		return serverErr
 	}
-	return "http://" + listener.Addr().String(), stop, nil
+	return &runUIServer{url: endpoint.URL, done: done, stop: stop}, nil
 }

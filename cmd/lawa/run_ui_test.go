@@ -26,7 +26,7 @@ func TestRunUI(t *testing.T) {
 	for _, tc := range []struct {
 		name                                  string
 		noUI, repeat, browserFail, serverFail bool
-		cancelRun                             bool
+		cancelRun, runError, delayedBrowser   bool
 	}{
 		{name: "default"},
 		{name: "no-ui", noUI: true},
@@ -35,6 +35,8 @@ func TestRunUI(t *testing.T) {
 		{name: "browser-failure", browserFail: true},
 		{name: "server-failure", serverFail: true},
 		{name: "cancel", cancelRun: true},
+		{name: "failed", runError: true},
+		{name: "delayed-browser", delayedBrowser: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root, cwd := t.TempDir(), t.TempDir()
@@ -45,26 +47,32 @@ func TestRunUI(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			defer cancel()
 			client := newCLIFakeClient()
+			runFailure := errors.New("ошибка кубика")
 			if tc.cancelRun {
 				client.onCommand = func(codex.Command) error { cancel(); return context.Canceled }
+			}
+			if tc.runError {
+				client.onCommand = func(codex.Command) error { return runFailure }
 			}
 			deps := cliTestDependencies(client, func(context.Context, codex.Connection) error { return nil })
 			starts, closes := 0, 0
 			var baseURL string
-			deps.startUI = func(ctx context.Context, actualRoot string) (string, func() error, error) {
+			deps.startUI = func(ctx context.Context, actualRoot string) (*runUIServer, error) {
 				starts++
 				if actualRoot != root {
 					t.Fatalf("UI читает другое хранилище: %s", actualRoot)
 				}
 				if tc.serverFail {
-					return "", nil, errors.New("нет свободного порта")
+					return nil, errors.New("нет свободного порта")
 				}
-				address, stop, err := startRunUI(ctx, actualRoot)
+				server, err := startRunUI(ctx, actualRoot)
 				if err != nil {
-					return "", nil, err
+					return nil, err
 				}
-				baseURL = address
-				return address, func() error { closes++; return stop() }, nil
+				baseURL = server.url
+				stop := server.stop
+				server.stop = func() error { closes++; return stop() }
+				return server, nil
 			}
 			var opened []string
 			deps.openBrowser = func(ctx context.Context, pageURL string) error {
@@ -85,7 +93,11 @@ func TestRunUI(t *testing.T) {
 				if turns != len(opened) {
 					t.Fatal("UI открывается после запуска кубика")
 				}
-				for _, path := range []string{parsed.Path, "/api/graph/" + id} {
+				paths := []string{parsed.Path, "/api/graph/" + id}
+				if tc.delayedBrowser {
+					paths = nil
+				}
+				for _, path := range paths {
 					request, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+path, nil)
 					if err != nil {
 						t.Fatal(err)
@@ -119,10 +131,60 @@ func TestRunUI(t *testing.T) {
 				wantRuns = 2
 			}
 			var out, stderr bytes.Buffer
-			err := executeContext(ctx, args, &out, &stderr, deps)
+			waits := 0
+			output := runUIWaitWriter{Writer: &out, onWait: func() {
+				waits++
+				defer cancel()
+				for _, id := range opened {
+					// HTTP-запрос сделан после возврата координатора, включая случай,
+					// когда браузер впервые загружает страницу уже завершённого run.
+					snapshot, err := runstore.Load(root, id)
+					wantState := runstore.RunSucceeded
+					if tc.runError {
+						wantState = runstore.RunRunning
+					}
+					if err != nil || snapshot.Meta.RunState != wantState {
+						t.Fatalf("неожиданное состояние run: %s, %v", snapshot.Meta.RunState, err)
+					}
+					lock, err := runstore.OpenLocked(root, id)
+					if err != nil {
+						t.Fatalf("просмотр удерживает координатор: %v", err)
+					}
+					lock.Close()
+					for _, path := range []string{"/graph/" + id, "/api/graph/" + id} {
+						response, err := (&http.Client{Timeout: 5 * time.Second}).Get(baseURL + path)
+						if err != nil {
+							t.Fatalf("UI завершённого run недоступен: %v", err)
+						}
+						body, readErr := io.ReadAll(response.Body)
+						response.Body.Close()
+						if readErr != nil || response.StatusCode != http.StatusOK {
+							t.Fatalf("итог не загружается: %s, %v", body, readErr)
+						}
+						if strings.HasPrefix(path, "/api/") && !bytes.Contains(body, []byte(`"State":"`+string(wantState)+`"`)) {
+							t.Fatalf("UI не получил итог: %s", body)
+						}
+					}
+				}
+				if tc.runError && !strings.Contains(stderr.String(), "Выполнение завершилось с ошибкой") {
+					t.Fatal("ошибка скрыта до закрытия UI")
+				}
+			}}
+			err := executeContext(ctx, args, output, &stderr, deps)
+			wantWaits := 1
+			if tc.noUI || tc.serverFail || tc.cancelRun {
+				wantWaits = 0
+			}
+			if waits != wantWaits {
+				t.Fatalf("режим просмотра: %d вместо %d", waits, wantWaits)
+			}
 			if tc.cancelRun {
 				if !errors.Is(err, context.Canceled) {
 					t.Fatalf("потеряна отмена: %v", err)
+				}
+			} else if tc.runError {
+				if !errors.Is(err, runFailure) {
+					t.Fatalf("потеряна ошибка исполнения: %v", err)
 				}
 			} else if err != nil {
 				t.Fatal(err)
@@ -190,7 +252,7 @@ func TestRunUIArguments(t *testing.T) {
 func TestRunUICancelledBeforeStart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
 	cancel()
-	if _, stop, err := startRunUI(ctx, t.TempDir()); !errors.Is(err, context.Canceled) || stop != nil {
+	if server, err := startRunUI(ctx, t.TempDir()); !errors.Is(err, context.Canceled) || server != nil {
 		t.Fatalf("сервер запущен после отмены: %v", err)
 	}
 }
@@ -203,9 +265,9 @@ func TestRunUIInvalidInputBeforeServer(t *testing.T) {
 			deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error {
 				return errors.New("Codex недоступен")
 			})
-			deps.startUI = func(context.Context, string) (string, func() error, error) {
+			deps.startUI = func(context.Context, string) (*runUIServer, error) {
 				t.Fatal("UI запущен до проверки workflow и Codex")
-				return "", nil, nil
+				return nil, nil
 			}
 			var out bytes.Buffer
 			err := executeContext(t.Context(), []string{"run", source, "--cwd", t.TempDir(), "--task", "Задача", "--root", t.TempDir()}, &out, io.Discard, deps)
@@ -213,5 +275,57 @@ func TestRunUIInvalidInputBeforeServer(t *testing.T) {
 				t.Fatalf("ошибочный запуск создал вывод: %s, %v", out.String(), err)
 			}
 		})
+	}
+}
+
+// runUIWaitWriter проверяет режим просмотра при появлении пользовательского
+// сообщения. Callback выполняется в потоке CLI после освобождения координатора.
+type runUIWaitWriter struct {
+	io.Writer
+	onWait func()
+}
+
+func (w runUIWaitWriter) Write(data []byte) (int, error) {
+	n, err := w.Writer.Write(data)
+	if err == nil && strings.Contains(string(data), "UI доступен до Ctrl+C.") {
+		w.onWait()
+	}
+	return n, err
+}
+
+// TestRunUIReusesServer проходит второй workflow через CLI. Команда возвращает
+// результат, не ожидая закрытия чужого UI, а его URL продолжает обслуживаться.
+func TestRunUIReusesServer(t *testing.T) {
+	root := t.TempDir()
+	owner, err := startRunUI(t.Context(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.stop()
+	workflowPath := filepath.Join(t.TempDir(), "workflow.json")
+	if err := os.WriteFile(workflowPath, []byte(`{"id":"reuse","steps":[{"id":"work","type":"agent","prompt":"Сделай","dependsOn":[]}]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	deps := cliTestDependencies(newCLIFakeClient(), func(context.Context, codex.Connection) error { return nil })
+	deps.startUI = startRunUI
+	opened := ""
+	deps.openBrowser = func(_ context.Context, address string) error { opened = address; return nil }
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	var out bytes.Buffer
+	if err := executeContext(ctx, []string{"run", workflowPath, "--root", root, "--cwd", t.TempDir(), "--task", "Задача"}, &out, io.Discard, deps); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "UI доступен до Ctrl+C.") || !strings.HasPrefix(opened, owner.url+"/graph/") {
+		t.Fatalf("сервер не переиспользован: %s, %s", opened, out.String())
+	}
+	cancel()
+	response, err := (&http.Client{Timeout: time.Second}).Get(opened)
+	if err != nil {
+		t.Fatalf("клиент остановил общий UI: %v", err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatal(response.Status)
 	}
 }
