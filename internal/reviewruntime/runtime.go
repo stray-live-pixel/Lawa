@@ -6,6 +6,7 @@ package reviewruntime
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"os"
@@ -185,7 +186,11 @@ func (e *Engine) runStage(ctx context.Context, id string, stage reviewstore.Stag
 		return err
 	}
 	prompt := stagePrompt(r, stage, dir, scratch)
-	path := fmt.Sprintf("artifacts/attempts/%s/%d/prompt.md", stage, number)
+	// Между записью файла и регистрацией попытки возможны stop/crash. Номер
+	// тогда ещё не занят, а snapshot в новом промпте уже отличается. Адресация
+	// по содержимому сохраняет сиротский файл и позволяет Retry записать новую
+	// версию, не ослабляя неизменяемость артефактов (включая старые prompt.md).
+	path := attemptPromptPath(stage, number, prompt)
 	if err = e.Store.SaveArtifact(id, path, []byte(prompt)); err != nil {
 		return err
 	}
@@ -324,6 +329,12 @@ func (e *Engine) runStage(ctx context.Context, id string, stage reviewstore.Stag
 		return nil
 	})
 	return errors.Join(runErr, err)
+}
+
+// attemptPromptPath адресует точные байты запроса независимо от промежуточного
+// состояния регистрации попытки; повтор тех же байтов безопасен для SaveArtifact.
+func attemptPromptPath(stage reviewstore.StageID, number int, prompt string) string {
+	return fmt.Sprintf("artifacts/attempts/%s/%d/prompt-%x.md", stage, number, sha256.Sum256([]byte(prompt)))
 }
 
 // validateModels проверяет доступность всех трёх настроек до первого turn; CLI

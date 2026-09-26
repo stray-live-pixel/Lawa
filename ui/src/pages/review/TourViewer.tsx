@@ -144,7 +144,7 @@ export function TourViewer({
                   <Button key={f.ID} onClick={() => setFile(f)}>
                     {anchors.filter((a) => a.FileID).length > 1
                       ? f.Path
-                      : 'Открыть файл целиком'}
+                      : 'Открыть сохранённый код'}
                   </Button>
                 ))}
             </div>
@@ -216,7 +216,7 @@ export function TourViewer({
         <TextDialog
           id={review.ID}
           path={file.SnapshotPath}
-          title={file.Path}
+          title={`${file.Path} · сохранённый снимок${file.StartLine > 0 && file.EndLine > 0 ? ` · строки ${file.StartLine}–${file.EndLine}` : ''}`}
           close={() => setFile(undefined)}
           markdown={false}
         />

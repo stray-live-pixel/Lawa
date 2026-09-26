@@ -79,7 +79,8 @@ it('открывает экскурсию и сохраняет зелёный d
     ).not.toBeInTheDocument(),
   );
 });
-it('даёт пройти обзор и прочитать полный снимок файла', async () => {
+// Фикстура содержит только строки 40–46: нельзя выдавать этот снимок за весь файл.
+it('показывает сохранённый фрагмент с диапазоном и не обещает полный файл', async () => {
   mockArtifacts();
   render(
     <AppTheme>
@@ -88,11 +89,17 @@ it('даёт пройти обзор и прочитать полный сним
   );
   fireEvent.click(screen.getByRole('button', { name: 'Обзор изменений' }));
   fireEvent.click(
-    await screen.findByRole('button', { name: 'Открыть файл целиком' }),
+    await screen.findByRole('button', { name: 'Открыть сохранённый код' }),
   );
   expect(
-    await screen.findByRole('heading', { name: 'src/LoginForm.tsx' }),
+    await screen.findByRole('heading', {
+      name: 'src/LoginForm.tsx · сохранённый снимок · строки 40–46',
+    }),
   ).toBeInTheDocument();
+  expect(
+    screen.queryByRole('button', { name: 'Открыть файл целиком' }),
+  ).not.toBeInTheDocument();
+  expect(document.querySelector('.cr-code-raw')?.textContent).toBe(savedCode);
   fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }));
   fireEvent.click(screen.getByRole('button', { name: 'Следующий шаг' }));
   expect(
