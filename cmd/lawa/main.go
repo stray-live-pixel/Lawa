@@ -39,6 +39,9 @@ const help = `Lawa — выполнение JSON-workflow через Codex App S
       Создать run, запустить готовые кубики и наблюдать их до результата.
   lawa resume <run-id>
       Сверить thread и продолжить interrupted-кубики / cancelled-посещения v2.
+  lawa review --prompt <текст> [--cwd <проект>] [--no-ui]
+      Собрать контекст, проверить код и подготовить доказательные экскурсии.
+      По умолчанию открыть UI; настройки этапов — --config или --config-json.
   lawa view <workflow.json> [--listen <host:port>] [--no-open]
       Открыть определение без запуска; loopback, свободный порт. Ctrl+C закрывает просмотр.
   lawa graph <run-id> [--theme dark|light] [--output <файл.png>] [--root <путь>]
@@ -230,6 +233,8 @@ func exitCode(err error, received int32) int {
 // dependencies содержит заменяемые границы CLI. Production использует настоящий
 // app-server, тесты — клиент без модели и изолированное временное хранилище.
 type dependencies struct {
+	// reviewRun позволяет проверять CLI без платного запуска Codex.
+	reviewRun func(context.Context, string, string, string) error
 	// serve позволяет проверять CLI-инициализацию без TCP и запуска моделей.
 	serve func(context.Context, string, string, func() error) error
 	// startUI и openBrowser отделяют локальный сервер и браузер от тестов runtime.
@@ -302,6 +307,10 @@ func executeContext(ctx context.Context, args []string, out, stderr io.Writer, d
 		return err
 	}
 	switch args[0] {
+	case "review":
+		return reviewCommand(ctx, args[1:], out, stderr, deps)
+	case "review-execute":
+		return reviewExecuteCommand(ctx, args[1:], stderr)
 	case "validate":
 		return validateCommand(args[1:], out)
 	case "run":

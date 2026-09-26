@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stray-live-pixel/Lawa/internal/codex"
+	"github.com/stray-live-pixel/Lawa/internal/reviewstore"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/teamruntime"
 )
@@ -63,7 +64,7 @@ func (h handler) teams(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	for _, item := range entries {
-		if !item.IsDir() || item.Name() == "series" {
+		if !item.IsDir() || item.Name() == "series" || reviewstore.IsReview(h.root, item.Name()) {
 			continue
 		}
 		s, err := runstore.LoadForDashboard(h.root, item.Name())
