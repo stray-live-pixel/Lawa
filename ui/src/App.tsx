@@ -21,7 +21,13 @@ import {
   Loader,
   Tooltip,
 } from '@gravity-ui/uikit';
-import { Magnifier, Clock, ArrowLeft, ArrowRight } from '@gravity-ui/icons';
+import {
+  Magnifier,
+  Clock,
+  ArrowLeft,
+  ArrowRight,
+  CodePullRequest,
+} from '@gravity-ui/icons';
 import {
   DashboardFilters,
   filtersChanged,
@@ -53,6 +59,7 @@ const WorkflowGraph = lazy(() =>
 const WorkflowDefinition = lazy(() => import('./pages/WorkflowDefinition'));
 // Офис доступен только по прямому адресу; его картинки не загружаются dashboard.
 const Office = lazy(() => import('./pages/Office'));
+const CodeReview = lazy(() => import('./pages/CodeReview'));
 
 // Состояние фильтров находится в URL: back/forward и ссылки воспроизводят вид.
 // Локальный выбор и состояние React Flow не пересоздаются от каждого polling.
@@ -136,6 +143,11 @@ function DashboardPage() {
                     )}
                     <div className="header-tools">
                       <ThemePicker />
+                      <Tooltip content="Code Review">
+                        <Link to="/code-review" aria-label="Code Review">
+                          <Icon data={CodePullRequest} />
+                        </Link>
+                      </Tooltip>
                       <Tooltip
                         content={`Запланированные запуски: ${scheduled.length}`}
                       >
@@ -543,6 +555,14 @@ export default function App() {
         element={
           <Suspense fallback={<Loader />}>
             <WorkflowDefinition />
+          </Suspense>
+        }
+      />
+      <Route
+        path="/code-review"
+        element={
+          <Suspense fallback={<Loader />}>
+            <CodeReview />
           </Suspense>
         }
       />

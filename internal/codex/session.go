@@ -57,6 +57,9 @@ func openSession(ctx context.Context, command Command, result *Result) (*session
 			return nil, err
 		}
 		arguments = append(arguments, "-c", override)
+		// Codex требует явный default_permissions при объявлении именованных
+		// профилей, даже если thread/start затем выбирает профиль по имени.
+		arguments = append(arguments, "-c", "default_permissions="+tomlString(command.Permissions.Name))
 	}
 	arguments = append(arguments, "--stdio")
 	processExecutable, processArguments := command.Executable, arguments

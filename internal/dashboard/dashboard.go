@@ -25,6 +25,7 @@ import (
 	"github.com/stray-live-pixel/Lawa/assets"
 	"github.com/stray-live-pixel/Lawa/internal/capacity"
 	"github.com/stray-live-pixel/Lawa/internal/coordinator"
+	"github.com/stray-live-pixel/Lawa/internal/reviewstore"
 	"github.com/stray-live-pixel/Lawa/internal/runstore"
 	"github.com/stray-live-pixel/Lawa/internal/scheduler"
 	"github.com/stray-live-pixel/Lawa/internal/series"
@@ -101,6 +102,7 @@ type stepNode struct {
 func Handler(root string) http.Handler {
 	h := handler{root: root}
 	mux := http.NewServeMux()
+	registerReviews(mux, root)
 	identity := identityForUI(root)
 	mux.HandleFunc("GET /api/ui", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, identity) })
 	mux.HandleFunc("GET /{$}", serveUI)
@@ -605,7 +607,7 @@ func loadTree(root string) ([]*runNode, []problem) {
 	nodes := make(map[string]*runNode)
 	var problems []problem
 	for _, entry := range entries {
-		if !entry.IsDir() || entry.Name() == "series" {
+		if !entry.IsDir() || entry.Name() == "series" || reviewstore.IsReview(root, entry.Name()) {
 			continue
 		}
 		snapshot, loadErr := runstore.LoadForDashboard(root, entry.Name())

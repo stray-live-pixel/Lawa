@@ -39,3 +39,29 @@ it('сохраняет независимые проценты, пределы �
   fireEvent.doubleClick(restored[1]);
   expect(restored[1]).toHaveAttribute('aria-valuenow', '25');
 });
+
+// Desktop-review сохраняет ширину в пикселях, независимо от большого монитора.
+it('поддерживает отдельные пиксельные пределы истории ревью', () => {
+  render(
+    <ResizableRunList
+      preference={{
+        key: 'review-width',
+        initial: 280,
+        min: 240,
+        max: 480,
+        unit: 'px',
+        label: 'История ревью',
+      }}
+    >
+      История
+    </ResizableRunList>,
+  );
+  const handle = screen.getByRole('separator', { name: 'История ревью' });
+  expect(handle).toHaveAttribute('aria-valuetext', '280px');
+  fireEvent.keyDown(handle, { key: 'ArrowRight' });
+  expect(handle).toHaveAttribute('aria-valuenow', '288');
+  fireEvent.keyDown(handle, { key: 'Home' });
+  expect(handle).toHaveAttribute('aria-valuenow', '240');
+  fireEvent.keyDown(handle, { key: 'End' });
+  expect(handle).toHaveAttribute('aria-valuenow', '480');
+});

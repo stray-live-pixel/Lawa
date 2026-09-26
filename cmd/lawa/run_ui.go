@@ -47,6 +47,16 @@ func newRunUI(ctx context.Context, root string, disabled bool, out, stderr io.Wr
 // Show открывает сохранённый run до запуска его кубиков. Ошибки вспомогательного
 // UI видны в stderr, но не меняют результат workflow и не мешают CLI-наблюдению.
 func (ui *runUI) Show(runID string) {
+	ui.showPath("/graph/" + url.PathEscape(runID))
+}
+
+// ShowReview открывает ту же общую сессию UI на выбранном ревью.
+func (ui *runUI) ShowReview(reviewID string) {
+	ui.showPath("/code-review?reviewId=" + url.QueryEscape(reviewID))
+}
+
+// showPath отделяет запуск общего сервера от конкретного маршрута приложения.
+func (ui *runUI) showPath(path string) {
 	if ui == nil || ui.ctx.Err() != nil {
 		return
 	}
@@ -58,7 +68,7 @@ func (ui *runUI) Show(runID string) {
 			return
 		}
 	}
-	pageURL := ui.server.url + "/graph/" + url.PathEscape(runID)
+	pageURL := ui.server.url + path
 	if _, err := fmt.Fprintf(ui.out, "UI: %s\n", pageURL); err != nil {
 		fmt.Fprintf(ui.stderr, "Не удалось вывести URL интерфейса: %v.\n", err)
 	}

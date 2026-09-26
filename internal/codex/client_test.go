@@ -85,6 +85,12 @@ func fakeServer(scenario string) {
 			if len(m.ID) != 0 {
 				panic("initialized должен быть уведомлением")
 			}
+		case "model/list":
+			if p["cursor"] == nil {
+				send(map[string]any{"id": m.ID, "result": map[string]any{"data": []any{map[string]any{"id": "model-a", "model": "model-a", "supportedReasoningEfforts": []any{map[string]any{"reasoningEffort": "high"}}}}, "nextCursor": "page2"}})
+			} else {
+				send(map[string]any{"id": m.ID, "result": map[string]any{"data": []any{map[string]any{"id": "model-b", "model": "model-b"}}}})
+			}
 		case "thread/start":
 			cwd, _ := os.Getwd()
 			validCWD := p["cwd"] == cwd
@@ -99,7 +105,7 @@ func fakeServer(scenario string) {
 				validIsolation = p["sandbox"] == nil && p["permissions"] == "lawa-test"
 				arguments := strings.Join(os.Args, "\n")
 				want := `permissions.lawa-test={extends=":workspace",filesystem={"/run dir"="read","/run dir/own.md"="write"}}`
-				if !strings.Contains(arguments, "\n-c\n"+want+"\n--stdio") {
+				if !strings.Contains(arguments, "\n-c\n"+want+"\n-c\ndefault_permissions=\"lawa-test\"\n--stdio") {
 					panic("профиль не передан app-server одним безопасным аргументом")
 				}
 			}
