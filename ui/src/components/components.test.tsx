@@ -6,8 +6,10 @@ import {
   render as baseRender,
   screen,
   waitFor,
+  waitForElementToBeRemoved,
   cleanup,
 } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ThemeProvider } from '@gravity-ui/uikit';
 import type { ReactNode } from 'react';
@@ -152,23 +154,38 @@ const graph: Graph = {
 
 describe('Контекст и история', () => {
   it('копирует выбранную область и оставляет ручное копирование при отказе clipboard', async () => {
+    const user = userEvent.setup();
     const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
       value: { writeText },
       configurable: true,
     });
     render(<Continuation cube="cube context" workflow="workflow context" />);
-    await choose('Контекст продолжения', 'Весь workflow');
-    fireEvent.click(screen.getByRole('button', { name: 'Скопировать промпт' }));
+    await user.click(
+      screen.getByRole('combobox', { name: 'Контекст продолжения' }),
+    );
+    const option = await screen.findByRole('option', { name: 'Весь workflow' });
+    await user.click(option);
+    // Popup возвращает фокус при завершении анимации закрытия. Отдельно
+    // дожидаемся этого перехода, а следующие клики действительно фокусируют
+    // кнопку: fireEvent.click не воспроизводит такое поведение браузера.
+    if (option.isConnected) await waitForElementToBeRemoved(option);
+    await user.click(
+      screen.getByRole('button', { name: 'Скопировать промпт' }),
+    );
     await waitFor(() =>
       expect(writeText).toHaveBeenCalledWith('workflow context'),
     );
     writeText.mockRejectedValueOnce(new Error('denied'));
-    fireEvent.click(screen.getByRole('button', { name: 'Скопировать промпт' }));
+    await user.click(
+      screen.getByRole('button', { name: 'Скопировать промпт' }),
+    );
     await screen.findByText(/Скопируйте выделенную разметку/);
-    expect(
-      screen.getByLabelText('Исходный Markdown: Промпт продолжения'),
-    ).toHaveFocus();
+    await waitFor(() =>
+      expect(
+        screen.getByLabelText('Исходный Markdown: Промпт продолжения'),
+      ).toHaveFocus(),
+    );
   });
   it('различает turn, завершённый item заменяет delta, большие блоки ограничены', () => {
     const blocks = new Map();
